@@ -117,7 +117,7 @@ jobs:
           $text = Get-Content $out -Raw
           Write-Host "exit $($p.ExitCode):`n$text"
           if ($p.ExitCode -ne 0) { throw "Database test failed" }
-          $add = [double](($text | Select-String 'last_photo_add_ms=([\d.]+)').Matches[0].Groups[1].Value)
+          $add = [double](($text | Select-String '(?m)^photo_add_ms=([\d.]+)').Matches[0].Groups[1].Value)
           $open = [double](($text | Select-String 'open_ms=([\d.]+)').Matches[0].Groups[1].Value)
           if ($add -gt 500) { throw "Adding a photo to a large database is too slow: $add ms" }
           if ($open -gt 3000) { throw "Opening a large database is too slow: $open ms" }
