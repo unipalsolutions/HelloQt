@@ -125,15 +125,52 @@ jobs:
 
       - name: Smoke test
         run: |
+          Add-Type @"
+          using System;
+          using System.Collections.Generic;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class Windows {
+              delegate bool EnumProc(IntPtr hwnd, IntPtr lparam);
+              [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lparam);
+              [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+              [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+              [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
+              public static List<string> VisibleTitles(uint pid) {
+                  var titles = new List<string>();
+                  EnumWindows((hwnd, l) => {
+                      uint owner; GetWindowThreadProcessId(hwnd, out owner);
+                      if (owner == pid && IsWindowVisible(hwnd)) {
+                          var text = new StringBuilder(512); GetWindowText(hwnd, text, 512);
+                          titles.Add(text.ToString());
+                      }
+                      return true;
+                  }, IntPtr.Zero);
+                  return titles;
+              }
+          }
+          "@
           $p = Start-Process dist\Malamih\Malamih.exe -PassThru
-          Start-Sleep -Seconds 10
+          Start-Sleep -Seconds 12
           $p.Refresh()
           if ($p.HasExited) { throw "Malamih exited early with code $($p.ExitCode)" }
-          $title = $p.MainWindowTitle
-          Write-Host "Window title: $title"
+          $titles = [Windows]::VisibleTitles([uint32]$p.Id)
+          Write-Host "Visible windows: $($titles -join ' | ')"
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $shot = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          [System.Drawing.Graphics]::FromImage($shot).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $shot.Save((Join-Path $PWD "smoke.png"))
           Stop-Process -Id $p.Id
-          if ($title -ne "ملامح") { throw "Unexpected window title: '$title'" }
+          if ($titles -notcontains "ملامح") { throw "Main window not found" }
         shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-screenshot
+          path: smoke.png
+          if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4
         with:
