@@ -172,6 +172,63 @@ QPainterPath outline(Name name)
         line(12, 11, 12, 16.5);
         p.addEllipse(QPointF(12, 7.8), 0.3, 0.3);
         break;
+    case Name::Region:
+        line(3, 8, 3, 3);
+        line(3, 3, 8, 3);
+        line(16, 3, 21, 3);
+        line(21, 3, 21, 8);
+        line(21, 16, 21, 21);
+        line(21, 21, 16, 21);
+        line(8, 21, 3, 21);
+        line(3, 21, 3, 16);
+        p.addRoundedRect(QRectF(8, 8, 8, 8), 1.5, 1.5);
+        break;
+    case Name::Clock:
+        p.addEllipse(QPointF(12, 12), 9, 9);
+        line(12, 7, 12, 12);
+        line(12, 12, 15.5, 14);
+        break;
+    case Name::Merge:
+        line(6, 3, 6, 9);
+        p.moveTo(18, 3);
+        p.lineTo(18, 9);
+        p.moveTo(6, 9);
+        p.cubicTo(6, 13, 12, 13, 12, 16);
+        p.moveTo(18, 9);
+        p.cubicTo(18, 13, 12, 13, 12, 16);
+        line(12, 16, 12, 21);
+        line(9, 18.5, 12, 21.5);
+        line(15, 18.5, 12, 21.5);
+        break;
+    case Name::Film:
+        p.addRoundedRect(QRectF(3, 4, 18, 16), 2.5, 2.5);
+        line(7, 4, 7, 20);
+        line(17, 4, 17, 20);
+        line(3, 9, 7, 9);
+        line(3, 15, 7, 15);
+        line(17, 9, 21, 9);
+        line(17, 15, 21, 15);
+        break;
+    case Name::Next:
+        p.moveTo(6, 6);
+        p.lineTo(14, 12);
+        p.lineTo(6, 18);
+        p.closeSubpath();
+        line(18, 6, 18, 18);
+        break;
+    case Name::Previous:
+        p.moveTo(18, 6);
+        p.lineTo(10, 12);
+        p.lineTo(18, 18);
+        p.closeSubpath();
+        line(6, 6, 6, 18);
+        break;
+    case Name::Sliders:
+        line(4, 7, 20, 7);
+        line(4, 17, 20, 17);
+        p.addEllipse(QPointF(9, 7), 2.2, 2.2);
+        p.addEllipse(QPointF(15, 17), 2.2, 2.2);
+        break;
     }
     return p;
 }

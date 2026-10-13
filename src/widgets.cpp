@@ -5,6 +5,7 @@
 #include <QEasingCurve>
 #include <QEnterEvent>
 #include <QGraphicsOpacityEffect>
+#include <QGuiApplication>
 #include <QPainter>
 #include <QPainterPath>
 #include <QParallelAnimationGroup>
@@ -60,8 +61,21 @@ void FancyButton::animate(QVariantAnimation *animation, double from, double to)
     animation->start();
 }
 
+void FancyButton::setCompact(bool compact)
+{
+    if (m_compact == compact)
+        return;
+    m_compact = compact;
+    if (toolTip().isEmpty())
+        setToolTip(text());
+    updateGeometry();
+    update();
+}
+
 QSize FancyButton::sizeHint() const
 {
+    if (m_compact)
+        return m_kind == Kind::Nav ? QSize(46, 46) : QSize(42, 40);
     const int textWidth = fontMetrics().horizontalAdvance(text());
     if (m_kind == Kind::Nav)
         return QSize(textWidth + 70, 46);
@@ -160,17 +174,132 @@ void FancyButton::paintEvent(QPaintEvent *)
     font.setWeight(m_kind == Kind::Nav ? QFont::DemiBold : QFont::Medium);
     p.setFont(font);
     const QFontMetricsF metrics(font);
+    const QString label = m_compact ? QString() : text();
     const double iconSize = 18.0;
-    const double spacing = text().isEmpty() ? 0.0 : 9.0;
-    const double contentWidth = iconSize + spacing + metrics.horizontalAdvance(text());
-    const double start = m_kind == Kind::Nav ? 18.0 : (bounds.width() - contentWidth) / 2.0;
+    const double spacing = label.isEmpty() ? 0.0 : 9.0;
+    const double contentWidth = iconSize + spacing + metrics.horizontalAdvance(label);
+    const double start = m_kind == Kind::Nav && !m_compact ? 18.0 : (bounds.width() - contentWidth) / 2.0;
     const double iconX = rtl ? bounds.right() - start - iconSize : bounds.left() + start;
     Icons::paint(p, m_icon, QRectF(iconX, center.y() - iconSize / 2, iconSize, iconSize), iconColor);
 
-    const double textWidth = metrics.horizontalAdvance(text()) + 2;
+    if (label.isEmpty())
+        return;
+    const double textWidth = metrics.horizontalAdvance(label) + 2;
     const double textX = rtl ? iconX - spacing - textWidth : iconX + iconSize + spacing;
     p.setPen(foreground);
-    p.drawText(QRectF(textX, bounds.top(), textWidth, bounds.height()), Qt::AlignCenter, text());
+    p.drawText(QRectF(textX, bounds.top(), textWidth, bounds.height()), Qt::AlignCenter, label);
+}
+
+// ───────────── FlowLayout ─────────────
+
+FlowLayout::FlowLayout(QWidget *parent, int hSpacing, int vSpacing)
+    : QLayout(parent)
+    , m_hSpacing(hSpacing)
+    , m_vSpacing(vSpacing)
+{
+    setContentsMargins(0, 0, 0, 0);
+}
+
+FlowLayout::~FlowLayout()
+{
+    while (QLayoutItem *item = takeAt(0))
+        delete item;
+}
+
+void FlowLayout::addItem(QLayoutItem *item)
+{
+    m_items.append(item);
+}
+
+int FlowLayout::count() const
+{
+    return int(m_items.size());
+}
+
+QLayoutItem *FlowLayout::itemAt(int index) const
+{
+    return m_items.value(index);
+}
+
+QLayoutItem *FlowLayout::takeAt(int index)
+{
+    return index >= 0 && index < m_items.size() ? m_items.takeAt(index) : nullptr;
+}
+
+Qt::Orientations FlowLayout::expandingDirections() const
+{
+    return {};
+}
+
+bool FlowLayout::hasHeightForWidth() const
+{
+    return true;
+}
+
+int FlowLayout::heightForWidth(int width) const
+{
+    return doLayout(QRect(0, 0, width, 0), true);
+}
+
+void FlowLayout::setGeometry(const QRect &rect)
+{
+    QLayout::setGeometry(rect);
+    doLayout(rect, false);
+}
+
+QSize FlowLayout::sizeHint() const
+{
+    return minimumSize();
+}
+
+QSize FlowLayout::minimumSize() const
+{
+    QSize size;
+    for (const QLayoutItem *item : m_items) {
+        if (!item->isEmpty())
+            size = size.expandedTo(item->minimumSize());
+    }
+    const QMargins margins = contentsMargins();
+    return size + QSize(margins.left() + margins.right(), margins.top() + margins.bottom());
+}
+
+int FlowLayout::doLayout(const QRect &rect, bool testOnly) const
+{
+    const QMargins margins = contentsMargins();
+    const QRect area = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom());
+    const bool rtl = parentWidget() ? parentWidget()->isRightToLeft() : QGuiApplication::isRightToLeft();
+    int x = 0;
+    int y = area.y();
+    int lineHeight = 0;
+    // كل سطر يُرتب أولاً ثم تُوسَّط عناصره عمودياً
+    QList<QPair<QLayoutItem *, QRect>> line;
+    auto flush = [&] {
+        for (auto &[item, geometry] : line) {
+            QRect g = geometry;
+            g.moveTop(y + (lineHeight - g.height()) / 2);
+            if (rtl)
+                g.moveLeft(area.right() - g.right() + area.left());
+            if (!testOnly)
+                item->setGeometry(g);
+        }
+        line.clear();
+    };
+    for (QLayoutItem *item : m_items) {
+        if (item->isEmpty())
+            continue;
+        const QSize hint = item->sizeHint().boundedTo(QSize(area.width(), QWIDGETSIZE_MAX));
+        if (x > 0 && x + hint.width() > area.width()) {
+            flush();
+            y += lineHeight + m_vSpacing;
+            x = 0;
+            lineHeight = 0;
+        }
+        line.append({item, QRect(QPoint(area.x() + x, y), hint)});
+        x += hint.width() + m_hSpacing;
+        lineHeight = std::max(lineHeight, hint.height());
+    }
+    flush();
+    return y + lineHeight - rect.y() + margins.bottom();
 }
 
 // ───────────── ToggleSwitch ─────────────

@@ -5,6 +5,7 @@
 #include "imageio.h"
 #include "imageview.h"
 #include "persondialog.h"
+#include "shotviewer.h"
 #include "personmodel.h"
 #include "theme.h"
 #include "videoworker.h"
@@ -13,6 +14,10 @@
 #include <QApplication>
 #include <QButtonGroup>
 #include <QClipboard>
+#include <QComboBox>
+#include <QMenu>
+#include <QScrollArea>
+#include <QTimeEdit>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDialog>
@@ -271,17 +276,20 @@ MainWindow::MainWindow(QWidget *parent)
     m_videoWorker->setGallery(m_database.gallery());
     m_videoWorker->setThreshold(threshold());
     connect(m_videoThread, &QThread::finished, m_videoWorker, &QObject::deleteLater);
-    connect(m_videoWorker, &VideoWorker::started, this, [this](int step, double) {
+    connect(m_videoWorker, &VideoWorker::started, this, [this](int step, double, qint64 durationMs) {
         m_videoClock.start();
         m_videoStep = step;
+        m_videoDurationMs = durationMs;
     });
     connect(m_videoWorker, &VideoWorker::frameReady, this, &MainWindow::onFrameReady);
     connect(m_videoWorker, &VideoWorker::trackUpdated, this, &MainWindow::onTrackUpdated);
     connect(m_videoWorker, &VideoWorker::finished, this, &MainWindow::onVideoFinished);
+    connect(m_videoWorker, &VideoWorker::identitiesMerged, this, &MainWindow::onIdentitiesMerged);
     m_videoThread->start();
 
     loadSettings();
     setBusy(false);
+    updateResponsiveLayout();
 }
 
 void MainWindow::onEngineLoaded()
@@ -354,6 +362,7 @@ void MainWindow::loadSettings()
     m_enhanceSwitch->setChecked(settings.value(QStringLiteral("enhance"), false).toBool());
     m_frameStepSpin->setValue(settings.value(QStringLiteral("frameStep"), 0).toInt());
     m_lastDirectory = settings.value(QStringLiteral("lastDirectory")).toString();
+    m_faceSort->setCurrentIndex(std::clamp(settings.value(QStringLiteral("faceSort"), 0).toInt(), 0, m_faceSort->count() - 1));
 }
 
 void MainWindow::saveSettings() const
@@ -364,6 +373,7 @@ void MainWindow::saveSettings() const
     settings.setValue(QStringLiteral("enhance"), m_enhanceSwitch->isChecked());
     settings.setValue(QStringLiteral("frameStep"), m_frameStepSpin->value());
     settings.setValue(QStringLiteral("lastDirectory"), m_lastDirectory);
+    settings.setValue(QStringLiteral("faceSort"), m_faceSort->currentIndex());
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -442,6 +452,7 @@ MainWindow::~MainWindow()
 QWidget *MainWindow::createSidebar()
 {
     auto *sidebar = card(this, QStringLiteral("sidebar"));
+    m_sidebar = sidebar;
     sidebar->setFixedWidth(240);
     auto *layout = new QVBoxLayout(sidebar);
     layout->setContentsMargins(18, 22, 18, 18);
@@ -450,17 +461,19 @@ QWidget *MainWindow::createSidebar()
     auto *brand = new QHBoxLayout;
     brand->setSpacing(12);
     brand->addWidget(new LogoMark(sidebar));
-    auto *brandText = new QVBoxLayout;
+    auto *brandWidget = new QWidget(sidebar);
+    auto *brandText = new QVBoxLayout(brandWidget);
+    brandText->setContentsMargins(0, 0, 0, 0);
     brandText->setSpacing(0);
-    auto *name = label(QStringLiteral("ملامح"), QStringLiteral("sectionTitle"), sidebar);
-    brandText->addWidget(name);
-    brandText->addWidget(label(QStringLiteral("التعرف على الوجوه"), QStringLiteral("muted"), sidebar));
-    brand->addLayout(brandText, 1);
+    brandText->addWidget(label(QStringLiteral("ملامح"), QStringLiteral("sectionTitle"), brandWidget));
+    brandText->addWidget(label(QStringLiteral("التعرف على الوجوه"), QStringLiteral("muted"), brandWidget));
+    brand->addWidget(brandWidget, 1);
     layout->addLayout(brand);
     layout->addSpacing(26);
 
     auto *recognitionNav = new FancyButton(Icons::Name::Scan, QStringLiteral("التعرف"), FancyButton::Kind::Nav, sidebar);
     auto *databaseNav = new FancyButton(Icons::Name::Users, QStringLiteral("قاعدة البيانات"), FancyButton::Kind::Nav, sidebar);
+    m_navButtons = {recognitionNav, databaseNav};
     auto *group = new QButtonGroup(sidebar);
     m_navGroup = group;
     group->addButton(recognitionNav, 0);
@@ -484,23 +497,60 @@ QWidget *MainWindow::createSidebar()
     layout->addWidget(stats);
     layout->addSpacing(10);
 
-    auto *offline = new QHBoxLayout;
-    auto *lock = new QLabel(sidebar);
+    auto *offline = new QWidget(sidebar);
+    auto *offlineLayout = new QHBoxLayout(offline);
+    offlineLayout->setContentsMargins(0, 0, 0, 0);
+    auto *lock = new QLabel(offline);
     lock->setPixmap(Icons::icon(Icons::Name::Lock, Theme::Success, 16).pixmap(16, 16));
-    offline->addWidget(lock);
-    auto *offlineText = label(QStringLiteral("يعمل محلياً بالكامل، دون إنترنت"), QStringLiteral("muted"), sidebar);
+    offlineLayout->addWidget(lock);
+    auto *offlineText = label(QStringLiteral("يعمل محلياً بالكامل، دون إنترنت"), QStringLiteral("muted"), offline);
     offlineText->setWordWrap(true);
-    offline->addWidget(offlineText, 1);
-    layout->addLayout(offline);
+    offlineLayout->addWidget(offlineText, 1);
+    layout->addWidget(offline);
+    m_sidebarExtras = {brandWidget, stats, offline};
     return sidebar;
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    updateResponsiveLayout();
+}
+
+// يكيّف الواجهة مع عرض النافذة حتى لا تختفي أجزاء منها على شاشات اللابتوب الصغيرة
+void MainWindow::updateResponsiveLayout()
+{
+    if (!m_sidebar)
+        return;
+    const int w = width();
+    // 0 كامل، 1 شريط جانبي مصغر، 2 أزرار مصغرة أيضاً؛ والشاشات القصيرة تُخفي النصوص الثانوية
+    const int mode = w >= 1480 ? 0 : (w >= 1120 ? 1 : 2);
+    const bool shortScreen = height() < 820;
+    const int key = mode * 2 + (shortScreen ? 1 : 0);
+    if (key == m_layoutMode)
+        return;
+    m_layoutMode = key;
+    const bool compactSidebar = mode >= 1;
+    m_sidebar->setFixedWidth(compactSidebar ? 76 : 240);
+    m_sidebar->layout()->setContentsMargins(compactSidebar ? QMargins(14, 18, 14, 14) : QMargins(18, 22, 18, 18));
+    for (QWidget *extra : std::as_const(m_sidebarExtras))
+        extra->setVisible(!compactSidebar);
+    for (FancyButton *button : std::as_const(m_navButtons))
+        button->setCompact(compactSidebar);
+    for (FancyButton *button : std::as_const(m_headerButtons))
+        button->setCompact(mode >= 2);
+    for (QLabel *subtitle : std::as_const(m_subtitles))
+        subtitle->setVisible(mode == 0 && !shortScreen);
+    if (m_photosHint)
+        m_photosHint->setVisible(mode == 0);
 }
 
 QWidget *MainWindow::createRecognitionPage()
 {
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
-    layout->setContentsMargins(26, 22, 26, 18);
-    layout->setSpacing(14);
+    layout->setContentsMargins(20, 18, 20, 12);
+    layout->setSpacing(12);
 
     // العنوان والأزرار
     m_openImageButton = new FancyButton(Icons::Name::Image, QStringLiteral("فتح صورة"), FancyButton::Kind::Primary, page);
@@ -514,57 +564,74 @@ QWidget *MainWindow::createRecognitionPage()
     m_pauseButton->setToolTip(QStringLiteral("إيقاف مؤقت / استئناف (مسافة)"));
     m_stopButton->setToolTip(QStringLiteral("إيقاف التحليل (Esc)"));
     m_saveFacesButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ الوجوه"), FancyButton::Kind::Secondary, page);
-    m_saveFacesButton->setToolTip(QStringLiteral("حفظ صور الوجوه المكتشفة (Ctrl+S)"));
+    m_saveFacesButton->setToolTip(QStringLiteral("حفظ صور الوجوه المكتشفة مع تقرير (Ctrl+S)"));
     connect(m_openImageButton, &QAbstractButton::clicked, this, &MainWindow::openImage);
     connect(m_openVideoButton, &QAbstractButton::clicked, this, &MainWindow::openVideo);
     connect(m_cameraButton, &QAbstractButton::clicked, this, &MainWindow::openCamera);
     connect(m_pauseButton, &QAbstractButton::clicked, this, &MainWindow::togglePause);
     connect(m_stopButton, &QAbstractButton::clicked, this, &MainWindow::stopVideo);
     connect(m_saveFacesButton, &QAbstractButton::clicked, this, &MainWindow::saveFaces);
+    m_headerButtons = {m_openImageButton, m_openVideoButton, m_cameraButton, m_pauseButton, m_stopButton, m_saveFacesButton};
 
     auto *header = new QHBoxLayout;
     auto *titles = new QVBoxLayout;
     titles->setSpacing(2);
     titles->addWidget(label(QStringLiteral("التعرف على الوجوه"), QStringLiteral("title"), page));
-    titles->addWidget(label(QStringLiteral("افتح صورة أو فيديو، أو شغّل الكاميرا، ليتم كشف الوجوه ومطابقتها مع قاعدة البيانات"),
-                            QStringLiteral("subtitle"), page));
+    auto *subtitle = label(QStringLiteral("افتح صورة أو فيديو، أو شغّل الكاميرا، ليتم كشف الوجوه ومطابقتها مع قاعدة البيانات"),
+                           QStringLiteral("subtitle"), page);
+    subtitle->setWordWrap(true);
+    subtitle->setMinimumWidth(120);
+    m_subtitles << subtitle;
+    titles->addWidget(subtitle);
     header->addLayout(titles, 1);
-    header->setSpacing(10);
-    header->addWidget(m_openImageButton);
-    header->addWidget(m_openVideoButton);
-    header->addWidget(m_cameraButton);
-    header->addWidget(m_pauseButton);
-    header->addWidget(m_stopButton);
-    header->addWidget(m_saveFacesButton);
+    header->setSpacing(8);
+    for (FancyButton *button : std::as_const(m_headerButtons))
+        header->addWidget(button);
     layout->addLayout(header);
 
-    // الإعدادات
+    // الإعدادات: مجموعات صغيرة تلتف إلى سطر جديد عندما تضيق النافذة
     auto *settings = card(page);
-    auto *settingsLayout = new QHBoxLayout(settings);
-    settingsLayout->setContentsMargins(18, 10, 18, 10);
-    settingsLayout->setSpacing(14);
+    auto *settingsLayout = new FlowLayout(settings, 18, 8);
+    settingsLayout->setContentsMargins(16, 8, 16, 8);
+    auto group = [settings](std::initializer_list<QWidget *> widgets) {
+        auto *box = new QWidget(settings);
+        auto *row = new QHBoxLayout(box);
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(8);
+        for (QWidget *w : widgets)
+            row->addWidget(w);
+        return box;
+    };
 
     m_thresholdSlider = new QSlider(Qt::Horizontal, settings);
     m_thresholdSlider->setRange(15, 80);
     m_thresholdSlider->setValue(30);
-    m_thresholdSlider->setFixedWidth(180);
+    m_thresholdSlider->setFixedWidth(150);
     m_thresholdSlider->setCursor(Qt::PointingHandCursor);
     m_thresholdSlider->setToolTip(QStringLiteral("أعلى = أخطاء أقل لكن قد لا يُتعرف على الصور الرديئة جداً.\nأقل = يتعرف أكثر مع احتمال خطأ أكبر."));
     m_thresholdValue = label(QStringLiteral("30%"), QStringLiteral("badge"), settings);
+    m_thresholdWarning = new QLabel(settings);
+    m_thresholdWarning->setPixmap(Icons::icon(Icons::Name::Alert, Theme::Warning, 18).pixmap(18, 18));
+    m_thresholdWarning->setToolTip(QStringLiteral("الحد أقل من 30%: قد يُنسب وجه شخص غير مسجل إلى شخص معروف يشبهه.\n"
+                                                  "يُنصح بـ 30% إلى 40%، خاصة مع الفيديو منخفض الجودة."));
+    m_thresholdWarning->setVisible(false);
     connect(m_thresholdSlider, &QSlider::valueChanged, this, [this](int value) {
         m_thresholdValue->setText(QStringLiteral("%1%").arg(value));
+        m_thresholdWarning->setVisible(value < 30);
         m_videoWorker->setThreshold(threshold());
         refreshMatches();
     });
 
-    m_thoroughSwitch = new ToggleSwitch(QStringLiteral("تحليل معمّق للصور (أدق وأبطأ)"), settings);
+    m_thoroughSwitch = new ToggleSwitch(QStringLiteral("تحليل معمّق للصور"), settings);
+    m_thoroughSwitch->setToolTip(QStringLiteral("كشف متعدد المقاييس للصور: أدق مع الوجوه الصغيرة، وأبطأ"));
     m_thoroughSwitch->setChecked(true);
 
     m_enhanceSwitch = new ToggleSwitch(QStringLiteral("تحسين الصورة وتوضيحها"), settings);
-    m_enhanceSwitch->setToolTip(QStringLiteral("للصور الصغيرة أو المظلمة أو المشوشة (Ctrl+E):\n"
+    m_enhanceSwitch->setToolTip(QStringLiteral("للصور والفيديو الصغير أو المظلم أو المشوش (Ctrl+E):\n"
                                                "تكبير، إزالة التشويش، موازنة الإضاءة والتباين، ثم زيادة الحدة.\n"
-                                               "تُعرض الصورة المحسّنة ويُحلل منها."));
-    connect(m_enhanceSwitch, &QAbstractButton::toggled, this, [this] {
+                                               "يُطبَّق على الفيديو فوراً أثناء التحليل، ويجعله أبطأ."));
+    connect(m_enhanceSwitch, &QAbstractButton::toggled, this, [this](bool checked) {
+        m_videoWorker->setEnhance(checked);
         if (!m_videoMode && !m_currentImagePath.isEmpty() && m_openImageButton->isEnabled())
             analyzeImage(m_currentImagePath);
     });
@@ -573,20 +640,51 @@ QWidget *MainWindow::createRecognitionPage()
     m_frameStepSpin->setRange(0, 60);
     m_frameStepSpin->setValue(0);
     m_frameStepSpin->setSpecialValueText(QStringLiteral("تلقائي"));
-    m_frameStepSpin->setToolTip(QStringLiteral("تلقائي = نحو 10 إطارات لكل ثانية من الفيديو (سريع ودقيق).\n"
+    m_frameStepSpin->setToolTip(QStringLiteral("تحليل إطار من كل كم إطار في الفيديو.\n"
+                                               "تلقائي = نحو 10 إطارات لكل ثانية من الفيديو (سريع ودقيق).\n"
                                                "1 = تحليل كل إطار (الأبطأ). قيمة أكبر = أسرع."));
     connect(m_frameStepSpin, &QSpinBox::valueChanged, this, [this](int value) { m_videoWorker->setFrameStep(value); });
 
-    settingsLayout->addWidget(new QLabel(QStringLiteral("حد التعرف"), settings));
-    settingsLayout->addWidget(m_thresholdSlider);
-    settingsLayout->addWidget(m_thresholdValue);
-    settingsLayout->addWidget(separator(settings));
+    // جزء الفيديو المطلوب
+    auto timeEdit = [settings](const QString &tip) {
+        auto *edit = new QTimeEdit(settings);
+        edit->setDisplayFormat(QStringLiteral("HH:mm:ss"));
+        edit->setTime(QTime(0, 0));
+        edit->setToolTip(tip);
+        edit->setLayoutDirection(Qt::LeftToRight);
+        return edit;
+    };
+    m_rangeStart = timeEdit(QStringLiteral("بداية الجزء المطلوب تحليله من الفيديو"));
+    m_rangeEnd = timeEdit(QStringLiteral("نهاية الجزء المطلوب تحليله؛ 00:00:00 = حتى نهاية الفيديو"));
+    m_rangeEnd->setSpecialValueText(QStringLiteral("النهاية"));
+
+    m_regionButton = new FancyButton(Icons::Name::Region, QStringLiteral("تحديد منطقة"), FancyButton::Kind::Secondary, settings);
+    m_regionButton->setCheckable(true);
+    m_regionButton->setToolTip(QStringLiteral("ارسم مستطيلاً على الإطار ليُبحث عن الوجوه داخله فقط (أسرع ويتجاهل ما حوله)"));
+    m_clearRegionButton = new FancyButton(Icons::Name::Stop, QStringLiteral("الإطار كله"), FancyButton::Kind::Secondary, settings);
+    m_clearRegionButton->setToolTip(QStringLiteral("إلغاء المنطقة والبحث في الإطار كله"));
+    m_reanalyzeButton = new FancyButton(Icons::Name::Film, QStringLiteral("إعادة التحليل"), FancyButton::Kind::Secondary, settings);
+    m_reanalyzeButton->setToolTip(QStringLiteral("إعادة تحليل آخر فيديو بالإعدادات والجزء والمنطقة الحالية"));
+    connect(m_regionButton, &QAbstractButton::toggled, this, [this](bool on) {
+        m_view->setSelectingRegion(on);
+        if (on)
+            statusBar()->showMessage(QStringLiteral("اسحب على الإطار لتحديد منطقة البحث عن الوجوه"));
+    });
+    connect(m_clearRegionButton, &QAbstractButton::clicked, this, [this] {
+        m_view->setRegion(QRectF());
+        m_videoWorker->setRegion(QRectF());
+        m_regionButton->setChecked(false);
+        updateVideoOptions();
+    });
+    connect(m_reanalyzeButton, &QAbstractButton::clicked, this, &MainWindow::reanalyzeVideo);
+
+    settingsLayout->addWidget(group({new QLabel(QStringLiteral("حد التعرف"), settings), m_thresholdSlider, m_thresholdValue, m_thresholdWarning}));
     settingsLayout->addWidget(m_thoroughSwitch);
     settingsLayout->addWidget(m_enhanceSwitch);
-    settingsLayout->addWidget(separator(settings));
-    settingsLayout->addWidget(new QLabel(QStringLiteral("الفيديو: تحليل إطار من كل"), settings));
-    settingsLayout->addWidget(m_frameStepSpin);
-    settingsLayout->addStretch();
+    settingsLayout->addWidget(group({new QLabel(QStringLiteral("إطار من كل"), settings), m_frameStepSpin}));
+    settingsLayout->addWidget(group({new QLabel(QStringLiteral("الجزء: من"), settings), m_rangeStart,
+                                     new QLabel(QStringLiteral("إلى"), settings), m_rangeEnd}));
+    settingsLayout->addWidget(group({m_regionButton, m_clearRegionButton, m_reanalyzeButton}));
     layout->addWidget(settings);
 
     m_progress = new QProgressBar(page);
@@ -606,14 +704,37 @@ QWidget *MainWindow::createRecognitionPage()
     auto *viewLayout = new QVBoxLayout(viewCard);
     viewLayout->setContentsMargins(2, 2, 2, 2);
     m_view = new ImageView(viewCard);
+    m_view->setMinimumSize(280, 180);
     viewLayout->addWidget(m_view);
     connect(m_view, &ImageView::faceClicked, this, &MainWindow::selectFace);
+    connect(m_view, &ImageView::faceDoubleClicked, this, [this](int id) {
+        if (m_videoMode)
+            openShotViewer(id);
+    });
+    connect(m_view, &ImageView::regionSelected, this, [this](const QRectF &region) {
+        m_videoWorker->setRegion(region);
+        m_regionButton->setChecked(false);
+        updateVideoOptions();
+        statusBar()->showMessage(region.isEmpty() ? QStringLiteral("يُبحث عن الوجوه في الإطار كله")
+                                                  : QStringLiteral("يُبحث عن الوجوه داخل المنطقة المحددة فقط"));
+    });
 
+    // محتوى اللوحة يُمرَّر عمودياً على الشاشات القصيرة جداً بدل أن تتداخل أجزاؤه
     auto *side = card(page);
-    side->setMinimumWidth(300);
-    auto *sideLayout = new QVBoxLayout(side);
-    sideLayout->setContentsMargins(14, 16, 14, 14);
-    sideLayout->setSpacing(10);
+    side->setMinimumWidth(240);
+    auto *sideOuter = new QVBoxLayout(side);
+    sideOuter->setContentsMargins(0, 0, 0, 0);
+    auto *sideScroll = new QScrollArea(side);
+    sideScroll->setWidgetResizable(true);
+    sideScroll->setFrameShape(QFrame::NoFrame);
+    sideScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    sideScroll->setStyleSheet(QStringLiteral("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"));
+    auto *sideContent = new QWidget(sideScroll);
+    sideScroll->setWidget(sideContent);
+    sideOuter->addWidget(sideScroll);
+    auto *sideLayout = new QVBoxLayout(sideContent);
+    sideLayout->setContentsMargins(12, 14, 12, 12);
+    sideLayout->setSpacing(8);
     auto *sideHeader = new QHBoxLayout;
     sideHeader->addWidget(label(QStringLiteral("الوجوه المكتشفة"), QStringLiteral("sectionTitle"), side));
     sideHeader->addStretch();
@@ -621,35 +742,90 @@ QWidget *MainWindow::createRecognitionPage()
     sideHeader->addWidget(m_faceCount);
     sideLayout->addLayout(sideHeader);
 
+    // البحث والتصفية والترتيب
+    m_faceFilter = new QLineEdit(side);
+    m_faceFilter->setPlaceholderText(QStringLiteral("بحث بالاسم…"));
+    m_faceFilter->setClearButtonEnabled(true);
+    m_faceFilter->addAction(Icons::icon(Icons::Name::Search, Theme::Muted, 18), QLineEdit::LeadingPosition);
+    m_faceStatusFilter = new QComboBox(side);
+    m_faceStatusFilter->addItems({QStringLiteral("الكل"), QStringLiteral("المعروفون"), QStringLiteral("المحتملون"),
+                                  QStringLiteral("غير المعروفين")});
+    m_faceStatusFilter->setToolTip(QStringLiteral("عرض الوجوه حسب نتيجة المطابقة"));
+    m_faceSort = new QComboBox(side);
+    m_faceSort->addItems({QStringLiteral("حسب الظهور"), QStringLiteral("الأكثر ظهوراً"), QStringLiteral("الأوضح"),
+                          QStringLiteral("المعروفون أولاً")});
+    m_faceSort->setToolTip(QStringLiteral("ترتيب القائمة"));
+    connect(m_faceFilter, &QLineEdit::textChanged, this, &MainWindow::applyFaceFilter);
+    connect(m_faceStatusFilter, &QComboBox::currentIndexChanged, this, &MainWindow::applyFaceFilter);
+    connect(m_faceSort, &QComboBox::currentIndexChanged, this, &MainWindow::sortFaces);
+    auto *filters = new QHBoxLayout;
+    filters->setSpacing(6);
+    filters->addWidget(m_faceStatusFilter, 1);
+    filters->addWidget(m_faceSort, 1);
+    sideLayout->addWidget(m_faceFilter);
+    sideLayout->addLayout(filters);
+
     m_faceList = new QListWidget(side);
     m_faceList->setItemDelegate(new FaceCardDelegate(m_faceList));
     m_faceList->setUniformItemSizes(true);
     m_faceList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_faceList->setMouseTracking(true);
+    m_faceList->setMinimumHeight(90);
+    m_faceList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_faceList->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_faceList->setToolTip(QStringLiteral("انقر نقراً مزدوجاً لعرض لقطات الوجه في الفيديو · Ctrl أو Shift لتحديد عدة وجوه ثم زر الفأرة الأيمن للدمج أو الحذف"));
     connect(m_faceList, &QListWidget::currentRowChanged, this, &MainWindow::showFaceDetails);
+    connect(m_faceList, &QListWidget::customContextMenuRequested, this, &MainWindow::showFaceContextMenu);
+    connect(m_faceList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+        if (m_videoMode)
+            openShotViewer(item->data(CardRole::Id).toInt());
+    });
     sideLayout->addWidget(m_faceList, 1);
 
+    // التفاصيل تُمرَّر إن طالت حتى تبقى الأزرار ظاهرة على الشاشات القصيرة
     m_faceDetails = new QLabel(side);
     m_faceDetails->setWordWrap(true);
     m_faceDetails->setTextFormat(Qt::RichText);
-    m_faceDetails->setMinimumHeight(96);
     m_faceDetails->setAlignment(Qt::AlignTop);
     m_faceDetails->setObjectName(QStringLiteral("muted"));
-    sideLayout->addWidget(m_faceDetails);
+    auto *detailsScroll = new QScrollArea(side);
+    detailsScroll->setWidget(m_faceDetails);
+    detailsScroll->setWidgetResizable(true);
+    detailsScroll->setFrameShape(QFrame::NoFrame);
+    detailsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    detailsScroll->setMinimumHeight(56);
+    detailsScroll->setMaximumHeight(190);
+    detailsScroll->setStyleSheet(QStringLiteral("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"));
+    sideLayout->addWidget(detailsScroll);
 
-    m_enrollFaceButton = new FancyButton(Icons::Name::UserPlus, QStringLiteral("إضافة الوجه إلى قاعدة البيانات"),
-                                         FancyButton::Kind::Primary, side);
+    m_viewShotButton = new FancyButton(Icons::Name::Film, QStringLiteral("اللقطات"), FancyButton::Kind::Secondary, side);
+    m_viewShotButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_viewShotButton->setToolTip(QStringLiteral("الرجوع إلى إطارات ظهور الوجه، وأوضح لقطة له، وتحسينها وحفظها"));
+    m_viewShotButton->setVisible(false);
+    connect(m_viewShotButton, &QAbstractButton::clicked, this, [this] {
+        const int row = m_faceList->currentRow();
+        if (row >= 0 && row < m_faces.size())
+            openShotViewer(m_faces.at(row).id);
+    });
+
+    m_enrollFaceButton = new FancyButton(Icons::Name::UserPlus, QStringLiteral("إضافة للقاعدة"), FancyButton::Kind::Primary, side);
     m_enrollFaceButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_enrollFaceButton->setToolTip(QStringLiteral("إضافة الوجه المحدد إلى شخص في قاعدة البيانات، أو إلى شخص جديد"));
     connect(m_enrollFaceButton, &QAbstractButton::clicked, this, &MainWindow::addSelectedFaceToDatabase);
-    sideLayout->addWidget(m_enrollFaceButton);
+    auto *faceActions = new QHBoxLayout;
+    faceActions->setSpacing(8);
+    faceActions->addWidget(m_enrollFaceButton, 1);
+    faceActions->addWidget(m_viewShotButton, 1);
+    sideLayout->addLayout(faceActions);
 
     auto *splitter = new QSplitter(Qt::Horizontal, page);
-    splitter->setHandleWidth(14);
+    splitter->setHandleWidth(12);
+    splitter->setChildrenCollapsible(false);
     splitter->addWidget(viewCard);
     splitter->addWidget(side);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 1);
-    splitter->setSizes({900, 330});
+    splitter->setSizes({900, 320});
     layout->addWidget(splitter, 1);
     return page;
 }
@@ -673,14 +849,17 @@ QWidget *MainWindow::createDatabasePage()
     titles->addWidget(label(QStringLiteral("قاعدة البيانات"), QStringLiteral("title"), page));
     m_databaseSubtitle = label(QString(), QStringLiteral("subtitle"), page);
     titles->addWidget(m_databaseSubtitle);
+    m_databaseSubtitle->setWordWrap(true);
+    m_subtitles << m_databaseSubtitle;
     header->addLayout(titles, 1);
     header->addWidget(addPersonButton);
     header->addWidget(openFolderButton);
+    m_headerButtons << addPersonButton << openFolderButton;
     layout->addLayout(header);
 
     // قائمة الأشخاص
     auto *listCard = card(page);
-    listCard->setMinimumWidth(290);
+    listCard->setMinimumWidth(220);
     auto *listLayout = new QVBoxLayout(listCard);
     listLayout->setContentsMargins(14, 14, 14, 14);
     listLayout->setSpacing(10);
@@ -726,9 +905,8 @@ QWidget *MainWindow::createDatabasePage()
     detailsLayout->addLayout(profile);
 
     m_personActions = new QWidget(detailsCard);
-    auto *actions = new QHBoxLayout(m_personActions);
+    auto *actions = new FlowLayout(m_personActions, 10, 8);
     actions->setContentsMargins(0, 0, 0, 0);
-    actions->setSpacing(10);
     auto *editButton = new FancyButton(Icons::Name::Edit, QStringLiteral("تعديل البيانات"), FancyButton::Kind::Secondary, m_personActions);
     auto *addPhotosButton = new FancyButton(Icons::Name::PhotoAdd, QStringLiteral("إضافة صور"), FancyButton::Kind::Primary, m_personActions);
     auto *removeButton = new FancyButton(Icons::Name::Trash, QStringLiteral("حذف الشخص"), FancyButton::Kind::Danger, m_personActions);
@@ -737,14 +915,15 @@ QWidget *MainWindow::createDatabasePage()
     connect(removeButton, &QAbstractButton::clicked, this, &MainWindow::removePerson);
     actions->addWidget(addPhotosButton);
     actions->addWidget(editButton);
-    actions->addStretch();
     actions->addWidget(removeButton);
     detailsLayout->addWidget(m_personActions);
 
     auto *photosHeader = new QHBoxLayout;
     auto *photosTitle = label(QStringLiteral("صور الوجه المسجلة"), QStringLiteral("sectionTitle"), detailsCard);
     photosHeader->addWidget(photosTitle);
-    photosHeader->addWidget(label(QStringLiteral("كلما زادت الصور وتنوعت زادت دقة التعرف"), QStringLiteral("muted"), detailsCard), 1);
+    m_photosHint = label(QStringLiteral("كلما زادت الصور وتنوعت زادت دقة التعرف"), QStringLiteral("muted"), detailsCard);
+    photosHeader->addWidget(m_photosHint, 1);
+    photosHeader->addStretch();
     m_removePhotoButton = new FancyButton(Icons::Name::Trash, QStringLiteral("حذف الصورة"), FancyButton::Kind::Danger, detailsCard);
     connect(m_removePhotoButton, &QAbstractButton::clicked, this, &MainWindow::removePhoto);
     photosHeader->addWidget(m_removePhotoButton);
@@ -763,6 +942,7 @@ QWidget *MainWindow::createDatabasePage()
 
     auto *splitter = new QSplitter(Qt::Horizontal, page);
     splitter->setHandleWidth(14);
+    splitter->setChildrenCollapsible(false);
     splitter->addWidget(listCard);
     splitter->addWidget(detailsCard);
     splitter->setStretchFactor(0, 1);
@@ -789,6 +969,16 @@ void MainWindow::setBusy(bool busy)
     m_pauseButton->setVisible(m_videoRunning);
     m_saveFacesButton->setEnabled(!m_faces.isEmpty());
     m_enrollFaceButton->setEnabled(m_ready && m_faceList->currentRow() >= 0);
+    updateVideoOptions();
+}
+
+void MainWindow::updateVideoOptions()
+{
+    const bool idle = m_ready && !m_analyzing && !m_videoRunning;
+    const bool fileVideo = !m_videoSource.isEmpty() && !m_videoSource.startsWith(QStringLiteral("camera:"));
+    m_reanalyzeButton->setEnabled(idle && fileVideo);
+    m_regionButton->setEnabled(m_ready && (m_view->hasImage() || m_regionButton->isChecked()));
+    m_clearRegionButton->setEnabled(!m_view->region().isEmpty());
 }
 
 // ───────────── التعرف ─────────────
@@ -902,11 +1092,28 @@ void MainWindow::openCamera()
 
 void MainWindow::startVideo(const QString &source)
 {
+    const bool camera = source.startsWith(QStringLiteral("camera:"));
+    if (source != m_videoSource && !m_videoSource.isEmpty()) {
+        // منطقة التحليل خاصة بالفيديو السابق
+        m_view->setRegion(QRectF());
+    }
+    m_videoSource = source;
     m_videoMode = true;
     m_videoRunning = true;
     m_faces.clear();
+    m_hiddenFaces.clear();
     refreshFaceList();
+    const QRectF region = m_view->region();
     m_view->clear();
+    m_view->setRegion(region);
+    m_videoStartMs = camera ? 0 : m_rangeStart->time().msecsSinceStartOfDay();
+    m_videoEndMs = camera ? 0 : m_rangeEnd->time().msecsSinceStartOfDay();
+    if (m_videoEndMs <= m_videoStartMs)
+        m_videoEndMs = 0;
+    m_videoDurationMs = 0;
+    m_videoWorker->setRange(m_videoStartMs, m_videoEndMs);
+    m_videoWorker->setRegion(region);
+    m_videoWorker->setEnhance(m_enhanceSwitch->isChecked());
     m_view->setBusy(true, source.startsWith(QStringLiteral("camera:")) ? QStringLiteral("جارٍ تشغيل الكاميرا")
                                                                        : QStringLiteral("جارٍ فتح الفيديو"));
     m_progress->setRange(0, 0);
@@ -948,7 +1155,7 @@ void MainWindow::togglePause()
     }
 }
 
-void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces, int frameIndex, int frameCount)
+void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress)
 {
     m_videoWorker->frameShown();
     if (!m_videoRunning)
@@ -956,22 +1163,21 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     m_view->setBusy(false);
     m_view->setImage(frame);
     m_view->setFaces(faces);
-    if (frameCount > 0) {
-        m_progress->setRange(0, frameCount);
-        m_progress->setValue(std::min(frameIndex, frameCount));
+    m_videoPositionMs = positionMs;
+    if (progress >= 0.0) {
+        m_progress->setRange(0, 1000);
+        m_progress->setValue(int(progress * 1000.0));
     }
-    QString status = frameCount > 0 ? QStringLiteral("الإطار %1 من %2").arg(frameIndex).arg(frameCount)
-                                    : QStringLiteral("الإطار %1").arg(frameIndex);
+    const qint64 endMs = m_videoEndMs > 0 ? m_videoEndMs : m_videoDurationMs;
+    QString status = endMs > 0 ? QStringLiteral("الموضع %1 من %2").arg(ImageIO::formatTime(positionMs), ImageIO::formatTime(endMs))
+                               : QStringLiteral("الموضع %1").arg(ImageIO::formatTime(positionMs));
     const double seconds = m_videoClock.isValid() ? (m_videoClock.elapsed() - m_pausedMs) / 1000.0 : 0.0;
-    if (seconds > 1.0) {
-        const double speed = frameIndex / seconds;
-        status += QStringLiteral(" · السرعة %1 إطار/ث").arg(speed, 0, 'f', 1);
-        if (frameCount > frameIndex && speed > 0.0) {
-            const int remaining = int((frameCount - frameIndex) / speed);
-            status += QStringLiteral(" · المتبقي %1").arg(remaining >= 3600
-                ? QStringLiteral("%1:%2:%3").arg(remaining / 3600).arg(remaining / 60 % 60, 2, 10, QLatin1Char('0')).arg(remaining % 60, 2, 10, QLatin1Char('0'))
-                : QStringLiteral("%1:%2").arg(remaining / 60).arg(remaining % 60, 2, 10, QLatin1Char('0')));
-        }
+    if (seconds > 1.0 && positionMs > m_videoStartMs) {
+        // السرعة بالنسبة لزمن التشغيل العادي: 2× تعني أن دقيقة من الفيديو تُحلَّل في نصف دقيقة
+        const double speed = (positionMs - m_videoStartMs) / 1000.0 / seconds;
+        status += QStringLiteral(" · السرعة %1×").arg(QLocale().toString(speed, 'f', 1));
+        if (endMs > positionMs && speed > 0.0)
+            status += QStringLiteral(" · المتبقي %1").arg(ImageIO::formatTime(qint64((endMs - positionMs) / speed)));
     }
     if (m_videoStep > 1)
         status += QStringLiteral(" · تحليل إطار من كل %1").arg(m_videoStep);
@@ -983,12 +1189,15 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
 
 void MainWindow::onTrackUpdated(const FaceItem &track)
 {
+    if (m_hiddenFaces.contains(track.id))
+        return;
     if (m_faces.isEmpty())
         m_faceRows.clear();
     const int i = m_faceRows.value(track.id, -1);
     if (i >= 0 && i < m_faces.size() && m_faces.at(i).id == track.id) {
         m_faces[i] = track;
         updateFaceListItem(m_faceList->item(i), track);
+        m_faceList->setRowHidden(i, !faceMatchesFilter(track));
         if (m_faceList->currentRow() == i)
             showFaceDetails();
         return;
@@ -996,12 +1205,21 @@ void MainWindow::onTrackUpdated(const FaceItem &track)
     m_faceRows.insert(track.id, int(m_faces.size()));
     m_faces.append(track);
     updateFaceListItem(new QListWidgetItem(m_faceList), track);
+    m_faceList->setRowHidden(m_faceList->count() - 1, !faceMatchesFilter(track));
     updateFaceCount();
     m_saveFacesButton->setEnabled(true);
 }
 
 void MainWindow::onVideoFinished(const QString &error)
 {
+    if (m_restartFromMs >= 0) {
+        // أُوقف التحليل ليبدأ من جديد من موضع آخر
+        m_videoRunning = false;
+        const qint64 from = std::exchange(m_restartFromMs, -1);
+        setBusy(false);
+        analyzeVideoFrom(from);
+        return;
+    }
     m_videoRunning = false;
     m_videoPaused = false;
     m_view->setBusy(false);
@@ -1010,11 +1228,254 @@ void MainWindow::onVideoFinished(const QString &error)
         statusBar()->showMessage(error);
         Toast::show(this, error, Toast::Kind::Warning);
     } else {
-        const QString summary = QStringLiteral("انتهى التحليل — أشخاص مختلفون: %1").arg(m_faces.size());
+        if (m_faceSort->currentIndex() != 0)
+            sortFaces();
+        const QString summary = QStringLiteral("انتهى التحليل — أشخاص مختلفون: %1 · انقر نقراً مزدوجاً على وجه لعرض لقطاته")
+                                    .arg(m_faces.size());
         statusBar()->showMessage(summary);
         Toast::show(this, summary, Toast::Kind::Info);
     }
     setBusy(false);
+}
+
+// ───────────── إدارة الوجوه المكتشفة ─────────────
+
+void MainWindow::rebuildFaceRows()
+{
+    m_faceRows.clear();
+    for (int i = 0; i < m_faces.size(); ++i)
+        m_faceRows.insert(m_faces.at(i).id, i);
+}
+
+bool MainWindow::faceMatchesFilter(const FaceItem &face) const
+{
+    switch (m_faceStatusFilter->currentIndex()) {
+    case 1:
+        if (face.match.status != MatchStatus::Confirmed)
+            return false;
+        break;
+    case 2:
+        if (face.match.status != MatchStatus::Possible)
+            return false;
+        break;
+    case 3:
+        if (face.match.status != MatchStatus::Unknown)
+            return false;
+        break;
+    default:
+        break;
+    }
+    const QString text = m_faceFilter->text().trimmed();
+    return text.isEmpty() || matchLabel(face.match).contains(text, Qt::CaseInsensitive);
+}
+
+void MainWindow::applyFaceFilter()
+{
+    int shown = 0;
+    for (int i = 0; i < m_faces.size() && i < m_faceList->count(); ++i) {
+        const bool visible = faceMatchesFilter(m_faces.at(i));
+        m_faceList->setRowHidden(i, !visible);
+        shown += visible ? 1 : 0;
+    }
+    const bool filtered = !m_faceFilter->text().trimmed().isEmpty() || m_faceStatusFilter->currentIndex() != 0;
+    m_faceCount->setText(filtered ? QStringLiteral("%1 / %2").arg(shown).arg(m_faces.size()) : QString::number(m_faces.size()));
+}
+
+void MainWindow::sortFaces()
+{
+    const int mode = m_faceSort->currentIndex();
+    auto order = [mode](const FaceItem &a, const FaceItem &b) {
+        switch (mode) {
+        case 1:
+            return a.frames > b.frames;
+        case 2:
+            return a.quality > b.quality;
+        case 3:
+            if (a.match.status != b.match.status)
+                return int(a.match.status) > int(b.match.status);
+            return a.match.score > b.match.score;
+        default:
+            break;
+        }
+        // حسب الظهور: في الفيديو بالزمن، وفي الصورة بالترتيب الأصلي
+        if (a.firstSeenMs != b.firstSeenMs)
+            return a.firstSeenMs < b.firstSeenMs;
+        return a.id < b.id;
+    };
+    std::stable_sort(m_faces.begin(), m_faces.end(), order);
+    refreshFaceList();
+}
+
+QList<int> MainWindow::selectedFaceIds() const
+{
+    QList<int> ids;
+    const QList<QListWidgetItem *> items = m_faceList->selectedItems();
+    for (const QListWidgetItem *item : items)
+        ids << item->data(CardRole::Id).toInt();
+    if (ids.isEmpty() && m_faceList->currentItem())
+        ids << m_faceList->currentItem()->data(CardRole::Id).toInt();
+    return ids;
+}
+
+void MainWindow::showFaceContextMenu(const QPoint &pos)
+{
+    QListWidgetItem *clicked = m_faceList->itemAt(pos);
+    if (clicked && !clicked->isSelected()) {
+        m_faceList->clearSelection();
+        m_faceList->setCurrentItem(clicked);
+    }
+    const QList<int> ids = selectedFaceIds();
+    if (ids.isEmpty())
+        return;
+    const bool fileVideo = m_videoMode && !m_videoSource.startsWith(QStringLiteral("camera:"));
+
+    QMenu menu(this);
+    if (ids.size() == 1) {
+        const int id = ids.first();
+        QAction *view = menu.addAction(Icons::icon(Icons::Name::Film, Theme::Text, 18), QStringLiteral("عرض اللقطة في الفيديو"),
+                                       this, [this, id] { openShotViewer(id); });
+        view->setEnabled(fileVideo);
+        menu.addAction(Icons::icon(Icons::Name::UserPlus, Theme::Text, 18), QStringLiteral("إضافة إلى قاعدة البيانات…"), this, [this, id] {
+            const int row = m_faceRows.value(id, -1);
+            if (row >= 0)
+                addFaceToDatabase(m_faces.at(row));
+        })->setEnabled(m_ready);
+        menu.addAction(Icons::icon(Icons::Name::Save, Theme::Text, 18), QStringLiteral("حفظ صورة الوجه…"), this, [this, id] {
+            const int row = m_faceRows.value(id, -1);
+            if (row < 0)
+                return;
+            const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("حفظ صورة الوجه"),
+                                                              QDir(m_lastDirectory).filePath(QStringLiteral("وجه.png")),
+                                                              QStringLiteral("صور (*.png *.jpg)"));
+            if (!path.isEmpty() && ImageIO::faceCrop(m_faces.at(row)).save(path))
+                Toast::show(this, QStringLiteral("تم حفظ صورة الوجه"));
+        });
+    } else {
+        menu.addAction(Icons::icon(Icons::Name::Merge, Theme::Text, 18),
+                       QStringLiteral("دمج الوجوه المحددة (%1) كشخص واحد").arg(ids.size()), this, [this, ids] { mergeFaces(ids); })
+            ->setEnabled(m_videoMode);
+    }
+    menu.addSeparator();
+    menu.addAction(Icons::icon(Icons::Name::Trash, Theme::Text, 18),
+                   ids.size() == 1 ? QStringLiteral("إزالة من القائمة") : QStringLiteral("إزالة المحدد من القائمة (%1)").arg(ids.size()),
+                   this, [this, ids] { removeFaces(ids); });
+    menu.exec(m_faceList->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::mergeFaces(const QList<int> &ids)
+{
+    if (ids.size() < 2)
+        return;
+    // يبقى الوجه الأكثر ظهوراً، وتُضاف إليه البقية
+    int keepRow = -1;
+    for (int id : ids) {
+        const int row = m_faceRows.value(id, -1);
+        if (row >= 0 && (keepRow < 0 || m_faces.at(row).frames > m_faces.at(keepRow).frames))
+            keepRow = row;
+    }
+    if (keepRow < 0)
+        return;
+    const int keepId = m_faces.at(keepRow).id;
+    for (int id : ids) {
+        if (id == keepId)
+            continue;
+        if (m_videoRunning)
+            m_videoWorker->mergeIdentities(keepId, id);
+        onIdentitiesMerged(keepId, id);
+    }
+    Toast::show(this, QStringLiteral("دُمجت %1 وجوه كشخص واحد").arg(ids.size()));
+}
+
+void MainWindow::onIdentitiesMerged(int keepId, int removedId)
+{
+    const int keepRow = m_faceRows.value(keepId, -1);
+    const int removedRow = m_faceRows.value(removedId, -1);
+    if (removedRow < 0 || removedRow >= m_faces.size())
+        return;
+    if (keepRow >= 0 && keepRow < m_faces.size()) {
+        // دمج محلي فوري؛ ومحلل الفيديو يرسل الحالة النهائية للوجه الباقي إن كان ما يزال يعمل
+        FaceItem &keep = m_faces[keepRow];
+        const FaceItem &removed = m_faces.at(removedRow);
+        if (keep.embedding.size() == removed.embedding.size() && !keep.embedding.empty()) {
+            const float wa = float(keep.frames), wb = float(removed.frames);
+            for (size_t i = 0; i < keep.embedding.size(); ++i)
+                keep.embedding[i] = keep.embedding[i] * wa + removed.embedding[i] * wb;
+            FaceEngine::normalize(keep.embedding);
+        }
+        if (removed.quality > keep.quality) {
+            keep.quality = removed.quality;
+            keep.crop = removed.crop;
+            keep.packedCrop = removed.packedCrop;
+            keep.aligned = removed.aligned;
+            keep.packedAligned = removed.packedAligned;
+            keep.bestMs = removed.bestMs;
+            keep.sourceBox = removed.sourceBox;
+        }
+        keep.frames += removed.frames;
+        if (removed.firstSeenMs >= 0 && (keep.firstSeenMs < 0 || removed.firstSeenMs < keep.firstSeenMs))
+            keep.firstSeenMs = removed.firstSeenMs;
+        keep.lastSeenMs = std::max(keep.lastSeenMs, removed.lastSeenMs);
+        keep.appearances += removed.appearances;
+        std::sort(keep.appearances.begin(), keep.appearances.end());
+        if (removed.match.status > keep.match.status
+            || (removed.match.status == keep.match.status && removed.match.score > keep.match.score))
+            keep.match = removed.match;
+        updateFaceListItem(m_faceList->item(keepRow), keep);
+    }
+    m_hiddenFaces.insert(removedId);
+    m_faces.removeAt(removedRow);
+    delete m_faceList->takeItem(removedRow);
+    rebuildFaceRows();
+    applyFaceFilter();
+    showFaceDetails();
+}
+
+void MainWindow::removeFaces(const QList<int> &ids)
+{
+    for (int id : ids) {
+        const int row = m_faceRows.value(id, -1);
+        if (row < 0)
+            continue;
+        m_hiddenFaces.insert(id);
+        m_faces.removeAt(row);
+        delete m_faceList->takeItem(row);
+        rebuildFaceRows();
+    }
+    applyFaceFilter();
+    showFaceDetails();
+    setBusy(m_analyzing);
+}
+
+void MainWindow::openShotViewer(int id)
+{
+    const int row = m_faceRows.value(id, -1);
+    if (row < 0 || row >= m_faces.size() || m_videoSource.isEmpty() || m_videoSource.startsWith(QStringLiteral("camera:")))
+        return;
+    auto *viewer = new ShotViewer(&m_engine, &m_database, m_videoSource, m_faces.at(row), threshold(), m_enhanceSwitch->isChecked(), this);
+    connect(viewer, &ShotViewer::addFaceRequested, this, &MainWindow::addFaceToDatabase);
+    connect(viewer, &ShotViewer::analyzeFromRequested, this, &MainWindow::analyzeVideoFrom);
+    viewer->show();
+}
+
+void MainWindow::analyzeVideoFrom(qint64 positionMs)
+{
+    if (m_videoSource.isEmpty() || m_videoSource.startsWith(QStringLiteral("camera:")))
+        return;
+    if (m_videoRunning) {
+        m_restartFromMs = positionMs;
+        m_videoWorker->requestStop();
+        return;
+    }
+    m_rangeStart->setTime(QTime(0, 0).addMSecs(int(positionMs)));
+    if (m_rangeEnd->time().msecsSinceStartOfDay() <= positionMs)
+        m_rangeEnd->setTime(QTime(0, 0));
+    startVideo(m_videoSource);
+}
+
+void MainWindow::reanalyzeVideo()
+{
+    if (!m_videoRunning && !m_videoSource.isEmpty())
+        startVideo(m_videoSource);
 }
 
 void MainWindow::refreshMatches()
@@ -1033,11 +1494,19 @@ void MainWindow::refreshMatches()
 void MainWindow::refreshFaceList()
 {
     const int row = m_faceList->currentRow();
-    m_faceList->clear();
-    for (const FaceItem &face : m_faces)
-        updateFaceListItem(new QListWidgetItem(m_faceList), face);
-    if (row >= 0 && row < m_faceList->count())
-        m_faceList->setCurrentRow(row);
+    const int currentId = row >= 0 && row < m_faceList->count() ? m_faceList->item(row)->data(CardRole::Id).toInt() : -1;
+    {
+        const QSignalBlocker blocker(m_faceList);
+        m_faceList->clear();
+        for (const FaceItem &face : std::as_const(m_faces)) {
+            updateFaceListItem(new QListWidgetItem(m_faceList), face);
+            m_faceList->setRowHidden(m_faceList->count() - 1, !faceMatchesFilter(face));
+        }
+    }
+    rebuildFaceRows();
+    const int newRow = m_faceRows.value(currentId, -1);
+    if (newRow >= 0)
+        m_faceList->setCurrentRow(newRow);
     updateFaceCount();
     showFaceDetails();
     setBusy(m_analyzing);
@@ -1045,7 +1514,10 @@ void MainWindow::refreshFaceList()
 
 void MainWindow::updateFaceCount()
 {
-    m_faceCount->setText(QString::number(m_faces.size()));
+    if (m_faceFilter->text().trimmed().isEmpty() && m_faceStatusFilter->currentIndex() == 0)
+        m_faceCount->setText(QString::number(m_faces.size()));
+    else
+        applyFaceFilter();
 }
 
 void MainWindow::updateFaceListItem(QListWidgetItem *listItem, const FaceItem &face)
@@ -1082,6 +1554,8 @@ void MainWindow::showFaceDetails()
 {
     const int row = m_faceList->currentRow();
     m_enrollFaceButton->setEnabled(m_ready && row >= 0);
+    m_viewShotButton->setVisible(m_videoMode && !m_videoSource.startsWith(QStringLiteral("camera:")));
+    m_viewShotButton->setEnabled(row >= 0 && row < m_faces.size());
     if (row < 0 || row >= m_faces.size()) {
         m_faceDetails->setText(QStringLiteral("اختر وجهاً من القائمة أو اضغط عليه في الصورة لعرض تفاصيله."));
         m_view->setSelectedFace(-1);
@@ -1103,6 +1577,16 @@ void MainWindow::showFaceDetails()
         html += row_(QStringLiteral("أول ظهور"), ImageIO::formatTime(face.firstSeenMs));
         html += row_(QStringLiteral("آخر ظهور"), ImageIO::formatTime(face.lastSeenMs));
         html += row_(QStringLiteral("عدد الإطارات"), QString::number(face.frames));
+        if (face.bestMs >= 0)
+            html += row_(QStringLiteral("أوضح لقطة"), ImageIO::formatTime(face.bestMs));
+        if (face.appearances.size() > 1) {
+            QStringList times;
+            for (qsizetype i = 0; i < std::min<qsizetype>(face.appearances.size(), 6); ++i)
+                times << ImageIO::formatTime(face.appearances.at(i).first);
+            if (face.appearances.size() > 6)
+                times << QStringLiteral("…");
+            html += row_(QStringLiteral("مرات الظهور (%1)").arg(face.appearances.size()), times.join(QStringLiteral("، ")));
+        }
     }
     if (!face.match.personId.isEmpty()) {
         const Person person = m_database.person(face.match.personId);
@@ -1160,8 +1644,11 @@ void MainWindow::addSelectedFaceToDatabase()
     const int row = m_faceList->currentRow();
     if (row < 0 || row >= m_faces.size())
         return;
-    const FaceItem face = m_faces.at(row);
+    addFaceToDatabase(m_faces.at(row));
+}
 
+void MainWindow::addFaceToDatabase(const FaceItem &face)
+{
     PersonPickerDialog picker(&m_database, face.match.personId, this);
     if (picker.exec() != QDialog::Accepted)
         return;

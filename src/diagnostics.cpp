@@ -158,18 +158,40 @@ int videoTest(const QString &path, int step, QTextStream &out)
     VideoWorker worker(&engine);
     worker.setFrameStep(step);
     int frames = 0;
+    double fps = 25.0;
     int shown = 0;
     int updates = 0;
     QSet<int> tracks;
     QString error;
-    QObject::connect(&worker, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &, int index, int) {
-        frames = index;
+    // MALAMIH_TRACE: يسجل مواضع الوجوه وهوياتها في كل إطار لقياس دقة التتبع خارج البرنامج
+    QFile traceFile(qEnvironmentVariable("MALAMIH_TRACE"));
+    QTextStream trace(&traceFile);
+    if (!traceFile.fileName().isEmpty())
+        traceFile.open(QIODevice::WriteOnly | QIODevice::Text);
+    QObject::connect(&worker, &VideoWorker::frameReady, [&](const QImage &image, const QList<FaceItem> &faces, qint64 positionMs, double) {
+        frames = int(positionMs * std::max(1.0, fps) / 1000.0) + 1;
         ++shown;
         worker.frameShown();
+        if (traceFile.isOpen()) {
+            trace << "F " << positionMs << "\n";
+            for (const FaceItem &face : faces) {
+                trace << "B " << face.id << ' ' << face.box.x() / image.width() << ' ' << face.box.y() / image.height()
+                      << ' ' << face.box.width() / image.width() << ' ' << face.box.height() / image.height()
+                      << ' ' << face.quality << ' ' << face.match.personId.size() << ' ' << face.match.score << "\n";
+            }
+        }
     });
+    QObject::connect(&worker, &VideoWorker::started, [&](int, double rate, qint64) { fps = rate; });
     QObject::connect(&worker, &VideoWorker::trackUpdated, [&](const FaceItem &track) {
         ++updates;
         tracks.insert(track.id);
+    });
+    int merged = 0;
+    QObject::connect(&worker, &VideoWorker::identitiesMerged, [&](int keepId, int removedId) {
+        ++merged;
+        tracks.remove(removedId);
+        if (traceFile.isOpen())
+            trace << "M " << keepId << ' ' << removedId << "\n";
     });
     QObject::connect(&worker, &VideoWorker::finished, [&](const QString &message) { error = message; });
 
@@ -182,11 +204,40 @@ int videoTest(const QString &path, int step, QTextStream &out)
     out << "frames=" << frames << "\n";
     out << "frames_shown=" << shown << "\n";
     out << "people=" << tracks.size() << "\n";
+    out << "merged=" << merged << "\n";
     out << "track_updates=" << updates << "\n";
     out << "elapsed_s=" << seconds << "\n";
     out << "frames_per_second=" << frames / seconds << "\n";
     out << "peak_memory_mb=" << peakMemoryMb() << "\n";
     return error.isEmpty() && frames > 0 ? 0 : 1;
+}
+
+// يستخرج بصمة كل وجه في إطارات الفيديو كما هي، لدراسة توزيع التشابه في الفيديو الرديء
+int embedDump(const QString &path, int step, QTextStream &out)
+{
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    const bool enhance = qEnvironmentVariableIntValue("MALAMIH_ENHANCE") != 0;
+    cv::VideoCapture capture;
+    if (!ImageIO::openVideo(capture, path))
+        return 1;
+    cv::Mat frame;
+    for (int index = 1; capture.read(frame); ++index) {
+        if ((index - 1) % std::max(1, step) != 0 || frame.empty())
+            continue;
+        const std::vector<AnalyzedFace> faces = enhance ? engine.analyzeEnhanced(frame, ImageIO::enhance(frame), false)
+                                                        : engine.analyze(frame, false);
+        for (const AnalyzedFace &face : faces) {
+            const cv::Rect2f &b = face.detection.box;
+            out << index << ' ' << b.x / frame.cols << ' ' << b.y / frame.rows << ' ' << b.width / frame.cols << ' '
+                << b.height / frame.rows << ' ' << face.quality;
+            for (float v : face.embedding)
+                out << ' ' << v;
+            out << "\n";
+        }
+    }
+    return 0;
 }
 
 std::vector<float> randomEmbedding(std::mt19937 &random)
@@ -390,7 +441,8 @@ int run(const QStringList &args)
         return -1;
     const QString command = args.at(1);
     if (command != QLatin1String("--self-test") && command != QLatin1String("--video-test")
-        && command != QLatin1String("--db-test") && command != QLatin1String("--enhance-test"))
+        && command != QLatin1String("--db-test") && command != QLatin1String("--enhance-test")
+        && command != QLatin1String("--embed-dump"))
         return -1;
 
     QFile output(args.last());
@@ -404,6 +456,9 @@ int run(const QStringList &args)
     // Malamih --video-test <فيديو> [تحليل إطار من كل] <ملف النتائج>
     if (command == QLatin1String("--video-test") && (args.size() == 4 || args.size() == 5))
         return videoTest(args.at(2), args.size() == 5 ? args.at(3).toInt() : 1, out);
+    // Malamih --embed-dump <فيديو> <تحليل إطار من كل> <ملف النتائج>
+    if (command == QLatin1String("--embed-dump") && args.size() == 5)
+        return embedDump(args.at(2), args.at(3).toInt(), out);
     // Malamih --db-test <مجلد> <عدد الأشخاص> <صور لكل شخص> <ملف النتائج>
     if (command == QLatin1String("--db-test") && args.size() == 6)
         return databaseTest(args.at(2), args.at(3).toInt(), args.at(4).toInt(), out);

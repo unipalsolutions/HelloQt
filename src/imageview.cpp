@@ -191,6 +191,7 @@ void ImageView::paintEvent(QPaintEvent *)
     p.setClipping(false);
     p.setOpacity(1.0);
 
+    paintRegion(p);
     for (const Box &box : m_boxes)
         paintBox(p, box, t);
 
@@ -341,8 +342,82 @@ void ImageView::paintBusy(QPainter &p, double t)
     }
 }
 
+void ImageView::setRegion(const QRectF &region)
+{
+    m_region = region.normalized().intersected(QRectF(0, 0, 1, 1));
+    update();
+}
+
+void ImageView::setSelectingRegion(bool selecting)
+{
+    m_selecting = selecting;
+    m_dragging = false;
+    setCursor(selecting ? Qt::CrossCursor : Qt::ArrowCursor);
+    update();
+}
+
+QPointF ImageView::toImageFraction(const QPointF &pos) const
+{
+    const QRectF target = imageRect(m_image);
+    if (target.isEmpty())
+        return {};
+    return QPointF(std::clamp((pos.x() - target.x()) / target.width(), 0.0, 1.0),
+                   std::clamp((pos.y() - target.y()) / target.height(), 0.0, 1.0));
+}
+
+void ImageView::paintRegion(QPainter &p)
+{
+    using namespace Theme;
+    const QRectF target = imageRect(m_image);
+    QRectF fraction = m_region;
+    if (m_dragging)
+        fraction = QRectF(m_dragStart, m_dragEnd).normalized();
+    if (fraction.isEmpty() || target.isEmpty()) {
+        if (m_selecting && !m_dragging) {
+            // تلميح داخل الصورة حتى يعرف المستخدم أن عليه السحب
+            p.save();
+            QFont font = this->font();
+            font.setWeight(QFont::DemiBold);
+            p.setFont(font);
+            const QString text = QStringLiteral("اسحب بالفأرة لتحديد المنطقة التي يُبحث فيها عن الوجوه");
+            const QSizeF size(QFontMetricsF(font).horizontalAdvance(text) + 36, 36);
+            const QRectF pill(QPointF(target.center().x() - size.width() / 2, target.top() + 14), size);
+            p.setPen(QPen(withAlpha(Accent2, 200), 1));
+            p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 230));
+            p.drawRoundedRect(pill, 18, 18);
+            p.setPen(Text);
+            p.drawText(pill, Qt::AlignCenter, text);
+            p.restore();
+        }
+        return;
+    }
+    const QRectF r(target.x() + fraction.x() * target.width(), target.y() + fraction.y() * target.height(),
+                   fraction.width() * target.width(), fraction.height() * target.height());
+    p.save();
+    QPainterPath outside;
+    outside.addRoundedRect(target, 10, 10);
+    QPainterPath inside;
+    inside.addRect(r);
+    p.fillPath(outside.subtracted(inside), withAlpha(Background, 150));
+    QPen pen(Accent2, 2, Qt::DashLine);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(r);
+    p.setPen(Qt::NoPen);
+    p.setBrush(Accent2);
+    for (const QPointF &corner : {r.topLeft(), r.topRight(), r.bottomLeft(), r.bottomRight()})
+        p.drawEllipse(corner, 4, 4);
+    p.restore();
+}
+
 void ImageView::mousePressEvent(QMouseEvent *event)
 {
+    if (m_selecting && event->button() == Qt::LeftButton && !m_image.isNull()) {
+        m_dragging = true;
+        m_dragStart = m_dragEnd = toImageFraction(event->position());
+        update();
+        return;
+    }
     const int id = boxAt(event->position());
     if (id >= 0) {
         emit faceClicked(id);
@@ -351,8 +426,42 @@ void ImageView::mousePressEvent(QMouseEvent *event)
     QWidget::mousePressEvent(event);
 }
 
+void ImageView::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (m_dragging) {
+        m_dragging = false;
+        m_dragEnd = toImageFraction(event->position());
+        const QRectF selected = QRectF(m_dragStart, m_dragEnd).normalized();
+        // نقرة دون سحب تعني الإطار كله
+        m_region = selected.width() > 0.03 && selected.height() > 0.03 ? selected : QRectF();
+        setSelectingRegion(false);
+        emit regionSelected(m_region);
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void ImageView::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    const int id = m_selecting ? -1 : boxAt(event->position());
+    if (id >= 0) {
+        emit faceDoubleClicked(id);
+        return;
+    }
+    QWidget::mouseDoubleClickEvent(event);
+}
+
 void ImageView::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_dragging) {
+        m_dragEnd = toImageFraction(event->position());
+        update();
+        return;
+    }
+    if (m_selecting) {
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
     const int id = boxAt(event->position());
     if (id != m_hovered) {
         m_hovered = id;

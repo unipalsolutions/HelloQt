@@ -47,9 +47,15 @@ int main(int argc, char *argv[])
 
     MainWindow window;
     const QRect available = app.primaryScreen()->availableGeometry();
-    const QSize size = QSize(1280, 800).boundedTo(available.size() * 0.95);
-    window.setGeometry(QStyle::alignedRect(Qt::RightToLeft, Qt::AlignCenter, size, available));
-    window.show();
+    window.setMinimumSize(QSize(760, 520).boundedTo(available.size()));
+    if (available.width() < 1400 || available.height() < 860) {
+        // شاشات اللابتوب: النافذة تملأ الشاشة والواجهة تصغّر نفسها لتظهر كل أجزائها
+        window.setGeometry(available);
+        window.showMaximized();
+    } else {
+        window.setGeometry(QStyle::alignedRect(Qt::RightToLeft, Qt::AlignCenter, QSize(1320, 820), available));
+        window.show();
+    }
     if (args.size() == 2 && QFile::exists(args.at(1)))
         window.openFile(args.at(1));
 
