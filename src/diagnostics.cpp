@@ -590,15 +590,15 @@ cv::Mat farAway(const cv::Mat &image, const std::vector<AnalyzedFace> &faces, fl
     for (const AnalyzedFace &face : faces)
         widest = std::max(widest, face.detection.box.width);
     const double f = widest > 0 ? std::min(1.0, double(faceWidth / widest)) : 0.15;
-    cv::Mat small;
-    cv::resize(image, small, cv::Size(), f, f, cv::INTER_AREA);
+    cv::Mat shrunk;
+    cv::resize(image, shrunk, cv::Size(), f, f, cv::INTER_AREA);
     cv::Mat canvas(canvasSize, CV_8UC3);
     cv::theRNG().state = 21;
     cv::randu(canvas, cv::Scalar::all(40), cv::Scalar::all(200));
     cv::GaussianBlur(canvas, canvas, cv::Size(0, 0), 9);
-    const int x = std::max(0, int(canvas.cols * 0.62) - small.cols / 2), y = std::max(0, int(canvas.rows * 0.55) - small.rows / 2);
-    const cv::Rect roi = cv::Rect(x, y, small.cols, small.rows) & cv::Rect(0, 0, canvas.cols, canvas.rows);
-    small(cv::Rect(0, 0, roi.width, roi.height)).copyTo(canvas(roi));
+    const int x = std::max(0, int(canvas.cols * 0.62) - shrunk.cols / 2), y = std::max(0, int(canvas.rows * 0.55) - shrunk.rows / 2);
+    const cv::Rect roi = cv::Rect(x, y, shrunk.cols, shrunk.rows) & cv::Rect(0, 0, canvas.cols, canvas.rows);
+    shrunk(cv::Rect(0, 0, roi.width, roi.height)).copyTo(canvas(roi));
     return canvas;
 }
 
