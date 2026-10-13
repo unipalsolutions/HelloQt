@@ -131,13 +131,15 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
     auto row = [](const QString &key, const QString &value) {
         if (value.isEmpty())
             return QString();
-        return QStringLiteral("<tr><td style='color:#64748b; padding:3px 0 3px 18px' width='130'>%1</td><td style='padding:3px 0'>%2</td></tr>")
+        // جداول QTextDocument لا تنعكس مع dir=rtl، فتُرتَّب الأعمدة يدوياً من اليمين
+        return QStringLiteral("<tr><td align='right' style='padding:3px 0'>%2</td>"
+                              "<td align='right' style='color:#64748b; padding:3px 0 3px 18px' width='130'>%1</td></tr>")
             .arg(key, value.toHtmlEscaped());
     };
 
     QString html = QStringLiteral("<html><body dir='rtl' style='color:#0f172a'>");
     html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='0'><tr>"
-                           "<td><div style='font-size:22pt; font-weight:700'>%1</div>"
+                           "<td align='right' style='padding-right:16px'><div style='font-size:22pt; font-weight:700'>%1</div>"
                            "<div style='color:#2563eb; font-size:10pt'>ملف شخص — ملامح · %2</div></td>")
                 .arg(person.name.toHtmlEscaped(), QDateTime::currentDateTime().toString(QStringLiteral("yyyy/MM/dd hh:mm")));
     if (person.coverPhoto > 0)
@@ -145,7 +147,7 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
                     .arg(addImage(database.photo(person.coverPhoto, 360)));
     html += QStringLiteral("</tr></table><hr style='color:#cbd5e1'>");
 
-    html += QStringLiteral("<table cellspacing='0' cellpadding='0'>");
+    html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='0'>");
     html += row(QStringLiteral("رقم الهوية"), person.nationalId);
     html += row(QStringLiteral("الجنس"), person.gender);
     if (person.birthDate.isValid()) {
@@ -189,12 +191,13 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
     if (!sightings.isEmpty()) {
         html += QStringLiteral("<h3 style='color:#1e3a8a'>سجل الظهور</h3>"
                                "<table width='100%' cellspacing='0' cellpadding='4' style='border-collapse:collapse'>"
-                               "<tr style='background:#e2e8f0'><th></th><th>التاريخ</th><th>الملف</th><th>الموضع</th><th>التشابه</th></tr>");
+                               "<tr style='background:#e2e8f0'><th>التشابه</th><th>الموضع</th><th>الملف</th><th align='right'>التاريخ</th><th></th></tr>");
         for (const Sighting &sighting : sightings) {
             const QString position = sighting.positionMs >= 0
                 ? QTime(0, 0).addMSecs(int(sighting.positionMs)).toString(QStringLiteral("hh:mm:ss"))
                 : QStringLiteral("صورة");
-            html += QStringLiteral("<tr><td width='40'>%1</td><td>%2</td><td>%3</td><td>%4</td><td>%5%</td></tr>")
+            html += QStringLiteral("<tr><td align='center'>%5%</td><td align='center'>%4</td><td align='center'>%3</td>"
+                                   "<td align='right'>%2</td><td width='40' align='right'>%1</td></tr>")
                         .arg(sighting.thumbnail.isNull() ? QString() : QStringLiteral("<img src='%1' width='34' height='34'>").arg(addImage(sighting.thumbnail)),
                              sighting.seen.toString(QStringLiteral("yyyy/MM/dd hh:mm")),
                              QFileInfo(sighting.source).fileName().toHtmlEscaped(), position)

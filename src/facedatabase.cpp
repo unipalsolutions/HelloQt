@@ -23,6 +23,7 @@
 #include <QtAlgorithms>
 
 #include <algorithm>
+#include <utility>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -914,11 +915,16 @@ bool FaceDatabase::endBatch()
     const bool ok = m_db.commit();
     if (ok && m_gallery && generation > 0)
         m_gallery->setGeneration(generation);
-    if (m_batchReset)
-        emit personsReset();
-    if (m_batchChanged)
-        emit changed();
+    const bool reset = m_batchReset, changedAny = m_batchChanged;
+    const QSet<QString> updated = std::exchange(m_batchUpdated, {});
     m_batchReset = m_batchChanged = false;
+    if (reset)
+        emit personsReset();
+    else
+        for (const QString &personId : updated)
+            emit personUpdated(personId);
+    if (changedAny)
+        emit changed();
     return ok;
 }
 
@@ -928,6 +934,8 @@ void FaceDatabase::notify(const QString &personId, bool reset)
     if (m_batchDepth > 0) {
         m_batchReset = m_batchReset || reset;
         m_batchChanged = true;
+        if (!personId.isEmpty())
+            m_batchUpdated.insert(personId);
         return;
     }
     if (reset)

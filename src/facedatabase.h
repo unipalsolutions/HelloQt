@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QImage>
 #include <QList>
+#include <QSet>
 #include <QObject>
 #include <QSqlDatabase>
 #include <QString>
@@ -140,4 +141,5 @@ private:
     int m_batchDepth = 0;
     bool m_batchReset = false;
     bool m_batchChanged = false;
+    QSet<QString> m_batchUpdated; // أشخاص تغيروا داخل الدفعة الحالية
 };
