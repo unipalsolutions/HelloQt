@@ -30,8 +30,15 @@ jobs:
           mkdir dist\HelloQt
           copy build\HelloQt.exe dist\HelloQt\
           windeployqt --release --no-translations dist\HelloQt\HelloQt.exe
-          copy "%VCToolsRedistDir%x64\Microsoft.VC143.CRT\*.dll" dist\HelloQt\
         shell: cmd
+
+      - name: Copy MSVC runtime
+        run: |
+          $crt = Get-ChildItem "$env:VCToolsRedistDir\x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
+          if (-not $crt) { throw "MSVC runtime not found under $env:VCToolsRedistDir" }
+          Copy-Item "$($crt.FullName)\*.dll" dist\HelloQt\
+          Get-ChildItem dist\HelloQt
+        shell: pwsh
 
       - uses: actions/upload-artifact@v4
         with:
