@@ -11,10 +11,14 @@ enum {
     Status, // MatchStatus، أو -1 لبطاقة شخص
     Score,
     Avatar,
+    AvatarPath, // مسار صورة تُحمَّل عند الرسم فقط، للقوائم الطويلة
+    SearchText, // نص البحث (الاسم ورقم الهوية والهاتف)
 };
 }
 
 QPixmap circularPixmap(const QImage &image, int size);
+// صورة دائرية من ملف مع ذاكرة مؤقتة، فلا تُقرأ من القرص إلا البطاقات الظاهرة
+QPixmap circularPixmapFromFile(const QString &path, int size);
 
 // بطاقة وجه مستخرج: صورة دائرية، حالة التطابق، وشريط التشابه
 class FaceCardDelegate : public QStyledItemDelegate

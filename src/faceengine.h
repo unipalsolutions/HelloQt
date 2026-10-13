@@ -30,6 +30,8 @@ public:
     FaceEngine();
     ~FaceEngine();
 
+    static constexpr size_t EmbeddingSize = 512;
+
     static QString defaultModelsDir();
 
     bool load(const QString &modelsDir, QString *error = nullptr);
@@ -39,12 +41,14 @@ public:
     std::vector<DetectedFace> detect(const cv::Mat &bgr, bool thorough, float threshold = 0.45f) const;
     cv::Mat align(const cv::Mat &bgr, const DetectedFace &face) const;
     std::vector<float> embed(const cv::Mat &aligned) const;
+    std::vector<std::vector<float>> embedMany(const std::vector<cv::Mat> &aligned) const;
     // بصمات إضافية لنسخ مُضعَّفة من الصورة حتى تتطابق الصور الرديئة لاحقاً
     std::vector<std::vector<float>> enrollmentEmbeddings(const cv::Mat &aligned) const;
     float quality(const DetectedFace &face, const cv::Mat &aligned) const;
 
     std::vector<AnalyzedFace> analyze(const cv::Mat &bgr, bool thorough) const;
 
+    static float dot(const float *a, const float *b, size_t size);
     static float cosine(const std::vector<float> &a, const std::vector<float> &b);
     static void normalize(std::vector<float> &v);
 

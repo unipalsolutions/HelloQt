@@ -77,13 +77,13 @@ bool openVideo(cv::VideoCapture &capture, const QString &path)
     return capture.open(QFile::encodeName(path).toStdString(), cv::CAP_ANY);
 }
 
-FaceItem makeFaceItem(const cv::Mat &frame, const AnalyzedFace &face, int id)
+FaceItem makeFaceItem(const cv::Mat &frame, const AnalyzedFace &face, int id, int photoSize)
 {
     FaceItem item;
     item.id = id;
     const cv::Rect2f &b = face.detection.box;
     item.box = QRectF(b.x, b.y, b.width, b.height);
-    item.crop = cropFace(frame, b);
+    item.crop = cropFace(frame, b, photoSize);
     item.aligned = face.aligned;
     item.embedding = face.embedding;
     item.quality = face.quality;

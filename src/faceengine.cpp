@@ -144,12 +144,15 @@ struct FaceEngine::Impl
     std::string recognizerOutput;
 
     std::vector<DetectedFace> detectAt(const cv::Mat &bgr, int inputSize, float threshold) const;
-    std::vector<float> recognize(const cv::Mat &aligned) const;
+    bool recognizerBatch = false; // هل يقبل نموذج البصمة أكثر من وجه في التشغيل الواحد
+
+    std::vector<std::vector<float>> recognize(const std::vector<cv::Mat> &faces) const;
 };
 
 std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inputSize, float threshold) const
 {
-    // تصغير/تكبير مع الحفاظ على النسبة ثم وضع الصورة في مربع inputSize
+    // تصغير/تكبير مع الحفاظ على النسبة. المدخل يُقرَّب إلى مضاعفات 32 فقط بدل مربع كامل،
+    // فإطار 16:9 بحجم 640 يصبح 640x384 بدل 640x640 (حساب أقل بنحو 40%)
     const float ratio = float(bgr.rows) / float(bgr.cols);
     int width = inputSize;
     int height = std::max(1, int(inputSize * ratio));
@@ -158,14 +161,16 @@ std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inp
         width = std::max(1, int(inputSize / ratio));
     }
     const float scale = float(height) / float(bgr.rows);
+    const int inputWidth = (width + 31) / 32 * 32;
+    const int inputHeight = (height + 31) / 32 * 32;
 
     cv::Mat resized;
     cv::resize(bgr, resized, cv::Size(width, height), 0, 0, scale > 1.0f ? cv::INTER_CUBIC : cv::INTER_AREA);
-    cv::Mat canvas(inputSize, inputSize, CV_8UC3, cv::Scalar::all(0));
+    cv::Mat canvas(inputHeight, inputWidth, CV_8UC3, cv::Scalar::all(0));
     resized.copyTo(canvas(cv::Rect(0, 0, width, height)));
 
     std::vector<float> blob = toBlob(canvas, 127.5f, 1.0f / 128.0f);
-    const std::array<int64_t, 4> shape{1, 3, inputSize, inputSize};
+    const std::array<int64_t, 4> shape{1, 3, inputHeight, inputWidth};
     Ort::Value input = Ort::Value::CreateTensor<float>(memory, blob.data(), blob.size(), shape.data(), shape.size());
 
     const char *inputName = detectorInput.c_str();
@@ -180,8 +185,8 @@ std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inp
     std::vector<DetectedFace> faces;
     for (int level = 0; level < 3; ++level) {
         const int stride = strides[level];
-        const int grid = inputSize / stride;
-        const size_t count = size_t(grid) * grid * 2;
+        const int grid = inputWidth / stride;
+        const size_t count = size_t(grid) * (inputHeight / stride) * 2;
         const Ort::Value &scoreOut = outputs[level];
         const Ort::Value &boxOut = outputs[level + 3];
         const Ort::Value &kpsOut = outputs[level + 6];
@@ -190,7 +195,7 @@ std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inp
             || kpsOut.GetTensorTypeAndShapeInfo().GetElementCount() != count * 10)
             throw std::runtime_error("Unexpected face detector output layout");
 
-        const float *scores = scoreOut.GetTensorData<float>();
+    const float *scores = scoreOut.GetTensorData<float>();
         const float *boxes = boxOut.GetTensorData<float>();
         const float *kps = kpsOut.GetTensorData<float>();
         for (size_t k = 0; k < count; ++k) {
@@ -218,20 +223,36 @@ std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inp
     return faces;
 }
 
-std::vector<float> FaceEngine::Impl::recognize(const cv::Mat &aligned) const
+std::vector<std::vector<float>> FaceEngine::Impl::recognize(const std::vector<cv::Mat> &faces) const
 {
-    std::vector<float> blob = toBlob(aligned, 127.5f, 1.0f / 127.5f);
-    const std::array<int64_t, 4> shape{1, 3, AlignedSize, AlignedSize};
-    Ort::Value input = Ort::Value::CreateTensor<float>(memory, blob.data(), blob.size(), shape.data(), shape.size());
+    std::vector<std::vector<float>> result;
+    if (faces.empty())
+        return result;
+    // النموذج يقبل دفعة من الوجوه في تشغيل واحد، وهذا أسرع من تشغيل منفصل لكل وجه
+    const size_t step = size_t(3) * AlignedSize * AlignedSize;
+    const size_t batch = recognizerBatch ? faces.size() : 1;
+    for (size_t start = 0; start < faces.size(); start += batch) {
+        const size_t count = std::min(batch, faces.size() - start);
+        std::vector<float> blob(step * count);
+        for (size_t i = 0; i < count; ++i) {
+            const std::vector<float> one = toBlob(faces[start + i], 127.5f, 1.0f / 127.5f);
+            std::copy(one.begin(), one.end(), blob.begin() + std::ptrdiff_t(step * i));
+        }
+        const std::array<int64_t, 4> shape{int64_t(count), 3, AlignedSize, AlignedSize};
+        Ort::Value input = Ort::Value::CreateTensor<float>(memory, blob.data(), blob.size(), shape.data(), shape.size());
 
-    const char *inputName = recognizerInput.c_str();
-    const char *outputName = recognizerOutput.c_str();
-    std::vector<Ort::Value> outputs = recognizer->Run(Ort::RunOptions{nullptr}, &inputName, &input, 1, &outputName, 1);
-    const float *data = outputs[0].GetTensorData<float>();
-    const size_t size = outputs[0].GetTensorTypeAndShapeInfo().GetElementCount();
-    std::vector<float> embedding(data, data + size);
-    FaceEngine::normalize(embedding);
-    return embedding;
+        const char *inputName = recognizerInput.c_str();
+        const char *outputName = recognizerOutput.c_str();
+        std::vector<Ort::Value> outputs = recognizer->Run(Ort::RunOptions{nullptr}, &inputName, &input, 1, &outputName, 1);
+        const float *data = outputs[0].GetTensorData<float>();
+        const size_t size = outputs[0].GetTensorTypeAndShapeInfo().GetElementCount() / count;
+        for (size_t i = 0; i < count; ++i) {
+            std::vector<float> embedding(data + i * size, data + (i + 1) * size);
+            FaceEngine::normalize(embedding);
+            result.push_back(std::move(embedding));
+        }
+    }
+    return result;
 }
 
 FaceEngine::FaceEngine()
@@ -273,6 +294,9 @@ bool FaceEngine::load(const QString &modelsDir, QString *error)
             d->detectorOutputs.emplace_back(d->detector->GetOutputNameAllocated(i, allocator).get());
         d->recognizerInput = d->recognizer->GetInputNameAllocated(0, allocator).get();
         d->recognizerOutput = d->recognizer->GetOutputNameAllocated(0, allocator).get();
+        const std::vector<int64_t> recognizerShape =
+            d->recognizer->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+        d->recognizerBatch = !recognizerShape.empty() && recognizerShape[0] < 0;
 
         if (d->detectorOutputs.size() != 9)
             throw std::runtime_error("Unsupported face detector model");
@@ -362,43 +386,61 @@ cv::Mat FaceEngine::align(const cv::Mat &bgr, const DetectedFace &face) const
 
 std::vector<float> FaceEngine::embed(const cv::Mat &aligned) const
 {
+    std::vector<std::vector<float>> result = embedMany({aligned});
+    return result.empty() ? std::vector<float>() : std::move(result.front());
+}
+
+std::vector<std::vector<float>> FaceEngine::embedMany(const std::vector<cv::Mat> &aligned) const
+{
     if (!isLoaded() || aligned.empty())
         return {};
 
-    // متوسط بصمة الوجه وصورته المعكوسة أثبت أمام الزوايا والإضاءة
-    std::vector<float> embedding = d->recognize(aligned);
-    cv::Mat flipped;
-    cv::flip(aligned, flipped, 1);
-    const std::vector<float> mirrored = d->recognize(flipped);
-    for (size_t i = 0; i < embedding.size(); ++i)
-        embedding[i] += mirrored[i];
-
-    if (isPoorlyLit(aligned)) {
-        const std::vector<float> enhanced = d->recognize(enhance(aligned));
-        for (size_t i = 0; i < embedding.size(); ++i)
-            embedding[i] += enhanced[i];
+    // بصمة كل وجه = متوسط بصمته وبصمة صورته المعكوسة (وصورته المحسّنة إن كانت مظلمة)،
+    // وهذا أثبت أمام الزوايا والإضاءة. كل النسخ تُحسب معاً في دفعة واحدة
+    std::vector<cv::Mat> inputs;
+    std::vector<size_t> owner;
+    for (size_t i = 0; i < aligned.size(); ++i) {
+        if (aligned[i].empty())
+            continue;
+        cv::Mat flipped;
+        cv::flip(aligned[i], flipped, 1);
+        inputs.push_back(aligned[i]);
+        inputs.push_back(flipped);
+        owner.insert(owner.end(), 2, i);
+        if (isPoorlyLit(aligned[i])) {
+            inputs.push_back(enhance(aligned[i]));
+            owner.push_back(i);
+        }
     }
 
-    normalize(embedding);
-    return embedding;
+    std::vector<std::vector<float>> result(aligned.size());
+    const std::vector<std::vector<float>> embeddings = d->recognize(inputs);
+    for (size_t k = 0; k < embeddings.size(); ++k) {
+        std::vector<float> &sum = result[owner[k]];
+        if (sum.empty())
+            sum.assign(embeddings[k].size(), 0.0f);
+        for (size_t j = 0; j < sum.size() && j < embeddings[k].size(); ++j)
+            sum[j] += embeddings[k][j];
+    }
+    for (std::vector<float> &embedding : result)
+        normalize(embedding);
+    return result;
 }
 
 std::vector<std::vector<float>> FaceEngine::enrollmentEmbeddings(const cv::Mat &aligned) const
 {
-    std::vector<std::vector<float>> result;
-    result.push_back(embed(aligned));
-
     // محاكاة لقطات منخفضة الدقة ومشوشة حتى تتطابق الصور الرديئة مع صور التسجيل
+    std::vector<cv::Mat> versions{aligned};
     for (int size : {24, 40}) {
         cv::Mat small, restored;
         cv::resize(aligned, small, cv::Size(size, size), 0, 0, cv::INTER_AREA);
         cv::resize(small, restored, aligned.size(), 0, 0, cv::INTER_CUBIC);
-        result.push_back(embed(restored));
+        versions.push_back(restored);
     }
     cv::Mat blurred;
     cv::GaussianBlur(aligned, blurred, cv::Size(0, 0), 1.8);
-    result.push_back(embed(blurred));
-    return result;
+    versions.push_back(blurred);
+    return embedMany(versions);
 }
 
 float FaceEngine::quality(const DetectedFace &face, const cv::Mat &aligned) const
@@ -425,25 +467,47 @@ float FaceEngine::quality(const DetectedFace &face, const cv::Mat &aligned) cons
 std::vector<AnalyzedFace> FaceEngine::analyze(const cv::Mat &bgr, bool thorough) const
 {
     std::vector<AnalyzedFace> result;
+    std::vector<cv::Mat> aligned;
     for (const DetectedFace &face : detect(bgr, thorough)) {
         AnalyzedFace analyzed;
         analyzed.detection = face;
         analyzed.aligned = align(bgr, face);
-        analyzed.embedding = embed(analyzed.aligned);
         analyzed.quality = quality(face, analyzed.aligned);
+        aligned.push_back(analyzed.aligned);
         result.push_back(std::move(analyzed));
     }
+    // الصور المزدحمة تُحسب بصماتها على دفعات حتى لا تستهلك ذاكرة كبيرة دفعة واحدة
+    constexpr size_t Chunk = 16;
+    for (size_t start = 0; start < aligned.size(); start += Chunk) {
+        const size_t end = std::min(aligned.size(), start + Chunk);
+        std::vector<std::vector<float>> embeddings =
+            embedMany(std::vector<cv::Mat>(aligned.begin() + std::ptrdiff_t(start), aligned.begin() + std::ptrdiff_t(end)));
+        for (size_t i = start; i < end; ++i)
+            result[i].embedding = std::move(embeddings[i - start]);
+    }
     return result;
+}
+
+float FaceEngine::dot(const float *a, const float *b, size_t size)
+{
+    // ثمانية مجاميع مستقلة تسمح للمترجم بالتنفيذ المتوازي (SIMD)
+    float sum[8] = {};
+    size_t i = 0;
+    for (; i + 8 <= size; i += 8) {
+        for (int k = 0; k < 8; ++k)
+            sum[k] += a[i + k] * b[i + k];
+    }
+    float total = ((sum[0] + sum[1]) + (sum[2] + sum[3])) + ((sum[4] + sum[5]) + (sum[6] + sum[7]));
+    for (; i < size; ++i)
+        total += a[i] * b[i];
+    return total;
 }
 
 float FaceEngine::cosine(const std::vector<float> &a, const std::vector<float> &b)
 {
     if (a.empty() || a.size() != b.size())
         return 0.0f;
-    double dot = 0.0;
-    for (size_t i = 0; i < a.size(); ++i)
-        dot += double(a[i]) * b[i];
-    return float(dot);
+    return dot(a.data(), b.data(), a.size());
 }
 
 void FaceEngine::normalize(std::vector<float> &v)

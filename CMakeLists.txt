@@ -26,6 +26,8 @@ qt_add_executable(HelloQt
     src/facetypes.h
     src/carddelegates.h
     src/carddelegates.cpp
+    src/diagnostics.h
+    src/diagnostics.cpp
     src/icons.h
     src/icons.cpp
     src/theme.h
@@ -52,6 +54,9 @@ target_link_libraries(HelloQt PRIVATE
 # ترميز UTF-8 للملفات المصدرية مع MSVC
 if(MSVC)
     target_compile_options(HelloQt PRIVATE /utf-8)
+endif()
+if(WIN32)
+    target_link_libraries(HelloQt PRIVATE psapi)
 endif()
 
 set_target_properties(HelloQt PROPERTIES

@@ -153,6 +153,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_videoWorker->setGallery(m_database.gallery());
     m_videoWorker->setThreshold(threshold());
     connect(m_videoThread, &QThread::finished, m_videoWorker, &QObject::deleteLater);
+    connect(m_videoWorker, &VideoWorker::started, this, [this](int step, double) {
+        m_videoClock.start();
+        m_videoStep = step;
+    });
     connect(m_videoWorker, &VideoWorker::frameReady, this, &MainWindow::onFrameReady);
     connect(m_videoWorker, &VideoWorker::trackUpdated, this, &MainWindow::onTrackUpdated);
     connect(m_videoWorker, &VideoWorker::finished, this, &MainWindow::onVideoFinished);
@@ -281,9 +285,11 @@ QWidget *MainWindow::createRecognitionPage()
     m_thoroughSwitch->setChecked(true);
 
     m_frameStepSpin = new QSpinBox(settings);
-    m_frameStepSpin->setRange(1, 30);
-    m_frameStepSpin->setValue(1);
-    m_frameStepSpin->setToolTip(QStringLiteral("1 = تحليل كل إطار (أدق). قيمة أكبر = أسرع."));
+    m_frameStepSpin->setRange(0, 60);
+    m_frameStepSpin->setValue(0);
+    m_frameStepSpin->setSpecialValueText(QStringLiteral("تلقائي"));
+    m_frameStepSpin->setToolTip(QStringLiteral("تلقائي = نحو 10 إطارات لكل ثانية من الفيديو (سريع ودقيق).\n"
+                                               "1 = تحليل كل إطار (الأبطأ). قيمة أكبر = أسرع."));
     connect(m_frameStepSpin, &QSpinBox::valueChanged, this, [this](int value) { m_videoWorker->setFrameStep(value); });
 
     settingsLayout->addWidget(new QLabel(QStringLiteral("حد التعرف"), settings));
@@ -331,6 +337,7 @@ QWidget *MainWindow::createRecognitionPage()
 
     m_faceList = new QListWidget(side);
     m_faceList->setItemDelegate(new FaceCardDelegate(m_faceList));
+    m_faceList->setUniformItemSizes(true);
     m_faceList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_faceList->setMouseTracking(true);
     connect(m_faceList, &QListWidget::currentRowChanged, this, &MainWindow::showFaceDetails);
@@ -395,9 +402,10 @@ QWidget *MainWindow::createDatabasePage()
     m_personFilter->setPlaceholderText(QStringLiteral("بحث بالاسم أو رقم الهوية…"));
     m_personFilter->setClearButtonEnabled(true);
     m_personFilter->addAction(Icons::icon(Icons::Name::Search, Theme::Muted, 18), QLineEdit::LeadingPosition);
-    connect(m_personFilter, &QLineEdit::textChanged, this, &MainWindow::refreshPersons);
+    connect(m_personFilter, &QLineEdit::textChanged, this, &MainWindow::applyPersonFilter);
     m_personList = new QListWidget(listCard);
     m_personList->setItemDelegate(new PersonCardDelegate(m_personList));
+    m_personList->setUniformItemSizes(true);
     m_personList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_personList->setMouseTracking(true);
     connect(m_personList, &QListWidget::currentRowChanged, this, &MainWindow::showPersonDetails);
@@ -599,6 +607,8 @@ void MainWindow::startVideo(const QString &source)
     setBusy(true);
 
     m_videoWorker->setFrameStep(m_frameStepSpin->value());
+    m_videoClock.invalidate();
+    m_videoStep = 1;
     QMetaObject::invokeMethod(m_videoWorker, "process", Qt::QueuedConnection, Q_ARG(QString, source));
 }
 
@@ -619,10 +629,23 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
         m_progress->setRange(0, frameCount);
         m_progress->setValue(std::min(frameIndex, frameCount));
     }
-    statusBar()->showMessage(QStringLiteral("الإطار %1 — وجوه في الإطار: %2 — أشخاص مختلفون حتى الآن: %3")
-                                 .arg(frameIndex)
-                                 .arg(faces.size())
-                                 .arg(m_faces.size()));
+    QString status = frameCount > 0 ? QStringLiteral("الإطار %1 من %2").arg(frameIndex).arg(frameCount)
+                                    : QStringLiteral("الإطار %1").arg(frameIndex);
+    const double seconds = m_videoClock.isValid() ? m_videoClock.elapsed() / 1000.0 : 0.0;
+    if (seconds > 1.0) {
+        const double speed = frameIndex / seconds;
+        status += QStringLiteral(" · السرعة %1 إطار/ث").arg(speed, 0, 'f', 1);
+        if (frameCount > frameIndex && speed > 0.0) {
+            const int remaining = int((frameCount - frameIndex) / speed);
+            status += QStringLiteral(" · المتبقي %1").arg(remaining >= 3600
+                ? QStringLiteral("%1:%2:%3").arg(remaining / 3600).arg(remaining / 60 % 60, 2, 10, QLatin1Char('0')).arg(remaining % 60, 2, 10, QLatin1Char('0'))
+                : QStringLiteral("%1:%2").arg(remaining / 60).arg(remaining % 60, 2, 10, QLatin1Char('0')));
+        }
+    }
+    if (m_videoStep > 1)
+        status += QStringLiteral(" · تحليل إطار من كل %1").arg(m_videoStep);
+    status += QStringLiteral(" · وجوه في الإطار: %1 · أشخاص مختلفون: %2").arg(faces.size()).arg(m_faces.size());
+    statusBar()->showMessage(status);
 }
 
 void MainWindow::onTrackUpdated(const FaceItem &track)
@@ -774,24 +797,11 @@ void MainWindow::addSelectedFaceToDatabase()
         return;
     const FaceItem face = m_faces.at(row);
 
-    const QString newPerson = QStringLiteral("＋ شخص جديد…");
-    QStringList choices{newPerson};
-    QStringList ids{QString()};
-    for (const Person &person : m_database.persons()) {
-        choices << (person.nationalId.isEmpty() ? person.name : QStringLiteral("%1 (%2)").arg(person.name, person.nationalId));
-        ids << person.id;
-    }
-    int current = 0;
-    if (!face.match.personId.isEmpty())
-        current = std::max(0, int(ids.indexOf(face.match.personId)));
-
-    bool ok = false;
-    const QString choice = QInputDialog::getItem(this, QStringLiteral("إضافة الوجه"),
-                                                 QStringLiteral("أضف هذا الوجه إلى:"), choices, current, false, &ok);
-    if (!ok)
+    PersonPickerDialog picker(m_database.persons(), face.match.personId, this);
+    if (picker.exec() != QDialog::Accepted)
         return;
 
-    QString personId = ids.value(choices.indexOf(choice));
+    QString personId = picker.personId();
     if (personId.isEmpty()) {
         PersonDialog dialog(Person(), this);
         if (dialog.exec() != QDialog::Accepted)
@@ -849,13 +859,12 @@ void MainWindow::refreshPersons()
         return;
     refreshStats();
     const QString selected = selectedPersonId();
-    const QString filter = m_personFilter->text().trimmed();
 
+    // الصور الرمزية تُحمَّل عند ظهور البطاقة فقط، فتبقى القائمة سريعة مع آلاف الأشخاص
+    const QSignalBlocker blocker(m_personList);
+    m_personList->setUpdatesEnabled(false);
     m_personList->clear();
     for (const Person &person : m_database.persons()) {
-        if (!filter.isEmpty() && !person.name.contains(filter, Qt::CaseInsensitive)
-            && !person.nationalId.contains(filter, Qt::CaseInsensitive))
-            continue;
         auto *item = new QListWidgetItem(m_personList);
         item->setData(CardRole::Id, person.id);
         item->setData(CardRole::Title, person.name);
@@ -864,12 +873,26 @@ void MainWindow::refreshPersons()
             subtitle = QStringLiteral("رقم الهوية %1 · ").arg(person.nationalId) + subtitle;
         item->setData(CardRole::Subtitle, subtitle);
         item->setData(CardRole::Status, -1);
+        item->setData(CardRole::SearchText, person.name + QLatin1Char(' ') + person.nationalId + QLatin1Char(' ') + person.phone);
         if (!person.photos.isEmpty())
-            item->setData(CardRole::Avatar, circularPixmap(QImage(m_database.photoPath(person.id, person.photos.first().file)), 46));
+            item->setData(CardRole::AvatarPath, m_database.photoPath(person.id, person.photos.first().file));
         if (person.id == selected)
             m_personList->setCurrentItem(item);
     }
+    applyPersonFilter();
+    m_personList->setUpdatesEnabled(true);
     showPersonDetails();
+}
+
+void MainWindow::applyPersonFilter()
+{
+    const QString filter = m_personFilter->text().trimmed();
+    m_personList->setUpdatesEnabled(false);
+    for (int i = 0; i < m_personList->count(); ++i) {
+        QListWidgetItem *item = m_personList->item(i);
+        item->setHidden(!filter.isEmpty() && !item->data(CardRole::SearchText).toString().contains(filter, Qt::CaseInsensitive));
+    }
+    m_personList->setUpdatesEnabled(true);
 }
 
 void MainWindow::showPersonDetails()
@@ -891,7 +914,7 @@ void MainWindow::showPersonDetails()
     const Person person = m_database.person(id);
     m_personAvatar->setPixmap(person.photos.isEmpty()
                                   ? Icons::icon(Icons::Name::Users, Theme::Muted, 96).pixmap(96, 96)
-                                  : circularPixmap(QImage(m_database.photoPath(person.id, person.photos.first().file)), 96));
+                                  : circularPixmapFromFile(m_database.photoPath(person.id, person.photos.first().file), 96));
 
     auto chip = [](const QString &key, const QString &value) {
         return QStringLiteral("<span style='color:#8b97b3'>%1</span> <span style='color:#e6eaf2'>%2</span>&nbsp;&nbsp;&nbsp;")
@@ -911,7 +934,11 @@ void MainWindow::showPersonDetails()
 
     for (const FacePhoto &photo : person.photos) {
         auto *item = new QListWidgetItem(m_photoList);
-        item->setIcon(QIcon(QPixmap(m_database.photoPath(person.id, photo.file))));
+        QImageReader reader(m_database.photoPath(person.id, photo.file));
+        const QSize original = reader.size();
+        if (original.isValid())
+            reader.setScaledSize(original.scaled(m_photoList->iconSize(), Qt::KeepAspectRatio).boundedTo(original));
+        item->setIcon(QIcon(QPixmap::fromImage(reader.read())));
         item->setText(QStringLiteral("جودة %1%").arg(qRound(photo.quality * 100)));
         item->setData(Qt::UserRole, photo.file);
     }

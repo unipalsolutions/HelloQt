@@ -4,6 +4,7 @@
 #include "faceengine.h"
 #include "facetypes.h"
 
+#include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QList>
 #include <QMainWindow>
@@ -68,6 +69,7 @@ private:
 
     // قاعدة البيانات
     void refreshPersons();
+    void applyPersonFilter();
     void refreshStats();
     void showPersonDetails();
     void addPerson();
@@ -91,6 +93,8 @@ private:
     QFutureWatcher<ImageAnalysis> m_imageWatcher;
     QThread *m_videoThread = nullptr;
     VideoWorker *m_videoWorker = nullptr;
+    QElapsedTimer m_videoClock;
+    int m_videoStep = 1;
 
     AnimatedStack *m_pages = nullptr;
     QLabel *m_personCountLabel = nullptr;
