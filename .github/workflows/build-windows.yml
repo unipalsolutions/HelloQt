@@ -40,6 +40,18 @@ jobs:
           Get-ChildItem dist\HelloQt
         shell: pwsh
 
+      - name: Smoke test
+        run: |
+          $p = Start-Process dist\HelloQt\HelloQt.exe -PassThru
+          Start-Sleep -Seconds 5
+          $p.Refresh()
+          if ($p.HasExited) { throw "HelloQt exited early with code $($p.ExitCode)" }
+          $title = $p.MainWindowTitle
+          Write-Host "Window title: $title"
+          Stop-Process -Id $p.Id
+          if ($title -ne "مرحبا") { throw "Unexpected window title: '$title'" }
+        shell: pwsh
+
       - uses: actions/upload-artifact@v4
         with:
           name: HelloQt-windows-x64
