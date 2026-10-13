@@ -10,6 +10,7 @@
 #include <QParallelAnimationGroup>
 #include <QPropertyAnimation>
 #include <QSequentialAnimationGroup>
+#include <QStyle>
 #include <QVariantAnimation>
 
 #include <algorithm>
@@ -40,6 +41,17 @@ void FancyButton::setIconName(Icons::Name icon)
     update();
 }
 
+void FancyButton::setCompact(bool compact)
+{
+    if (m_compact == compact)
+        return;
+    m_compact = compact;
+    if (compact && toolTip().isEmpty())
+        setToolTip(text());
+    updateGeometry();
+    update();
+}
+
 QVariantAnimation *FancyButton::makeAnimation(double *value, int duration)
 {
     auto *animation = new QVariantAnimation(this);
@@ -62,6 +74,8 @@ void FancyButton::animate(QVariantAnimation *animation, double from, double to)
 
 QSize FancyButton::sizeHint() const
 {
+    if (m_compact)
+        return m_kind == Kind::Nav ? QSize(46, 46) : QSize(40, 40);
     const int textWidth = fontMetrics().horizontalAdvance(text());
     if (m_kind == Kind::Nav)
         return QSize(textWidth + 70, 46);
@@ -162,6 +176,10 @@ void FancyButton::paintEvent(QPaintEvent *)
     const QFontMetricsF metrics(font);
     const double iconSize = 18.0;
     const double spacing = text().isEmpty() ? 0.0 : 9.0;
+    if (m_compact) {
+        Icons::paint(p, m_icon, QRectF(center.x() - iconSize / 2, center.y() - iconSize / 2, iconSize, iconSize), iconColor);
+        return;
+    }
     const double contentWidth = iconSize + spacing + metrics.horizontalAdvance(text());
     const double start = m_kind == Kind::Nav ? 18.0 : (bounds.width() - contentWidth) / 2.0;
     const double iconX = rtl ? bounds.right() - start - iconSize : bounds.left() + start;
@@ -340,4 +358,116 @@ void Toast::paintEvent(QPaintEvent *)
     const QRectF textRect = rtl ? QRectF(bounds.left() + 16, 0, badge.left() - bounds.left() - 26, height())
                                 : QRectF(badge.right() + 10, 0, bounds.right() - badge.right() - 26, height());
     p.drawText(textRect, (rtl ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter | Qt::AlignAbsolute, m_text);
+}
+
+// ───────────── FlowLayout ─────────────
+
+FlowLayout::FlowLayout(QWidget *parent, int hSpacing, int vSpacing)
+    : QLayout(parent)
+    , m_hSpacing(hSpacing)
+    , m_vSpacing(vSpacing)
+{
+}
+
+FlowLayout::~FlowLayout()
+{
+    while (QLayoutItem *item = takeAt(0))
+        delete item;
+}
+
+void FlowLayout::addItem(QLayoutItem *item)
+{
+    m_items.append(item);
+}
+
+int FlowLayout::count() const
+{
+    return int(m_items.size());
+}
+
+QLayoutItem *FlowLayout::itemAt(int index) const
+{
+    return m_items.value(index);
+}
+
+QLayoutItem *FlowLayout::takeAt(int index)
+{
+    return index >= 0 && index < m_items.size() ? m_items.takeAt(index) : nullptr;
+}
+
+Qt::Orientations FlowLayout::expandingDirections() const
+{
+    return {};
+}
+
+bool FlowLayout::hasHeightForWidth() const
+{
+    return true;
+}
+
+int FlowLayout::heightForWidth(int width) const
+{
+    return doLayout(QRect(0, 0, width, 0), true);
+}
+
+QSize FlowLayout::minimumSize() const
+{
+    QSize size;
+    for (const QLayoutItem *item : m_items)
+        size = size.expandedTo(item->minimumSize());
+    const QMargins m = contentsMargins();
+    return size + QSize(m.left() + m.right(), m.top() + m.bottom());
+}
+
+QSize FlowLayout::sizeHint() const
+{
+    return minimumSize();
+}
+
+void FlowLayout::setGeometry(const QRect &rect)
+{
+    QLayout::setGeometry(rect);
+    doLayout(rect, false);
+}
+
+int FlowLayout::doLayout(const QRect &rect, bool testOnly) const
+{
+    const QMargins m = contentsMargins();
+    const QRect area = rect.marginsRemoved(m);
+    const Qt::LayoutDirection direction = parentWidget() ? parentWidget()->layoutDirection() : Qt::LeftToRight;
+
+    // تجميع العناصر في أسطر ثم توسيطها عمودياً داخل كل سطر
+    struct Line { QList<QLayoutItem *> items; int height = 0; };
+    QList<Line> lines(1);
+    int x = 0;
+    for (QLayoutItem *item : m_items) {
+        if (item->isEmpty())
+            continue;
+        const QSize hint = item->sizeHint();
+        if (x > 0 && x + hint.width() > area.width()) {
+            lines.append(Line());
+            x = 0;
+        }
+        lines.last().items.append(item);
+        lines.last().height = std::max(lines.last().height, hint.height());
+        x += hint.width() + m_hSpacing;
+    }
+
+    int y = area.y();
+    for (const Line &line : std::as_const(lines)) {
+        if (line.items.isEmpty())
+            continue;
+        int lx = area.x();
+        for (QLayoutItem *item : line.items) {
+            const QSize hint = item->sizeHint();
+            const int width = std::min(hint.width(), area.width());
+            if (!testOnly) {
+                const QRect logical(lx, y + (line.height - hint.height()) / 2, width, hint.height());
+                item->setGeometry(QStyle::visualRect(direction, area, logical));
+            }
+            lx += width + m_hSpacing;
+        }
+        y += line.height + m_vSpacing;
+    }
+    return y - m_vSpacing - rect.y() + m.bottom();
 }

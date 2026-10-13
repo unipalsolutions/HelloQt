@@ -30,6 +30,13 @@ enum class Name {
     Check,
     Alert,
     Info,
+    Region,   // مستطيل بزوايا لتحديد منطقة
+    Clock,
+    Merge,
+    Film,
+    Next,     // الظهور التالي
+    Previous,
+    Sliders,  // الإعدادات
 };
 
 void paint(QPainter &painter, Name name, const QRectF &rect, const QColor &color);

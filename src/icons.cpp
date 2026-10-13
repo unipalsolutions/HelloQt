@@ -4,6 +4,8 @@
 #include <QPainterPath>
 #include <QPixmap>
 
+#include <algorithm>
+
 namespace Icons {
 
 namespace {
@@ -171,6 +173,59 @@ QPainterPath outline(Name name)
         p.addEllipse(QPointF(12, 12), 9, 9);
         line(12, 11, 12, 16.5);
         p.addEllipse(QPointF(12, 7.8), 0.3, 0.3);
+        break;
+    case Name::Region:
+        for (qreal x = 3; x < 21; x += 4.5)
+            line(x, 4, std::min<qreal>(x + 2.2, 21), 4), line(x, 20, std::min<qreal>(x + 2.2, 21), 20);
+        for (qreal y = 4; y < 20; y += 4.5)
+            line(3, y, 3, std::min<qreal>(y + 2.2, 20)), line(21, y, 21, std::min<qreal>(y + 2.2, 20));
+        p.addEllipse(QPointF(12, 10.5), 2.4, 2.4);
+        p.moveTo(8, 16.5);
+        p.cubicTo(9.2, 13.8, 14.8, 13.8, 16, 16.5);
+        break;
+    case Name::Clock:
+        p.addEllipse(QPointF(12, 12), 9, 9);
+        p.moveTo(12, 7);
+        p.lineTo(12, 12);
+        p.lineTo(15.5, 14);
+        break;
+    case Name::Merge:
+        p.addEllipse(QPointF(6, 5), 2, 2);
+        p.addEllipse(QPointF(18, 5), 2, 2);
+        p.moveTo(6, 7);
+        p.cubicTo(6, 12, 12, 11, 12, 15);
+        p.moveTo(18, 7);
+        p.cubicTo(18, 12, 12, 11, 12, 15);
+        line(12, 15, 12, 21);
+        break;
+    case Name::Film:
+        p.addRoundedRect(QRectF(3, 4, 18, 16), 2.5, 2.5);
+        line(7, 4, 7, 20);
+        line(17, 4, 17, 20);
+        line(3, 12, 7, 12);
+        line(17, 12, 21, 12);
+        line(3, 8, 7, 8);
+        line(17, 8, 21, 8);
+        line(3, 16, 7, 16);
+        line(17, 16, 21, 16);
+        break;
+    case Name::Next:
+        p.moveTo(7, 6);
+        p.lineTo(13, 12);
+        p.lineTo(7, 18);
+        line(17, 6, 17, 18);
+        break;
+    case Name::Previous:
+        p.moveTo(17, 6);
+        p.lineTo(11, 12);
+        p.lineTo(17, 18);
+        line(7, 6, 7, 18);
+        break;
+    case Name::Sliders:
+        line(4, 7, 20, 7);
+        line(4, 17, 20, 17);
+        p.addEllipse(QPointF(9, 7), 2.2, 2.2);
+        p.addEllipse(QPointF(15, 17), 2.2, 2.2);
         break;
     }
     return p;

@@ -104,6 +104,52 @@ void ImageView::clear()
     update();
 }
 
+void ImageView::setRegion(const QRectF &region)
+{
+    m_region = region.normalized().intersected(QRectF(0, 0, 1, 1));
+    if (m_region.width() < 0.02 || m_region.height() < 0.02)
+        m_region = QRectF();
+    update();
+}
+
+void ImageView::setSelectingRegion(bool selecting)
+{
+    m_selectingRegion = selecting;
+    m_dragging = false;
+    setCursor(selecting ? Qt::CrossCursor : Qt::ArrowCursor);
+    update();
+}
+
+QPointF ImageView::toNormalized(const QPointF &pos) const
+{
+    const QRectF r = imageRect(m_image);
+    if (r.isEmpty())
+        return {};
+    return QPointF(std::clamp((pos.x() - r.x()) / r.width(), 0.0, 1.0), std::clamp((pos.y() - r.y()) / r.height(), 0.0, 1.0));
+}
+
+void ImageView::paintRegion(QPainter &p)
+{
+    using namespace Theme;
+    QRectF normalized = m_region;
+    if (m_dragging)
+        normalized = QRectF(m_dragStart, m_dragEnd).normalized();
+    if (normalized.isEmpty())
+        return;
+    const QRectF image = imageRect(m_image);
+    const QRectF r(image.x() + normalized.x() * image.width(), image.y() + normalized.y() * image.height(),
+                   normalized.width() * image.width(), normalized.height() * image.height());
+    // تعتيم ما خارج المنطقة
+    QPainterPath outside;
+    outside.addRect(image);
+    QPainterPath inside;
+    inside.addRect(r);
+    p.fillPath(outside.subtracted(inside), withAlpha(Background, 140));
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(Accent2, 2, Qt::DashLine));
+    p.drawRect(r);
+}
+
 void ImageView::startTicking()
 {
     if (!m_timer.isActive())
@@ -191,6 +237,7 @@ void ImageView::paintEvent(QPaintEvent *)
     p.setClipping(false);
     p.setOpacity(1.0);
 
+    paintRegion(p);
     for (const Box &box : m_boxes)
         paintBox(p, box, t);
 
@@ -343,6 +390,12 @@ void ImageView::paintBusy(QPainter &p, double t)
 
 void ImageView::mousePressEvent(QMouseEvent *event)
 {
+    if (m_selectingRegion && !m_image.isNull() && event->button() == Qt::LeftButton) {
+        m_dragging = true;
+        m_dragStart = m_dragEnd = toNormalized(event->position());
+        update();
+        return;
+    }
     const int id = boxAt(event->position());
     if (id >= 0) {
         emit faceClicked(id);
@@ -351,8 +404,38 @@ void ImageView::mousePressEvent(QMouseEvent *event)
     QWidget::mousePressEvent(event);
 }
 
+void ImageView::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (m_dragging) {
+        m_dragging = false;
+        m_dragEnd = toNormalized(event->position());
+        setRegion(QRectF(m_dragStart, m_dragEnd));
+        setSelectingRegion(false);
+        emit regionSelected(m_region);
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void ImageView::mouseDoubleClickEvent(QMouseEvent *event)
+{
+    const int id = m_selectingRegion ? -1 : boxAt(event->position());
+    if (id >= 0) {
+        emit faceDoubleClicked(id);
+        return;
+    }
+    QWidget::mouseDoubleClickEvent(event);
+}
+
 void ImageView::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_dragging) {
+        m_dragEnd = toNormalized(event->position());
+        update();
+        return;
+    }
+    if (m_selectingRegion)
+        return QWidget::mouseMoveEvent(event);
     const int id = boxAt(event->position());
     if (id != m_hovered) {
         m_hovered = id;

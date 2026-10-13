@@ -2,6 +2,8 @@
 
 #include <QColor>
 #include <QImage>
+#include <QList>
+#include <QPair>
 #include <QMetaType>
 #include <QRectF>
 #include <QString>
@@ -32,6 +34,13 @@ struct FaceItem
     float detectionScore = 0.0f;
     int frames = 1;
     MatchResult match;
+
+    // في الفيديو فقط (بالملي ثانية من بداية الفيديو)
+    qint64 firstSeenMs = -1;
+    qint64 lastSeenMs = -1;
+    qint64 bestMs = -1;                      // موضع أوضح لقطة
+    QRectF sourceBox;                        // موضع الوجه في أوضح لقطة بإحداثيات الإطار الأصلي
+    QList<QPair<qint64, qint64>> appearances; // مرات الظهور المتصلة: البداية والنهاية
 };
 
 Q_DECLARE_METATYPE(FaceItem)

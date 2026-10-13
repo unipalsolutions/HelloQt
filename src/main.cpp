@@ -3,6 +3,7 @@
 #include "theme.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -46,6 +47,19 @@ int main(int argc, char *argv[])
         return diagnostics;
 
     MainWindow window;
+    // Malamih --screenshot <العرض>x<الارتفاع> <ملف الصورة>: لقطة للنافذة بحجم شاشة معينة لفحص تكيّف الواجهة
+    if (args.size() == 4 && args.at(1) == QLatin1String("--screenshot")) {
+        const QStringList parts = args.at(2).split(QLatin1Char('x'));
+        if (parts.size() != 2)
+            return 2;
+        window.resize(parts.at(0).toInt(), parts.at(1).toInt());
+        window.show();
+        QElapsedTimer wait;
+        wait.start();
+        while (wait.elapsed() < 1500)
+            QApplication::processEvents(QEventLoop::AllEvents, 50);
+        return window.grab().save(args.at(3)) ? 0 : 1;
+    }
     const QRect available = app.primaryScreen()->availableGeometry();
     const QSize size = QSize(1280, 800).boundedTo(available.size() * 0.95);
     window.setGeometry(QStyle::alignedRect(Qt::RightToLeft, Qt::AlignCenter, size, available));

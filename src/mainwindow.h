@@ -6,11 +6,16 @@
 
 #include <QElapsedTimer>
 #include <QFutureWatcher>
+#include <QHash>
 #include <QList>
 #include <QMainWindow>
+#include <QRectF>
+#include <QSet>
 
 class AnimatedStack;
 class QButtonGroup;
+class QComboBox;
+class QTimeEdit;
 class FancyButton;
 class ImageView;
 class QLabel;
@@ -45,6 +50,7 @@ protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     void onEngineLoaded();
@@ -55,6 +61,7 @@ private:
     QWidget *createSidebar();
     QWidget *createRecognitionPage();
     QWidget *createDatabasePage();
+    void updateResponsiveLayout();
 
     // التعرف
     void openImage();
@@ -65,11 +72,25 @@ private:
     void stopVideo();
     void togglePause();
     void onImageAnalyzed();
-    void onFrameReady(const QImage &frame, const QList<FaceItem> &faces, int frameIndex, int frameCount);
+    void onFrameReady(const QImage &frame, const QList<FaceItem> &faces, int frameIndex, int frameCount, qint64 positionMs);
     void onTrackUpdated(const FaceItem &track);
     void onVideoFinished(const QString &error);
     void saveFaces();
     void addSelectedFaceToDatabase();
+    void addFaceToDatabase(const FaceItem &face);
+    void onIdentitiesMerged(int keepId, int removedId);
+    void showFaceContextMenu(const QPoint &pos);
+    QList<int> selectedFaceIds() const;
+    void mergeFaces(const QList<int> &ids);
+    void removeFaces(const QList<int> &ids);
+    void openShotViewer(int id);
+    void analyzeVideoFrom(qint64 positionMs);
+    void reanalyzeVideo();
+    void sortFaces();
+    void applyFaceFilter();
+    bool faceMatchesFilter(const FaceItem &face) const;
+    void rebuildFaceRows();
+    void updateVideoOptions();
     void selectFace(int id);
     void showFaceDetails();
     void refreshMatches();
@@ -105,6 +126,7 @@ private:
     QString m_lastDirectory;
 
     QList<FaceItem> m_faces; // وجوه الصورة الحالية، أو مسارات الوجوه في الفيديو
+    QHash<int, int> m_faceRows; // رقم الوجه ← موضعه، حتى يبقى التحديث سريعاً مع آلاف الأشخاص
     bool m_videoMode = false;
     bool m_videoRunning = false;
     bool m_analyzing = false;
@@ -116,8 +138,22 @@ private:
     bool m_videoPaused = false;
     QElapsedTimer m_pauseClock;
     qint64 m_pausedMs = 0;
+    qint64 m_videoPositionMs = 0;
+    qint64 m_videoStartMs = 0;
+    qint64 m_videoEndMs = 0;
+    qint64 m_videoDurationMs = 0;
+    QString m_videoSource;       // آخر فيديو أو كاميرا حُلِّل، لإعادة التحليل والرجوع للقطات
+    qint64 m_restartFromMs = -1; // إعادة التحليل من موضع بعد توقف التحليل الجاري
+    QSet<int> m_hiddenFaces;     // وجوه حذفها المستخدم أثناء التحليل فلا تعود للظهور
 
     AnimatedStack *m_pages = nullptr;
+    QWidget *m_sidebar = nullptr;
+    QList<QWidget *> m_sidebarExtras; // تختفي في الشريط الجانبي المصغر
+    QList<FancyButton *> m_navButtons;
+    QList<FancyButton *> m_headerButtons;
+    QList<QLabel *> m_subtitles;
+    QLabel *m_photosHint = nullptr;
+    int m_layoutMode = -1;
     QButtonGroup *m_navGroup = nullptr;
     QLabel *m_personCountLabel = nullptr;
     QLabel *m_photoCountLabel = nullptr;
@@ -139,6 +175,16 @@ private:
     ToggleSwitch *m_enhanceSwitch = nullptr;
     QSpinBox *m_frameStepSpin = nullptr;
     QProgressBar *m_progress = nullptr;
+    QLabel *m_thresholdWarning = nullptr;
+    QTimeEdit *m_rangeStart = nullptr;
+    QTimeEdit *m_rangeEnd = nullptr;
+    FancyButton *m_regionButton = nullptr;
+    FancyButton *m_clearRegionButton = nullptr;
+    FancyButton *m_reanalyzeButton = nullptr;
+    QLineEdit *m_faceFilter = nullptr;
+    QComboBox *m_faceStatusFilter = nullptr;
+    QComboBox *m_faceSort = nullptr;
+    FancyButton *m_viewShotButton = nullptr;
 
     QLabel *m_databaseSubtitle = nullptr;
     QLineEdit *m_personFilter = nullptr;

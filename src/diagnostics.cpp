@@ -10,6 +10,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QPainter>
+#include <QMap>
 #include <QSet>
 #include <QTextStream>
 
@@ -162,6 +163,13 @@ int videoTest(const QString &path, int step, QTextStream &out)
     int updates = 0;
     QSet<int> tracks;
     QString error;
+    int merges = 0;
+    QMap<int, FaceItem> finalTracks;
+    QObject::connect(&worker, &VideoWorker::identitiesMerged, [&](int, int removed) {
+        ++merges;
+        tracks.remove(removed);
+        finalTracks.remove(removed);
+    });
     QObject::connect(&worker, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &, int index, int) {
         frames = index;
         ++shown;
@@ -170,6 +178,7 @@ int videoTest(const QString &path, int step, QTextStream &out)
     QObject::connect(&worker, &VideoWorker::trackUpdated, [&](const FaceItem &track) {
         ++updates;
         tracks.insert(track.id);
+        finalTracks.insert(track.id, track);
     });
     QObject::connect(&worker, &VideoWorker::finished, [&](const QString &message) { error = message; });
 
@@ -183,6 +192,11 @@ int videoTest(const QString &path, int step, QTextStream &out)
     out << "frames_shown=" << shown << "\n";
     out << "people=" << tracks.size() << "\n";
     out << "track_updates=" << updates << "\n";
+    out << "auto_merges=" << merges << "\n";
+    for (const FaceItem &track : std::as_const(finalTracks)) {
+        out << "person " << track.id << ": frames=" << track.frames << " appearances=" << track.appearances.size()
+            << " first_ms=" << track.firstSeenMs << " last_ms=" << track.lastSeenMs << " best_ms=" << track.bestMs << "\n";
+    }
     out << "elapsed_s=" << seconds << "\n";
     out << "frames_per_second=" << frames / seconds << "\n";
     out << "peak_memory_mb=" << peakMemoryMb() << "\n";

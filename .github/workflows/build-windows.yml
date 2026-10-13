@@ -165,11 +165,21 @@ jobs:
           if ($titles -notcontains "ملامح") { throw "Main window not found" }
         shell: pwsh
 
+      - name: Laptop screen sizes
+        run: |
+          foreach ($size in '1366x768', '1280x720', '1024x640') {
+            $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--screenshot', $size, (Join-Path $PWD "screen-$size.png") -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "Screenshot at $size failed" }
+          }
+        shell: pwsh
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: smoke-screenshot
-          path: smoke.png
+          path: |
+            smoke.png
+            screen-*.png
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v4

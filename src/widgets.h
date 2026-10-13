@@ -3,6 +3,8 @@
 #include "icons.h"
 
 #include <QAbstractButton>
+#include <QLayout>
+#include <QList>
 #include <QPointer>
 #include <QStackedWidget>
 #include <QWidget>
@@ -21,6 +23,9 @@ public:
 
     QSize sizeHint() const override;
     void setIconName(Icons::Name icon);
+    // وضع مضغوط للشاشات الصغيرة: الأيقونة وحدها، والنص يظهر تلميحاً
+    void setCompact(bool compact);
+    bool isCompact() const { return m_compact; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -34,6 +39,7 @@ private:
 
     Icons::Name m_icon;
     Kind m_kind;
+    bool m_compact = false;
     double m_hover = 0.0;
     double m_press = 0.0;
     double m_check = 0.0;
@@ -90,4 +96,30 @@ private:
     QString m_text;
     Kind m_kind;
     static QPointer<Toast> s_current;
+};
+
+// يرتب العناصر في أسطر ويلفّها إلى سطر جديد عندما يضيق العرض (مع دعم الاتجاه من اليمين)
+class FlowLayout : public QLayout
+{
+public:
+    explicit FlowLayout(QWidget *parent = nullptr, int hSpacing = 10, int vSpacing = 8);
+    ~FlowLayout() override;
+
+    void addItem(QLayoutItem *item) override;
+    int count() const override;
+    QLayoutItem *itemAt(int index) const override;
+    QLayoutItem *takeAt(int index) override;
+    Qt::Orientations expandingDirections() const override;
+    bool hasHeightForWidth() const override;
+    int heightForWidth(int width) const override;
+    QSize minimumSize() const override;
+    QSize sizeHint() const override;
+    void setGeometry(const QRect &rect) override;
+
+private:
+    int doLayout(const QRect &rect, bool testOnly) const;
+
+    QList<QLayoutItem *> m_items;
+    int m_hSpacing;
+    int m_vSpacing;
 };

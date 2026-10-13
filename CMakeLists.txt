@@ -42,6 +42,8 @@ qt_add_executable(Malamih
     src/persondialog.cpp
     src/videoworker.h
     src/videoworker.cpp
+    src/shotviewer.h
+    src/shotviewer.cpp
 )
 
 # أيقونة التطبيق: داخل الملف التنفيذي على Windows وللنافذة عبر موارد Qt
