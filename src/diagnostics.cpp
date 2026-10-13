@@ -192,96 +192,194 @@ int videoTest(const QString &path, int step, QTextStream &out)
 std::vector<float> randomEmbedding(std::mt19937 &random)
 {
     std::normal_distribution<float> normal;
-    std::vector<float> v(512);
+    std::vector<float> v(FaceEngine::EmbeddingSize);
     for (float &x : v)
         x = normal(random);
     FaceEngine::normalize(v);
     return v;
 }
 
-// ينشئ قاعدة بيانات اصطناعية كبيرة ويقيس الإضافة والفتح والبحث والمساحة
+// بصمة "الهوية" لكل شخص اصطناعي تُولَّد من رقمه، فلا حاجة لحفظ ملايين البصمات في الذاكرة
+std::vector<float> identityOf(int person)
+{
+    std::mt19937 random(quint32(person) * 2654435761u + 17u);
+    return randomEmbedding(random);
+}
+
+// بصمة للشخص نفسه في ظروف مختلفة: كلما زاد noise قلّ التشابه (0.8 ≈ صورة جيدة، 1.5 ≈ صورة رديئة)
+std::vector<float> noisy(const std::vector<float> &identity, float noise, std::mt19937 &random)
+{
+    std::vector<float> e = randomEmbedding(random);
+    for (size_t d = 0; d < e.size(); ++d)
+        e[d] = identity[d] + noise * e[d];
+    FaceEngine::normalize(e);
+    return e;
+}
+
+double currentMemoryMb()
+{
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS counters;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
+        return counters.WorkingSetSize / (1024.0 * 1024.0);
+    return 0.0;
+#else
+    QFile file(QStringLiteral("/proc/self/statm"));
+    if (!file.open(QIODevice::ReadOnly))
+        return 0.0;
+    const QList<QByteArray> fields = file.readAll().split(' ');
+    return fields.size() > 1 ? fields.at(1).toDouble() * 4096.0 / (1024.0 * 1024.0) : 0.0;
+#endif
+}
+
+// ينشئ قاعدة بيانات اصطناعية كبيرة (حتى ملايين الأشخاص) ويقيس الإضافة والفتح والبحث والمطابقة والمساحة
+// persons = 0: يُعاد استخدام قاعدة أنشأها اختبار سابق في المجلد نفسه دون بنائها من جديد
 int databaseTest(const QString &directory, int persons, int photosPerPerson, QTextStream &out)
 {
-    QDir(directory).removeRecursively();
+    const bool reuse = persons <= 0;
+    if (!reuse)
+        QDir(directory).removeRecursively();
     std::mt19937 random(7);
-    QImage crop(240, 240, QImage::Format_RGB888);
+    // صورة صغيرة للاختبار حتى لا يملأ القرص؛ الصور الحقيقية 192 بكسل (نحو 7KB)
+    QImage crop(48, 48, QImage::Format_RGB888);
 
-    FaceDatabase database;
     QString error;
+    QElapsedTimer timer;
+    timer.start();
+    if (!reuse) {
+        FaceDatabase database;
+        if (!database.open(directory, &error)) {
+            out << "error=" << error << "\n";
+            return 1;
+        }
+        constexpr int BatchSize = 5000;
+        int inBatch = 0;
+        database.beginBatch();
+        for (int p = 0; p < persons; ++p) {
+            Person person;
+            person.name = QStringLiteral("شخص %1").arg(p + 1);
+            person.nationalId = QString::number(1000000000LL + p);
+            const QString id = database.addPerson(person);
+            const std::vector<float> identity = identityOf(p);
+            for (int i = 0; i < photosPerPerson; ++i) {
+                crop.fill(QColor::fromHsv((p * 37 + i * 11) % 360, 120, 200));
+                std::vector<std::vector<float>> embeddings;
+                for (int k = 0; k < 4; ++k)
+                    embeddings.push_back(noisy(identity, 0.8f, random));
+                if (!database.addPhoto(id, crop, embeddings, 0.8f)) {
+                    out << "error=addPhoto failed\n";
+                    return 1;
+                }
+            }
+            if (++inBatch >= BatchSize) {
+                database.endBatch();
+                database.beginBatch();
+                inBatch = 0;
+            }
+            if ((p + 1) % 100000 == 0)
+                qInfo("%d persons, %lld s", p + 1, timer.elapsed() / 1000);
+        }
+        database.endBatch();
+    }
+    const qint64 buildMs = timer.elapsed();
+    if (!reuse) {
+        out << "persons=" << persons << "\n";
+        out << "photos=" << qint64(persons) * photosPerPerson << "\n";
+        out << "build_s=" << buildMs / 1000.0 << "\n";
+        out.flush();
+    }
+
+    // فتح القاعدة من جديد كما يفعل التطبيق عند تشغيله
+    timer.restart();
+    FaceDatabase database;
     if (!database.open(directory, &error)) {
         out << "error=" << error << "\n";
         return 1;
     }
-
-    QElapsedTimer timer;
-    timer.start();
-    QElapsedTimer recent;
-    recent.start();
-    qint64 lastPhotoMs = 0;
-    std::vector<std::vector<float>> identities;
-    for (int p = 0; p < persons; ++p) {
-        Person person;
-        person.name = QStringLiteral("شخص %1").arg(p + 1);
-        const QString id = database.addPerson(person);
-        const std::vector<float> identity = randomEmbedding(random);
-        identities.push_back(identity);
-        for (int i = 0; i < photosPerPerson; ++i) {
-            crop.fill(QColor::fromHsv((p * 37 + i * 11) % 360, 120, 200));
-            QPainter(&crop).drawEllipse(60 + i * 5, 50, 120, 150);
-            // صور الشخص نفسه بصمات متقاربة حول بصمته الأساسية
-            std::vector<std::vector<float>> embeddings;
-            for (int k = 0; k < 4; ++k) {
-                std::vector<float> e = randomEmbedding(random);
-                for (size_t d = 0; d < e.size(); ++d)
-                    e[d] = identity[d] + 0.8f * e[d];
-                FaceEngine::normalize(e);
-                embeddings.push_back(e);
+    out << "open_ms=" << timer.elapsed() << "\n";
+    out << "memory_after_open_mb=" << currentMemoryMb() << "\n";
+    if (reuse) {
+        // آخر شخص اصطناعي هو الأحدث الذي له رقم هوية
+        for (const Person &person : database.findPersons(QString(), 0, 100)) {
+            if (!person.nationalId.isEmpty()) {
+                persons = int(person.nationalId.toLongLong() - 1000000000LL) + 1;
+                break;
             }
-            if (p == persons - 1 && i == photosPerPerson - 1)
-                recent.restart();
-            if (!database.addPhoto(id, crop, embeddings, 0.8f)) {
-                out << "error=addPhoto failed\n";
-                return 1;
-            }
-            if (p == persons - 1 && i == photosPerPerson - 1)
-                lastPhotoMs = recent.elapsed();
         }
+        out << "persons=" << persons << "\n";
+        if (persons <= 0)
+            return 1;
     }
-    const qint64 buildMs = timer.elapsed();
 
-    timer.restart();
+    // إضافة صورة واحدة بعد امتلاء القاعدة (معاملة كاملة كما في الواجهة)
+    {
+        const int p = persons / 2;
+        std::vector<std::vector<float>> embeddings;
+        for (int k = 0; k < 4; ++k)
+            embeddings.push_back(noisy(identityOf(p), 0.8f, random));
+        const QString id = database.findPersons(QString::number(1000000000LL + p), 0, 1).value(0).id;
+        timer.restart();
+        database.addPhoto(id, crop, embeddings, 0.8f);
+        out << "photo_add_ms=" << timer.elapsed() << "\n";
+        timer.restart();
+        Person person;
+        person.name = QStringLiteral("شخص إضافي");
+        database.addPerson(person);
+        out << "person_add_ms=" << timer.elapsed() << "\n";
+    }
+
+    // المطابقة: صور جيدة ورديئة لأشخاص عشوائيين، وصور لأشخاص غير مسجلين
     const GalleryPtr gallery = database.gallery();
-    const int queries = 200;
-    int correct = 0;
-    for (int q = 0; q < queries; ++q) {
-        const int target = int(random() % identities.size());
-        std::vector<float> probe = randomEmbedding(random);
-        for (size_t d = 0; d < probe.size(); ++d)
-            probe[d] = identities[size_t(target)][d] + 0.8f * probe[d];
-        FaceEngine::normalize(probe);
-        const MatchResult match = FaceDatabase::identify(*gallery, probe, 0.3f);
-        correct += match.personId == database.persons().at(target).id ? 1 : 0;
+    auto expectedId = [&](int p) { return QString::number(qint64(p) + 1); }; // الأرقام تبدأ من 1 بترتيب الإضافة
+    const auto measure = [&](float noise, const char *name) {
+        const int queries = 200;
+        int correct = 0;
+        FaceDatabase::identify(*gallery, noisy(identityOf(0), noise, random), 0.3f); // تهيئة
+        QElapsedTimer t;
+        t.start();
+        for (int q = 0; q < queries; ++q) {
+            const int target = int(random() % quint32(persons));
+            const MatchResult match = FaceDatabase::identify(*gallery, noisy(identityOf(target), noise, random), 0.3f);
+            correct += match.personId == expectedId(target) ? 1 : 0;
+        }
+        out << name << "_identify_ms=" << t.elapsed() / double(queries) << "\n";
+        out << name << "_identify_correct=" << correct << "/" << queries << "\n";
+        return correct == queries;
+    };
+    const bool goodOk = measure(0.8f, "good");
+    measure(1.5f, "poor");
+    {
+        int falseMatches = 0;
+        for (int q = 0; q < 200; ++q) {
+            const MatchResult match = FaceDatabase::identify(*gallery, randomEmbedding(random), 0.3f);
+            falseMatches += match.status == MatchStatus::Confirmed ? 1 : 0;
+        }
+        out << "unknown_false_matches=" << falseMatches << "/200\n";
     }
-    const double identifyMs = timer.elapsed() / double(queries);
 
+    // البحث بالاسم ورقم الهوية
     timer.restart();
-    FaceDatabase reopened;
-    if (!reopened.open(directory, &error)) {
-        out << "error=" << error << "\n";
-        return 1;
-    }
-    const qint64 openMs = timer.elapsed();
+    const QList<Person> firstPage = database.findPersons(QString(), 0, 100);
+    out << "first_page_ms=" << timer.elapsed() << "\n";
+    timer.restart();
+    const QList<Person> byId = database.findPersons(QString::number(1000000000LL + persons - 7), 0, 100);
+    out << "search_id_ms=" << timer.elapsed() << " found=" << byId.size() << "\n";
+    timer.restart();
+    const QList<Person> byName = database.findPersons(QStringLiteral("شخص %1").arg(persons / 3), 0, 100);
+    out << "search_name_ms=" << timer.elapsed() << " found=" << byName.size() << "\n";
 
-    out << "persons=" << reopened.persons().size() << "\n";
-    out << "photos=" << persons * photosPerPerson << "\n";
-    out << "build_ms=" << buildMs << "\n";
-    out << "last_photo_add_ms=" << lastPhotoMs << "\n";
-    out << "open_ms=" << openMs << "\n";
-    out << "identify_ms=" << identifyMs << "\n";
-    out << "identify_correct=" << correct << "/" << queries << "\n";
+    // إعادة بناء فهرس المطابقة (يحدث تلقائياً إن فُقد أو تلف)
+    database.close();
+    QFile::remove(QDir(directory).filePath(QStringLiteral("index.codes")));
+    timer.restart();
+    FaceDatabase rebuilt;
+    rebuilt.open(directory, &error);
+    out << "index_rebuild_ms=" << timer.elapsed() << "\n";
+    rebuilt.close();
+
     out << "disk_mb=" << folderSize(directory) / (1024.0 * 1024.0) << "\n";
     out << "peak_memory_mb=" << peakMemoryMb() << "\n";
-    return correct == queries ? 0 : 1;
+    return goodOk && !firstPage.isEmpty() && !byId.isEmpty() ? 0 : 1;
 }
 
 } // namespace

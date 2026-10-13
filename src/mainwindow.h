@@ -17,6 +17,9 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
+class QListView;
+class PersonListModel;
+class QTimer;
 class QProgressBar;
 class QSlider;
 class QSpinBox;
@@ -82,6 +85,7 @@ private:
     // قاعدة البيانات
     void refreshPersons();
     void applyPersonFilter();
+    void updateDatabaseSubtitle();
     void refreshStats();
     void showPersonDetails();
     void addPerson();
@@ -105,6 +109,7 @@ private:
     QString m_lastDirectory;
 
     QList<FaceItem> m_faces; // وجوه الصورة الحالية، أو مسارات الوجوه في الفيديو
+    QHash<int, int> m_faceRows; // رقم الوجه ← موضعه، حتى يبقى التحديث سريعاً مع آلاف الأشخاص
     bool m_videoMode = false;
     bool m_videoRunning = false;
     bool m_analyzing = false;
@@ -142,7 +147,9 @@ private:
 
     QLabel *m_databaseSubtitle = nullptr;
     QLineEdit *m_personFilter = nullptr;
-    QListWidget *m_personList = nullptr;
+    QListView *m_personList = nullptr;
+    PersonListModel *m_personModel = nullptr;
+    QTimer *m_filterTimer = nullptr;
     QLabel *m_personAvatar = nullptr;
     QLabel *m_personDetails = nullptr;
     QListWidget *m_photoList = nullptr;

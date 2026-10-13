@@ -4,8 +4,9 @@
 
 #include <QDialog>
 
+class PersonListModel;
 class QLineEdit;
-class QListWidget;
+class QListView;
 class QPlainTextEdit;
 
 class PersonDialog : public QDialog
@@ -27,20 +28,20 @@ private:
     QPlainTextEdit *m_notes;
 };
 
-// اختيار شخص بالبحث، يبقى سريعاً حتى مع آلاف الأشخاص
+// اختيار شخص بالبحث في القاعدة مباشرة، يبقى سريعاً حتى مع ملايين الأشخاص
 class PersonPickerDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    PersonPickerDialog(const QList<Person> &persons, const QString &suggestedId, QWidget *parent = nullptr);
+    PersonPickerDialog(const FaceDatabase *database, const QString &suggestedId, QWidget *parent = nullptr);
 
     // فارغ يعني "شخص جديد"
     QString personId() const;
 
 private:
-    void applyFilter();
-
     QLineEdit *m_search;
-    QListWidget *m_list;
+    QListView *m_list;
+    PersonListModel *m_model;
+    bool m_newPerson = false;
 };

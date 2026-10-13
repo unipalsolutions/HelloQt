@@ -1,13 +1,18 @@
 #include "persondialog.h"
 
+#include "personmodel.h"
+
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
+#include <QListView>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QSignalBlocker>
 #include <QPushButton>
+#include <QVBoxLayout>
+#include <QTimer>
 
 PersonDialog::PersonDialog(const Person &person, QWidget *parent)
     : QDialog(parent)
@@ -57,41 +62,61 @@ void PersonDialog::accept()
     QDialog::accept();
 }
 
-PersonPickerDialog::PersonPickerDialog(const QList<Person> &persons, const QString &suggestedId, QWidget *parent)
+PersonPickerDialog::PersonPickerDialog(const FaceDatabase *database, const QString &suggestedId, QWidget *parent)
     : QDialog(parent)
     , m_search(new QLineEdit(this))
-    , m_list(new QListWidget(this))
+    , m_list(new QListView(this))
+    , m_model(new PersonListModel(database, this))
 {
     setWindowTitle(QStringLiteral("إضافة الوجه"));
-    resize(420, 480);
-    m_search->setPlaceholderText(QStringLiteral("ابحث بالاسم أو رقم الهوية…"));
+    resize(440, 500);
+    m_search->setPlaceholderText(QStringLiteral("ابحث بالاسم أو رقم الهوية أو الهاتف…"));
     m_search->setClearButtonEnabled(true);
     m_list->setUniformItemSizes(true);
-
-    auto *newPerson = new QListWidgetItem(QStringLiteral("＋ شخص جديد…"), m_list);
-    newPerson->setData(Qt::UserRole + 1, QString());
-    m_list->setCurrentItem(newPerson);
-    m_list->setUpdatesEnabled(false);
-    for (const Person &person : persons) {
-        auto *item = new QListWidgetItem(
-            person.nationalId.isEmpty() ? person.name : QStringLiteral("%1 (%2)").arg(person.name, person.nationalId), m_list);
-        item->setData(Qt::UserRole, person.id);
-        item->setData(Qt::UserRole + 1, person.name + QLatin1Char(' ') + person.nationalId + QLatin1Char(' ') + person.phone);
-        if (person.id == suggestedId)
-            m_list->setCurrentItem(item);
-    }
-    m_list->setUpdatesEnabled(true);
-    m_list->scrollToItem(m_list->currentItem(), QAbstractItemView::PositionAtCenter);
+    m_list->setModel(m_model);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("إضافة"));
     buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("إلغاء"));
+    QPushButton *newPerson = buttons->addButton(QStringLiteral("＋ شخص جديد…"), QDialogButtonBox::ActionRole);
+    connect(newPerson, &QPushButton::clicked, this, [this] {
+        m_newPerson = true;
+        accept();
+    });
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    connect(m_list, &QListWidget::itemDoubleClicked, this, &QDialog::accept);
-    connect(m_search, &QLineEdit::textChanged, this, &PersonPickerDialog::applyFilter);
-    connect(m_list, &QListWidget::currentItemChanged, this,
-            [buttons](QListWidgetItem *current) { buttons->button(QDialogButtonBox::Ok)->setEnabled(current); });
+    connect(m_list, &QListView::doubleClicked, this, &QDialog::accept);
+
+    // البحث في القاعدة بعد توقف الكتابة قليلاً، لا مع كل حرف
+    auto *debounce = new QTimer(this);
+    debounce->setSingleShot(true);
+    debounce->setInterval(250);
+    connect(m_search, &QLineEdit::textChanged, debounce, qOverload<>(&QTimer::start));
+    auto selectFirst = [this] {
+        if (m_model->rowCount() > 0)
+            m_list->setCurrentIndex(m_model->index(0));
+    };
+    connect(debounce, &QTimer::timeout, this, [this, selectFirst] {
+        m_model->setFilter(m_search->text());
+        selectFirst();
+    });
+    auto updateOk = [this, buttons] { buttons->button(QDialogButtonBox::Ok)->setEnabled(m_list->currentIndex().isValid()); };
+    connect(m_list->selectionModel(), &QItemSelectionModel::currentChanged, this, updateOk);
+    connect(m_model, &QAbstractItemModel::modelReset, this, updateOk);
+
+    // الشخص المقترح (أقرب مطابقة) يظهر أولاً
+    const Person suggested = suggestedId.isEmpty() ? Person() : database->person(suggestedId);
+    if (!suggested.id.isEmpty()) {
+        const QSignalBlocker blocker(m_search);
+        m_search->setText(suggested.nationalId.isEmpty() ? suggested.name : suggested.nationalId);
+        m_model->setFilter(m_search->text());
+        const int row = m_model->rowOf(suggested.id);
+        m_list->setCurrentIndex(m_model->index(std::max(0, row)));
+    } else {
+        m_model->reload();
+        selectFirst();
+    }
+    updateOk();
 
     auto *layout = new QVBoxLayout(this);
     layout->addWidget(new QLabel(QStringLiteral("أضف هذا الوجه إلى:"), this));
@@ -99,29 +124,10 @@ PersonPickerDialog::PersonPickerDialog(const QList<Person> &persons, const QStri
     layout->addWidget(m_list, 1);
     layout->addWidget(buttons);
     m_search->setFocus();
+    m_search->selectAll();
 }
 
 QString PersonPickerDialog::personId() const
 {
-    const QListWidgetItem *item = m_list->currentItem();
-    return item ? item->data(Qt::UserRole).toString() : QString();
-}
-
-void PersonPickerDialog::applyFilter()
-{
-    const QString filter = m_search->text().trimmed();
-    QListWidgetItem *firstVisible = nullptr;
-    m_list->setUpdatesEnabled(false);
-    for (int i = 0; i < m_list->count(); ++i) {
-        QListWidgetItem *item = m_list->item(i);
-        const bool newPerson = i == 0;
-        const bool visible = newPerson || filter.isEmpty()
-            || item->data(Qt::UserRole + 1).toString().contains(filter, Qt::CaseInsensitive);
-        item->setHidden(!visible);
-        if (visible && !newPerson && !firstVisible)
-            firstVisible = item;
-    }
-    m_list->setUpdatesEnabled(true);
-    if (!filter.isEmpty() && firstVisible)
-        m_list->setCurrentItem(firstVisible);
+    return m_newPerson ? QString() : m_model->idAt(m_list->currentIndex().row());
 }

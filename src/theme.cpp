@@ -50,7 +50,7 @@ QSpinBox::up-button, QSpinBox::down-button { width: 16px; border: none; backgrou
 QComboBox QAbstractItemView {
     background: @surfaceHigh; border: 1px solid @border; selection-background-color: @accent; outline: 0;
 }
-QListWidget { background: transparent; border: none; outline: 0; }
+QListWidget, QListView { background: transparent; border: none; outline: 0; }
 QListWidget#photoGrid::item { border-radius: 12px; padding: 6px; color: @muted; }
 QListWidget#photoGrid::item:hover { background: @surfaceHigh; }
 QListWidget#photoGrid::item:selected { background: rgba(47, 124, 246, 70); color: @text; }

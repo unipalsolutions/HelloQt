@@ -3,21 +3,19 @@
 #include "facetypes.h"
 
 #include <QDateTime>
-#include <QHash>
+#include <QImage>
 #include <QList>
 #include <QObject>
+#include <QSqlDatabase>
 #include <QString>
 
 #include <memory>
 #include <vector>
 
-using EmbeddingBlock = std::shared_ptr<const std::vector<float>>; // بصمات متتالية، كل واحدة بطول البصمة
-
 struct FacePhoto
 {
-    QString file;
+    qint64 id = 0;
     float quality = 0.0f;
-    EmbeddingBlock embeddings; // بصمات الصورة ونسخها المُضعَّفة، مشتركة مع المعرض دون نسخ
 };
 
 struct Person
@@ -28,72 +26,82 @@ struct Person
     QString phone;
     QString notes;
     QDateTime created;
-    QList<FacePhoto> photos;
+    int photoCount = 0;
+    qint64 coverPhoto = 0;   // صورة الوجه التي تمثل الشخص في القوائم
+    QList<FacePhoto> photos; // تُملأ في person() فقط، لا في نتائج البحث
 };
 
-struct GalleryEntry
-{
-    QString personId;
-    QString name;
-    std::vector<EmbeddingBlock> templates;
-    std::vector<float> mean;
-};
-
-// نسخة ثابتة من القاعدة للمطابقة، يمكن استخدامها من أي خيط
-struct Gallery
-{
-    std::vector<std::shared_ptr<const GalleryEntry>> entries;
-    std::vector<float> means; // متوسطات الأشخاص متتالية، لتصفية سريعة في القواعد الكبيرة
-    size_t dimension = 0;
-};
-
-using GalleryPtr = std::shared_ptr<const Gallery>;
+// فهرس المطابقة: يبقى في الذاكرة لكل شخص بصمة ثنائية مختصرة (64 بايت) فقط، ومتوسط بصماته
+// مضغوطاً في ملف على القرص. البحث يصفّي الملايين بمسافة هامنج ثم يعيد ترتيب الأقرب بدقة.
+// آمن للاستخدام من عدة خيوط في الوقت نفسه.
+class Gallery;
+using GalleryPtr = std::shared_ptr<Gallery>;
 
 // قاعدة بيانات محلية بداخل مجلد القاعدة:
-//   persons.json                    بيانات الأشخاص وأسماء صورهم (صغير وسريع الحفظ)
-//   photos/<id>/<صورة>.jpg          صور الوجوه
-//   photos/<id>/embeddings.bin      بصمات وجوه الشخص، يُعاد كتابته عند تغيّر صوره فقط
+//   faces.db      SQLite: الأشخاص وصور وجوههم وبصماتها
+//   index.codes   البصمات الثنائية المختصرة لكل شخص (تُقرأ كاملة عند الفتح)
+//   index.means   متوسط بصمات كل شخص مضغوطاً (يُقرأ منه عند البحث فقط)
+// ملفا الفهرس يُعاد بناؤهما تلقائياً من faces.db إذا فُقدا أو لم يطابقاه.
 class FaceDatabase : public QObject
 {
     Q_OBJECT
 
 public:
     explicit FaceDatabase(QObject *parent = nullptr);
+    ~FaceDatabase() override;
 
     static QString defaultDirectory();
 
     bool open(const QString &directory, QString *error = nullptr);
+    void close();
     QString directory() const;
 
-    QList<Person> persons() const;
+    qint64 personCount() const { return m_personCount; }
+    qint64 photoCount() const { return m_photoCount; }
+
     Person person(const QString &id) const;
+    // صفحة من الأشخاص الأحدث أولاً؛ beforeId للصفحة التالية (0 للأولى)
+    QList<Person> findPersons(const QString &filter, qint64 beforeId, int limit) const;
+    // عدد نتائج البحث حتى الحد cap (البحث في الملايين لا يحتاج عدداً دقيقاً)
+    qint64 countPersons(const QString &filter, qint64 cap) const;
+
     QString addPerson(Person person);
     bool updatePerson(const Person &person);
     bool removePerson(const QString &id);
     bool addPhoto(const QString &personId, const QImage &crop,
                   const std::vector<std::vector<float>> &embeddings, float quality);
-    bool removePhoto(const QString &personId, const QString &file);
-    QString photoPath(const QString &personId, const QString &file) const;
+    bool removePhoto(const QString &personId, qint64 photoId);
+    QImage photo(qint64 photoId, int maxSize = 0) const;
+
+    // يجمع عمليات كثيرة في معاملة واحدة (للاستيراد الكبير)، والإشعارات تُرسل مرة واحدة في النهاية
+    void beginBatch();
+    bool endBatch();
 
     GalleryPtr gallery() const;
 
     // يعيد أفضل شخص مطابق؛ threshold هو حد التأكيد، وما دونه بـ 0.1 "محتمل"
-    static MatchResult identify(const Gallery &gallery, const std::vector<float> &embedding, float threshold);
+    static MatchResult identify(Gallery &gallery, const std::vector<float> &embedding, float threshold);
+    // يزيد مع كل تغيير في الأشخاص أو بصماتهم، فيعرف من يخزّن نتائج المطابقة متى يعيد حسابها
+    static quint64 revision(const Gallery &gallery);
 
 signals:
-    void changed();
+    void changed();                       // أي تغيير (الإحصاءات ونتائج المطابقة)
+    void personsReset();                  // إضافة أو حذف أشخاص
+    void personUpdated(const QString &id); // تغيّرت بيانات شخص أو صوره
 
 private:
-    bool save();
-    bool saveEmbeddings(const Person &person) const;
-    void loadEmbeddings(Person &person) const;
-    void commit(const QString &changedId = QString());
-    int indexOf(const QString &id) const;
+    bool exec(const QString &sql, const QVariantList &values = {}) const;
+    bool refreshPerson(qint64 personId);
+    bool migrateLegacy(QString *error);
+    void notify(const QString &personId, bool reset);
 
     QString m_directory;
-    QList<Person> m_persons;
-    QHash<QString, int> m_index;
-    QHash<QString, std::shared_ptr<const GalleryEntry>> m_entries;
-    QHash<QString, QByteArray> m_json; // نص JSON لكل شخص، يُعاد إنشاؤه عند تعديله فقط
+    QString m_connection;
+    QSqlDatabase m_db;
     GalleryPtr m_gallery;
+    qint64 m_personCount = 0;
+    qint64 m_photoCount = 0;
+    int m_batchDepth = 0;
+    bool m_batchReset = false;
+    bool m_batchChanged = false;
 };

@@ -4,8 +4,6 @@
 #include "icons.h"
 #include "theme.h"
 
-#include <QCache>
-#include <QImageReader>
 #include <QPainter>
 #include <QPainterPath>
 
@@ -85,24 +83,6 @@ QPixmap circularPixmap(const QImage &image, int size)
     p.drawImage(QPointF((result.width() - scaled.width()) / 2.0, (result.height() - scaled.height()) / 2.0), scaled);
     p.end();
     result.setDevicePixelRatio(dpr);
-    return result;
-}
-
-QPixmap circularPixmapFromFile(const QString &path, int size)
-{
-    static QCache<QString, QPixmap> cache(48 * 1024); // بالكيلوبايت
-    const QString key = QStringLiteral("%1@%2").arg(path).arg(size);
-    if (const QPixmap *cached = cache.object(key))
-        return *cached;
-    QImageReader reader(path);
-    const QSize original = reader.size();
-    if (original.isValid()) {
-        // فك ترميز مُصغَّر مباشرة بدل قراءة الصورة كاملة
-        reader.setScaledSize(original.scaled(QSize(size, size) * 2, Qt::KeepAspectRatioByExpanding).boundedTo(original));
-    }
-    auto *pixmap = new QPixmap(circularPixmap(reader.read(), size));
-    const QPixmap result = *pixmap;
-    cache.insert(key, pixmap, std::max(1, int(qint64(pixmap->width()) * pixmap->height() * 4 / 1024)));
     return result;
 }
 
@@ -190,10 +170,7 @@ void PersonCardDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, 
     const CardLayout l = layoutCard(option, 46);
     paintCardBackground(p, option, l.card);
     const bool selected = option.state & QStyle::State_Selected;
-    QPixmap avatar = index.data(CardRole::Avatar).value<QPixmap>();
-    const QString avatarPath = index.data(CardRole::AvatarPath).toString();
-    if (avatar.isNull() && !avatarPath.isEmpty())
-        avatar = circularPixmapFromFile(avatarPath, 46);
+    const QPixmap avatar = index.data(CardRole::Avatar).value<QPixmap>();
     paintAvatar(p, l.avatar, avatar, selected ? Accent2 : Border);
 
     QFont titleFont = option.font;

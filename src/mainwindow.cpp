@@ -5,6 +5,7 @@
 #include "imageio.h"
 #include "imageview.h"
 #include "persondialog.h"
+#include "personmodel.h"
 #include "theme.h"
 #include "videoworker.h"
 #include "widgets.h"
@@ -27,6 +28,8 @@
 #include <QLabel>
 #include <QKeySequence>
 #include <QLineEdit>
+#include <QListView>
+#include <QLocale>
 #include <QListWidget>
 #include <QMimeData>
 #include <QMessageBox>
@@ -40,7 +43,9 @@
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QTextStream>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QtConcurrent>
@@ -246,12 +251,17 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->showMessage(QStringLiteral("جارٍ تحميل نماذج التعرف…"));
 
     connect(&m_database, &FaceDatabase::changed, this, [this] {
-        refreshPersons();
+        refreshStats();
         refreshMatches();
-        if (m_videoWorker)
-            m_videoWorker->setGallery(m_database.gallery());
+    });
+    connect(&m_database, &FaceDatabase::personsReset, this, &MainWindow::refreshPersons);
+    connect(&m_database, &FaceDatabase::personUpdated, this, [this](const QString &id) {
+        m_personModel->refreshPerson(id);
+        if (id == selectedPersonId())
+            showPersonDetails();
     });
     refreshPersons();
+    refreshStats();
 
     connect(&m_imageWatcher, &QFutureWatcher<ImageAnalysis>::finished, this, &MainWindow::onImageAnalyzed);
 
@@ -678,14 +688,21 @@ QWidget *MainWindow::createDatabasePage()
     m_personFilter->setPlaceholderText(QStringLiteral("بحث بالاسم أو رقم الهوية…"));
     m_personFilter->setClearButtonEnabled(true);
     m_personFilter->addAction(Icons::icon(Icons::Name::Search, Theme::Muted, 18), QLineEdit::LeadingPosition);
-    connect(m_personFilter, &QLineEdit::textChanged, this, &MainWindow::applyPersonFilter);
-    m_personList = new QListWidget(listCard);
+    // البحث يجري في القاعدة بعد توقف الكتابة قليلاً، لا مع كل حرف
+    m_filterTimer = new QTimer(this);
+    m_filterTimer->setSingleShot(true);
+    m_filterTimer->setInterval(250);
+    connect(m_personFilter, &QLineEdit::textChanged, m_filterTimer, qOverload<>(&QTimer::start));
+    connect(m_filterTimer, &QTimer::timeout, this, &MainWindow::applyPersonFilter);
+    m_personModel = new PersonListModel(&m_database, this);
+    m_personList = new QListView(listCard);
+    m_personList->setModel(m_personModel);
     m_personList->setItemDelegate(new PersonCardDelegate(m_personList));
     m_personList->setUniformItemSizes(true);
     m_personList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_personList->setMouseTracking(true);
-    connect(m_personList, &QListWidget::currentRowChanged, this, &MainWindow::showPersonDetails);
-    connect(m_personList, &QListWidget::itemDoubleClicked, this, &MainWindow::editPerson);
+    connect(m_personList->selectionModel(), &QItemSelectionModel::currentChanged, this, &MainWindow::showPersonDetails);
+    connect(m_personList, &QListView::doubleClicked, this, &MainWindow::editPerson);
     listLayout->addWidget(m_personFilter);
     listLayout->addWidget(m_personList, 1);
 
@@ -966,15 +983,17 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
 
 void MainWindow::onTrackUpdated(const FaceItem &track)
 {
-    for (int i = 0; i < m_faces.size(); ++i) {
-        if (m_faces.at(i).id == track.id) {
-            m_faces[i] = track;
-            updateFaceListItem(m_faceList->item(i), track);
-            if (m_faceList->currentRow() == i)
-                showFaceDetails();
-            return;
-        }
+    if (m_faces.isEmpty())
+        m_faceRows.clear();
+    const int i = m_faceRows.value(track.id, -1);
+    if (i >= 0 && i < m_faces.size() && m_faces.at(i).id == track.id) {
+        m_faces[i] = track;
+        updateFaceListItem(m_faceList->item(i), track);
+        if (m_faceList->currentRow() == i)
+            showFaceDetails();
+        return;
     }
+    m_faceRows.insert(track.id, int(m_faces.size()));
     m_faces.append(track);
     updateFaceListItem(new QListWidgetItem(m_faceList), track);
     updateFaceCount();
@@ -1000,7 +1019,10 @@ void MainWindow::onVideoFinished(const QString &error)
 
 void MainWindow::refreshMatches()
 {
+    // في الفيديو يعيد محلل الفيديو المطابقة بنفسه، والقوائم الطويلة جداً لا تُعاد مطابقتها كلها هنا
     const GalleryPtr gallery = m_database.gallery();
+    if (!gallery || (m_videoMode && (m_videoRunning || m_faces.size() > 300)))
+        return;
     for (FaceItem &face : m_faces)
         face.match = FaceDatabase::identify(*gallery, face.embedding, threshold());
     refreshFaceList();
@@ -1031,15 +1053,18 @@ void MainWindow::updateFaceListItem(QListWidgetItem *listItem, const FaceItem &f
     if (!listItem)
         return;
     QString subtitle = QStringLiteral("جودة الصورة %1%").arg(qRound(face.quality * 100));
-    if (m_videoMode)
+    if (m_videoMode) {
         subtitle += QStringLiteral(" · ظهر في %1 إطار").arg(face.frames);
+        if (face.firstSeenMs >= 0)
+            subtitle += QStringLiteral(" · ") + ImageIO::formatTime(face.firstSeenMs);
+    }
     listItem->setData(CardRole::Id, face.id);
     listItem->setData(CardRole::Title, matchLabel(face.match));
     listItem->setData(CardRole::Subtitle, subtitle);
     listItem->setData(CardRole::Status, int(face.match.status));
     listItem->setData(CardRole::Score, double(face.match.score));
     if (!listItem->data(CardRole::Avatar).isValid() || m_videoMode)
-        listItem->setData(CardRole::Avatar, circularPixmap(face.crop, 54));
+        listItem->setData(CardRole::Avatar, circularPixmap(ImageIO::faceCrop(face), 54));
 }
 
 void MainWindow::selectFace(int id)
@@ -1074,6 +1099,11 @@ void MainWindow::showFaceDetails()
     };
     html += row_(QStringLiteral("درجة التشابه"), QStringLiteral("%1%").arg(qRound(face.match.score * 100)));
     html += row_(QStringLiteral("جودة الوجه"), QStringLiteral("%1%").arg(qRound(face.quality * 100)));
+    if (m_videoMode && face.firstSeenMs >= 0) {
+        html += row_(QStringLiteral("أول ظهور"), ImageIO::formatTime(face.firstSeenMs));
+        html += row_(QStringLiteral("آخر ظهور"), ImageIO::formatTime(face.lastSeenMs));
+        html += row_(QStringLiteral("عدد الإطارات"), QString::number(face.frames));
+    }
     if (!face.match.personId.isEmpty()) {
         const Person person = m_database.person(face.match.personId);
         if (!person.nationalId.isEmpty())
@@ -1096,15 +1126,33 @@ void MainWindow::saveFaces()
     if (folder.isEmpty())
         return;
 
+    // مع الصور يُحفظ تقرير CSV (يفتح في Excel) بكل وجه ونتيجته، وأوقات ظهوره في الفيديو
+    QFile report(QDir(folder).filePath(QStringLiteral("تقرير_الوجوه.csv")));
+    QTextStream csv(&report);
+    const bool hasReport = report.open(QIODevice::WriteOnly | QIODevice::Text);
+    if (hasReport) {
+        csv.setGenerateByteOrderMark(true);
+        csv << QStringLiteral("الرقم,الاسم,الحالة,التشابه %,جودة الوجه %,عدد الإطارات,أول ظهور,آخر ظهور,الصورة\n");
+    }
+    auto field = [](QString text) {
+        text.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+        return QLatin1Char('"') + text + QLatin1Char('"');
+    };
     int saved = 0;
     for (int i = 0; i < m_faces.size(); ++i) {
         const FaceItem &face = m_faces.at(i);
         const QString name = face.match.status == MatchStatus::Unknown ? QStringLiteral("غير_معروف") : face.match.name;
-        const QString file = QDir(folder).filePath(QStringLiteral("وجه_%1_%2.png").arg(i + 1).arg(safeFileName(name)));
-        if (face.crop.save(file))
+        const QString fileName = QStringLiteral("وجه_%1_%2.png").arg(i + 1).arg(safeFileName(name));
+        if (ImageIO::faceCrop(face).save(QDir(folder).filePath(fileName)))
             ++saved;
+        if (hasReport) {
+            csv << (i + 1) << ',' << field(matchLabel(face.match)) << ',' << field(statusDescription(face.match.status)) << ','
+                << qRound(face.match.score * 100) << ',' << qRound(face.quality * 100) << ',' << face.frames << ','
+                << (face.firstSeenMs >= 0 ? ImageIO::formatTime(face.firstSeenMs) : QString()) << ','
+                << (face.lastSeenMs >= 0 ? ImageIO::formatTime(face.lastSeenMs) : QString()) << ',' << field(fileName) << '\n';
+        }
     }
-    Toast::show(this, QStringLiteral("تم حفظ %1 وجه").arg(saved));
+    Toast::show(this, QStringLiteral("تم حفظ %1 وجه مع تقرير CSV").arg(saved));
 }
 
 void MainWindow::addSelectedFaceToDatabase()
@@ -1114,7 +1162,7 @@ void MainWindow::addSelectedFaceToDatabase()
         return;
     const FaceItem face = m_faces.at(row);
 
-    PersonPickerDialog picker(m_database.persons(), face.match.personId, this);
+    PersonPickerDialog picker(&m_database, face.match.personId, this);
     if (picker.exec() != QDialog::Accepted)
         return;
 
@@ -1138,13 +1186,13 @@ void MainWindow::addSelectedFaceToDatabase()
 
 bool MainWindow::enrollFace(const QString &personId, const FaceItem &face)
 {
-    if (face.aligned.empty())
+    const cv::Mat aligned = ImageIO::faceAligned(face);
+    if (aligned.empty())
         return false;
     QApplication::setOverrideCursor(Qt::WaitCursor);
     const FaceEngine *engine = &m_engine;
-    const cv::Mat aligned = face.aligned;
     const std::vector<std::vector<float>> embeddings = runResponsive([engine, aligned] { return engine->enrollmentEmbeddings(aligned); });
-    const bool ok = m_database.addPhoto(personId, face.crop, embeddings, face.quality);
+    const bool ok = m_database.addPhoto(personId, ImageIO::faceCrop(face), embeddings, face.quality);
     QApplication::restoreOverrideCursor();
     return ok;
 }
@@ -1155,63 +1203,53 @@ QString MainWindow::selectedPersonId() const
 {
     if (!m_personList)
         return {};
-    const QListWidgetItem *item = m_personList->currentItem();
-    return item ? item->data(CardRole::Id).toString() : QString();
+    return m_personModel->idAt(m_personList->currentIndex().row());
 }
 
 void MainWindow::refreshStats()
 {
-    int photos = 0;
-    const QList<Person> persons = m_database.persons();
-    for (const Person &person : persons)
-        photos += int(person.photos.size());
-    m_personCountLabel->setText(QString::number(persons.size()));
-    m_photoCountLabel->setText(QString::number(photos));
-    m_databaseSubtitle->setText(QStringLiteral("%1 شخص مسجل · %2 صورة وجه · محفوظة على هذا الجهاز فقط")
-                                    .arg(persons.size())
-                                    .arg(photos));
+    m_personCountLabel->setText(QLocale().toString(m_database.personCount()));
+    m_photoCountLabel->setText(QLocale().toString(m_database.photoCount()));
+    updateDatabaseSubtitle();
+}
+
+void MainWindow::updateDatabaseSubtitle()
+{
+    const QString filter = m_personModel ? m_personModel->filter() : QString();
+    if (filter.isEmpty()) {
+        m_databaseSubtitle->setText(QStringLiteral("%1 شخص مسجل · %2 صورة وجه · محفوظة على هذا الجهاز فقط")
+                                        .arg(QLocale().toString(m_database.personCount()), QLocale().toString(m_database.photoCount())));
+        return;
+    }
+    constexpr qint64 Cap = 10000;
+    const qint64 count = m_database.countPersons(filter, Cap + 1);
+    m_databaseSubtitle->setText(count > Cap ? QStringLiteral("نتائج البحث: أكثر من %1").arg(QLocale().toString(Cap))
+                                            : QStringLiteral("نتائج البحث: %1").arg(QLocale().toString(count)));
 }
 
 void MainWindow::refreshPersons()
 {
     if (!m_personList)
         return;
-    refreshStats();
     const QString selected = selectedPersonId();
-
-    // الصور الرمزية تُحمَّل عند ظهور البطاقة فقط، فتبقى القائمة سريعة مع آلاف الأشخاص
-    const QSignalBlocker blocker(m_personList);
-    m_personList->setUpdatesEnabled(false);
-    m_personList->clear();
-    for (const Person &person : m_database.persons()) {
-        auto *item = new QListWidgetItem(m_personList);
-        item->setData(CardRole::Id, person.id);
-        item->setData(CardRole::Title, person.name);
-        QString subtitle = QStringLiteral("%1 صورة").arg(person.photos.size());
-        if (!person.nationalId.isEmpty())
-            subtitle = QStringLiteral("رقم الهوية %1 · ").arg(person.nationalId) + subtitle;
-        item->setData(CardRole::Subtitle, subtitle);
-        item->setData(CardRole::Status, -1);
-        item->setData(CardRole::SearchText, person.name + QLatin1Char(' ') + person.nationalId + QLatin1Char(' ') + person.phone);
-        if (!person.photos.isEmpty())
-            item->setData(CardRole::AvatarPath, m_database.photoPath(person.id, person.photos.first().file));
-        if (person.id == selected)
-            m_personList->setCurrentItem(item);
+    {
+        const QSignalBlocker blocker(m_personList->selectionModel());
+        m_personModel->reload();
+        const int row = m_personModel->rowOf(selected);
+        if (row >= 0)
+            m_personList->setCurrentIndex(m_personModel->index(row));
     }
-    applyPersonFilter();
-    m_personList->setUpdatesEnabled(true);
     showPersonDetails();
 }
 
 void MainWindow::applyPersonFilter()
 {
-    const QString filter = m_personFilter->text().trimmed();
-    m_personList->setUpdatesEnabled(false);
-    for (int i = 0; i < m_personList->count(); ++i) {
-        QListWidgetItem *item = m_personList->item(i);
-        item->setHidden(!filter.isEmpty() && !item->data(CardRole::SearchText).toString().contains(filter, Qt::CaseInsensitive));
+    {
+        const QSignalBlocker blocker(m_personList->selectionModel());
+        m_personModel->setFilter(m_personFilter->text());
     }
-    m_personList->setUpdatesEnabled(true);
+    updateDatabaseSubtitle();
+    showPersonDetails();
 }
 
 void MainWindow::showPersonDetails()
@@ -1231,9 +1269,9 @@ void MainWindow::showPersonDetails()
     }
 
     const Person person = m_database.person(id);
-    m_personAvatar->setPixmap(person.photos.isEmpty()
+    m_personAvatar->setPixmap(person.coverPhoto <= 0
                                   ? Icons::icon(Icons::Name::Users, Theme::Muted, 96).pixmap(96, 96)
-                                  : circularPixmapFromFile(m_database.photoPath(person.id, person.photos.first().file), 96));
+                                  : circularPixmap(m_database.photo(person.coverPhoto, 192), 96));
 
     auto chip = [](const QString &key, const QString &value) {
         return QStringLiteral("<span style='color:#8aa3c7'>%1</span> <span style='color:#e6f0ff'>%2</span>&nbsp;&nbsp;&nbsp;")
@@ -1253,13 +1291,9 @@ void MainWindow::showPersonDetails()
 
     for (const FacePhoto &photo : person.photos) {
         auto *item = new QListWidgetItem(m_photoList);
-        QImageReader reader(m_database.photoPath(person.id, photo.file));
-        const QSize original = reader.size();
-        if (original.isValid())
-            reader.setScaledSize(original.scaled(m_photoList->iconSize(), Qt::KeepAspectRatio).boundedTo(original));
-        item->setIcon(QIcon(QPixmap::fromImage(reader.read())));
+        item->setIcon(QIcon(QPixmap::fromImage(m_database.photo(photo.id, m_photoList->iconSize().width()))));
         item->setText(QStringLiteral("جودة %1%").arg(qRound(photo.quality * 100)));
-        item->setData(Qt::UserRole, photo.file);
+        item->setData(Qt::UserRole, photo.id);
     }
 }
 
@@ -1273,11 +1307,13 @@ void MainWindow::addPerson()
         Toast::show(this, QStringLiteral("تعذر حفظ الشخص"), Toast::Kind::Warning);
         return;
     }
+    // الأحدث أولاً، فالشخص الجديد في أول القائمة
     m_personFilter->clear();
-    for (int i = 0; i < m_personList->count(); ++i) {
-        if (m_personList->item(i)->data(CardRole::Id).toString() == id)
-            m_personList->setCurrentRow(i);
-    }
+    applyPersonFilter();
+    m_personModel->reload();
+    const int row = m_personModel->rowOf(id);
+    if (row >= 0)
+        m_personList->setCurrentIndex(m_personModel->index(row));
     Toast::show(this, QStringLiteral("تمت إضافة %1 — أضف الآن صوراً لوجهه").arg(dialog.person().name));
     if (m_ready)
         addPhotosTo(id);
@@ -1396,7 +1432,7 @@ void MainWindow::removePhoto()
         return;
     if (QMessageBox::question(this, QStringLiteral("حذف الصورة"), QStringLiteral("هل تريد حذف هذه الصورة؟")) != QMessageBox::Yes)
         return;
-    if (m_database.removePhoto(id, item->data(Qt::UserRole).toString()))
+    if (m_database.removePhoto(id, item->data(Qt::UserRole).toLongLong()))
         Toast::show(this, QStringLiteral("تم حذف الصورة"), Toast::Kind::Info);
     else
         Toast::show(this, QStringLiteral("تعذر حذف الصورة"), Toast::Kind::Warning);

@@ -3,6 +3,7 @@
 #include "faceengine.h"
 #include "imageio.h"
 
+#include <QElapsedTimer>
 #include <QMutexLocker>
 #include <QThread>
 
@@ -21,11 +22,14 @@ constexpr int MinTrackHits = 3;           // لا يُعتمد الوجه قبل
 constexpr int EmbedInterval = 5;          // إعادة حساب بصمة الوجه المتتبَّع كل عدة إطارات فقط
 constexpr float BetterShotMargin = 0.08f; // لقطة أوضح من أفضل لقطة سابقة تُحلَّل فوراً
 constexpr float ReidentifySimilarity = 0.5f;
+constexpr float ReidentifyDrift = 0.985f; // تغيّر بصمة الشخص الذي يستدعي بحثاً جديداً في القاعدة
 constexpr int UpdateInterval = 10;        // أقصى عدد إطارات بين تحديثين لبطاقة الوجه
 constexpr int MaxPendingFrames = 2;
 constexpr int MaxDisplaySide = 1920;      // الإطارات الأكبر تُصغَّر للعرض فقط
 constexpr int TrackPhotoSize = 192;
 constexpr double AutoAnalysisRate = 10.0; // إطارات محللة لكل ثانية من الفيديو في الوضع التلقائي
+constexpr double IdleAnalysisRate = 2.0;  // عند خلو المشهد من الوجوه يُفحص أقل، ويعود للمعدل الكامل فور ظهور وجه
+constexpr int IdleAfter = 20;             // إطارات محللة متتالية بلا وجوه قبل خفض المعدل
 
 // شخص ظهر في الفيديو، وقد يعود بعد غياب طويل فيُربط بالهوية نفسها
 struct Identity
@@ -35,10 +39,14 @@ struct Identity
     std::vector<float> mean; // المجموع بعد التطبيع
     int frames = 0;
     int lastSeen = 0;
+    qint64 firstSeenMs = -1;
+    qint64 lastSeenMs = -1;
     bool confirmed = false;
-    FaceItem best;
+    FaceItem best; // أوضح لقطة، مضغوطة في الذاكرة
     MatchResult match;
+    std::vector<float> identifiedMean; // البصمة عند آخر بحث في القاعدة
     bool matchStale = true;
+    bool forceIdentify = true;
     bool changed = false;
     int lastEmitted = -1000000;
 };
@@ -82,7 +90,6 @@ QRectF toRect(const cv::Rect2f &box)
 VideoWorker::VideoWorker(const FaceEngine *engine, QObject *parent)
     : QObject(parent)
     , m_engine(engine)
-    , m_gallery(std::make_shared<Gallery>())
 {
 }
 
@@ -140,10 +147,18 @@ void VideoWorker::process(const QString &source)
 
     const int frameCount = camera ? 0 : std::max(0, int(capture.get(cv::CAP_PROP_FRAME_COUNT)));
     const double fps = capture.get(cv::CAP_PROP_FPS);
+    const bool validFps = fps > 1.0 && fps < 1000.0;
+    const bool automatic = !camera && m_frameStep.load() <= 0;
     int step = camera ? 1 : m_frameStep.load();
     if (step <= 0)
-        step = std::max(1, int(std::lround((fps > 1.0 && fps < 1000.0 ? fps : 25.0) / AutoAnalysisRate)));
-    emit started(step, fps > 1.0 && fps < 1000.0 ? fps : 0.0);
+        step = std::max(1, int(std::lround((validFps ? fps : 25.0) / AutoAnalysisRate)));
+    const int idleStep = std::max(step, int(std::lround((validFps ? fps : 25.0) / IdleAnalysisRate)));
+    int currentStep = step;
+    int skip = 0;
+    int idleAnalyses = 0;
+    QElapsedTimer cameraClock;
+    cameraClock.start();
+    emit started(step, validFps ? fps : 0.0);
 
     std::map<int, Identity> identities;
     std::vector<Track> tracks;
@@ -153,15 +168,25 @@ void VideoWorker::process(const QString &source)
     cv::Mat frame;
 
     GalleryPtr gallery;
+    quint64 revision = 0;
     float threshold = 0.0f;
     auto emitUpdate = [&](Identity &identity) {
+        // البحث في قاعدة كبيرة يُعاد فقط إذا تغيّرت بصمة الشخص فعلاً أو تغيّرت القاعدة أو حد التعرف
         if (identity.matchStale) {
-            identity.match = FaceDatabase::identify(*gallery, identity.mean, threshold);
+            const bool moved = identity.identifiedMean.empty()
+                || FaceEngine::cosine(identity.identifiedMean, identity.mean) < ReidentifyDrift;
+            if (identity.forceIdentify || moved) {
+                identity.match = gallery ? FaceDatabase::identify(*gallery, identity.mean, threshold) : MatchResult();
+                identity.identifiedMean = identity.mean;
+                identity.forceIdentify = false;
+            }
             identity.matchStale = false;
         }
         FaceItem summary = identity.best;
         summary.id = identity.id;
         summary.frames = identity.frames;
+        summary.firstSeenMs = identity.firstSeenMs;
+        summary.lastSeenMs = identity.lastSeenMs;
         summary.embedding = identity.mean;
         summary.match = identity.match;
         identity.changed = false;
@@ -172,27 +197,34 @@ void VideoWorker::process(const QString &source)
     while (!m_stop) {
         while (m_paused && !m_stop)
             QThread::msleep(25);
-        // الإطارات المتخطاة تُقرأ دون فك ترميزها بالكامل، وهذا أسرع بكثير
-        if (!camera && frameIndex % step != 0) {
+        // الإطارات المتخطاة تُقرأ دون تحويلها إلى صورة، وهذا أسرع بكثير
+        if (!camera && skip > 0) {
             if (!capture.grab())
                 break;
             ++frameIndex;
+            --skip;
             continue;
         }
         if (!capture.read(frame))
             break;
         ++frameIndex;
+        skip = currentStep - 1;
         if (frame.empty())
             continue;
         ++processed;
+        const qint64 positionMs = camera ? cameraClock.elapsed()
+            : validFps ? qint64(double(frameIndex - 1) * 1000.0 / fps)
+                       : qint64(capture.get(cv::CAP_PROP_POS_MSEC));
 
         {
             QMutexLocker locker(&m_mutex);
-            if (gallery != m_gallery || threshold != m_threshold) {
+            const quint64 currentRevision = m_gallery ? FaceDatabase::revision(*m_gallery) : 0;
+            if (gallery != m_gallery || revision != currentRevision || threshold != m_threshold) {
                 for (auto &[id, identity] : identities)
-                    identity.matchStale = identity.changed = true;
+                    identity.matchStale = identity.changed = identity.forceIdentify = true;
             }
             gallery = m_gallery;
+            revision = currentRevision;
             threshold = m_threshold;
         }
 
@@ -205,6 +237,16 @@ void VideoWorker::process(const QString &source)
             detection.quality = m_engine->quality(face, detection.aligned);
             detections.push_back(std::move(detection));
         }
+        // في الوضع التلقائي: مشهد بلا وجوه لفترة يُفحص بمعدل أقل حتى يظهر وجه
+        idleAnalyses = detections.empty() ? idleAnalyses + 1 : 0;
+        if (automatic) {
+            const int wanted = idleAnalyses >= IdleAfter ? idleStep : step;
+            if (wanted != currentStep) {
+                currentStep = wanted;
+                skip = std::min(skip, currentStep - 1);
+            }
+        }
+
         struct Pair { float iou; size_t detection; size_t track; };
         std::vector<Pair> pairs;
         for (size_t d = 0; d < detections.size(); ++d) {
@@ -291,6 +333,9 @@ void VideoWorker::process(const QString &source)
             ++track.hits;
             ++identity.frames;
             identity.lastSeen = processed;
+            if (identity.firstSeenMs < 0)
+                identity.firstSeenMs = positionMs;
+            identity.lastSeenMs = positionMs;
             identity.changed = true;
 
             bool firstConfirmation = false;
@@ -310,12 +355,13 @@ void VideoWorker::process(const QString &source)
                 FaceEngine::normalize(identity.mean);
                 identity.matchStale = true;
 
-                if (identity.best.crop.isNull() || detection.quality >= identity.best.quality) {
+                if (identity.best.packedCrop.isEmpty() || detection.quality >= identity.best.quality) {
                     AnalyzedFace analyzed;
                     analyzed.detection = detection.face;
                     analyzed.aligned = detection.aligned;
                     analyzed.quality = detection.quality;
                     identity.best = ImageIO::makeFaceItem(frame, analyzed, identity.id, TrackPhotoSize);
+                    ImageIO::pack(identity.best);
                     betterShot = true;
                 }
             }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QColor>
 #include <QImage>
 #include <QMetaType>
@@ -31,7 +32,13 @@ struct FaceItem
     float quality = 0.0f;
     float detectionScore = 0.0f;
     int frames = 1;
+    qint64 firstSeenMs = -1; // في الفيديو: أول وآخر ظهور بالمللي ثانية من بدايته
+    qint64 lastSeenMs = -1;
     MatchResult match;
+    // في الفيديو تُحفظ الصورتان مضغوطتين (نحو 10KB بدل 150KB) حتى تبقى الذاكرة صغيرة
+    // مع آلاف الأشخاص في الفيديوهات الطويلة؛ ImageIO::faceCrop و faceAligned تعيدانهما
+    QByteArray packedCrop;
+    QByteArray packedAligned;
 };
 
 Q_DECLARE_METATYPE(FaceItem)

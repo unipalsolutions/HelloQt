@@ -1,5 +1,6 @@
 #include "imageio.h"
 
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
 
@@ -176,6 +177,46 @@ FaceItem makeFaceItem(const cv::Mat &frame, const AnalyzedFace &face, int id, in
     item.quality = face.quality;
     item.detectionScore = face.detection.score;
     return item;
+}
+
+void pack(FaceItem &face)
+{
+    if (!face.crop.isNull()) {
+        QBuffer buffer(&face.packedCrop);
+        buffer.open(QIODevice::WriteOnly);
+        face.crop.save(&buffer, "JPG", 90);
+        face.crop = QImage();
+    }
+    if (!face.aligned.empty()) {
+        std::vector<uchar> data;
+        cv::imencode(".jpg", face.aligned, data, {cv::IMWRITE_JPEG_QUALITY, 97});
+        face.packedAligned = QByteArray(reinterpret_cast<const char *>(data.data()), qsizetype(data.size()));
+        face.aligned = cv::Mat();
+    }
+}
+
+QImage faceCrop(const FaceItem &face)
+{
+    if (!face.crop.isNull() || face.packedCrop.isEmpty())
+        return face.crop;
+    return QImage::fromData(face.packedCrop, "JPG");
+}
+
+cv::Mat faceAligned(const FaceItem &face)
+{
+    if (!face.aligned.empty() || face.packedAligned.isEmpty())
+        return face.aligned;
+    const cv::Mat buffer(1, int(face.packedAligned.size()), CV_8UC1, const_cast<char *>(face.packedAligned.constData()));
+    return cv::imdecode(buffer, cv::IMREAD_COLOR);
+}
+
+QString formatTime(qint64 ms)
+{
+    const qint64 seconds = std::max<qint64>(0, ms) / 1000;
+    return QStringLiteral("%1:%2:%3")
+        .arg(seconds / 3600, 2, 10, QLatin1Char('0'))
+        .arg(seconds / 60 % 60, 2, 10, QLatin1Char('0'))
+        .arg(seconds % 60, 2, 10, QLatin1Char('0'));
 }
 
 } // namespace ImageIO

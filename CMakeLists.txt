@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(DEPS_DIR "${CMAKE_BINARY_DIR}/_deps" CACHE PATH "Folder for downloaded dependencies (ONNX Runtime, face models)")
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Sql)
 find_package(OpenCV 4.8 REQUIRED COMPONENTS core imgproc imgcodecs videoio)
 
 include(cmake/onnxruntime.cmake)
@@ -40,6 +40,8 @@ qt_add_executable(Malamih
     src/imageview.cpp
     src/persondialog.h
     src/persondialog.cpp
+    src/personmodel.h
+    src/personmodel.cpp
     src/videoworker.h
     src/videoworker.cpp
 )
@@ -56,6 +58,7 @@ qt_add_resources(Malamih app_resources
 target_link_libraries(Malamih PRIVATE
     Qt6::Widgets
     Qt6::Concurrent
+    Qt6::Sql
     ${OpenCV_LIBS}
     onnxruntime
 )
