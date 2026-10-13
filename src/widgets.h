@@ -20,6 +20,7 @@ public:
     FancyButton(Icons::Name icon, const QString &text, Kind kind, QWidget *parent = nullptr);
 
     QSize sizeHint() const override;
+    void setIconName(Icons::Name icon);
 
 protected:
     void paintEvent(QPaintEvent *event) override;

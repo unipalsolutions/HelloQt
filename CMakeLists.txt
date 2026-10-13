@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(HelloQt VERSION 2.0.0 LANGUAGES CXX)
+project(Malamih VERSION 3.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,7 +15,7 @@ include(cmake/models.cmake)
 
 qt_standard_project_setup()
 
-qt_add_executable(HelloQt
+qt_add_executable(Malamih
     src/main.cpp
     src/mainwindow.h
     src/mainwindow.cpp
@@ -44,7 +44,16 @@ qt_add_executable(HelloQt
     src/videoworker.cpp
 )
 
-target_link_libraries(HelloQt PRIVATE
+# أيقونة التطبيق: داخل الملف التنفيذي على Windows وللنافذة عبر موارد Qt
+if(WIN32)
+    target_sources(Malamih PRIVATE resources/app.rc)
+endif()
+qt_add_resources(Malamih app_resources
+    PREFIX "/"
+    FILES resources/app-256.png
+)
+
+target_link_libraries(Malamih PRIVATE
     Qt6::Widgets
     Qt6::Concurrent
     ${OpenCV_LIBS}
@@ -53,23 +62,23 @@ target_link_libraries(HelloQt PRIVATE
 
 # ترميز UTF-8 للملفات المصدرية مع MSVC
 if(MSVC)
-    target_compile_options(HelloQt PRIVATE /utf-8)
+    target_compile_options(Malamih PRIVATE /utf-8)
 endif()
 if(WIN32)
-    target_link_libraries(HelloQt PRIVATE psapi)
+    target_link_libraries(Malamih PRIVATE psapi)
 endif()
 
-set_target_properties(HelloQt PROPERTIES
+set_target_properties(Malamih PROPERTIES
     WIN32_EXECUTABLE ON
 )
 
 # نسخ النماذج بجانب الملف التنفيذي
-add_custom_command(TARGET HelloQt POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:HelloQt>/models"
+add_custom_command(TARGET Malamih POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Malamih>/models"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FACE_MODELS_DIR}/det_10g.onnx"
             "${FACE_MODELS_DIR}/w600k_r50.onnx"
-            "$<TARGET_FILE_DIR:HelloQt>/models"
+            "$<TARGET_FILE_DIR:Malamih>/models"
 )
 
 # نسخ مكتبات OpenCV و ONNX Runtime بجانب الملف التنفيذي على Windows
@@ -78,10 +87,10 @@ if(WIN32)
         "${ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll"
         "${OpenCV_DIR}/../bin/opencv_videoio_ffmpeg*.dll"
     )
-    add_custom_command(TARGET HelloQt POST_BUILD
+    add_custom_command(TARGET Malamih POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                $<TARGET_RUNTIME_DLLS:HelloQt> ${EXTRA_RUNTIME_DLLS}
-                "$<TARGET_FILE_DIR:HelloQt>"
+                $<TARGET_RUNTIME_DLLS:Malamih> ${EXTRA_RUNTIME_DLLS}
+                "$<TARGET_FILE_DIR:Malamih>"
         COMMAND_EXPAND_LISTS
     )
 endif()

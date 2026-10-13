@@ -14,6 +14,8 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
+#include <vector>
 
 namespace ImageIO {
 
@@ -27,6 +29,91 @@ cv::Mat loadImage(const QString &path)
         return {};
     const cv::Mat buffer(1, int(data.size()), CV_8UC1, const_cast<char *>(data.constData()));
     return cv::imdecode(buffer, cv::IMREAD_COLOR);
+}
+
+namespace {
+
+// تقدير مستوى التشويش (طريقة Immerkær): متوسط استجابة مرشح لابلاس مزدوج على التدرج الرمادي
+double estimateNoise(const cv::Mat &bgr)
+{
+    cv::Mat gray;
+    cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
+    const cv::Mat kernel = (cv::Mat_<float>(3, 3) << 1, -2, 1, -2, 4, -2, 1, -2, 1);
+    cv::Mat response;
+    cv::filter2D(gray, response, CV_32F, kernel);
+    const double sum = cv::sum(cv::abs(response))[0];
+    return std::sqrt(CV_PI / 2.0) * sum / (6.0 * std::max(1, gray.cols - 2) * std::max(1, gray.rows - 2));
+}
+
+} // namespace
+
+cv::Mat enhance(const cv::Mat &bgr)
+{
+    if (bgr.empty())
+        return {};
+    cv::Mat image = bgr.clone();
+
+    // تصحيح جاما للصور المظلمة أولاً، حتى يُقاس التشويش الذي يظهر بعد الإضاءة ويُزال
+    cv::Mat gray;
+    cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+    const double brightness = cv::mean(gray)[0];
+    if (brightness < 90.0) {
+        cv::Mat lut(1, 256, CV_8U);
+        const double gamma = std::clamp(brightness / 120.0, 0.45, 0.9);
+        for (int i = 0; i < 256; ++i)
+            lut.at<uchar>(i) = cv::saturate_cast<uchar>(std::pow(i / 255.0, gamma) * 255.0);
+        cv::LUT(image, lut, image);
+    }
+    const double noise = estimateNoise(image);
+
+    // إزالة التشويش بالدقة الأصلية قبل التكبير، وبقوة تتناسب مع مستوى التشويش، مع الحفاظ على الحواف
+    if (noise > 2.0) {
+        if (noise > 8.0)
+            cv::medianBlur(image, image, 3);
+        cv::Mat denoised;
+        const double strength = std::clamp(noise * 3.0, 15.0, 90.0);
+        cv::bilateralFilter(image, denoised, noise > 8.0 ? 9 : 5, strength, 5);
+        image = denoised;
+    }
+
+    // الصور الصغيرة تُكبَّر حتى تظهر الوجوه البعيدة بتفاصيل كافية
+    const int longSide = std::max(image.cols, image.rows);
+    if (longSide < 1000) {
+        const double scale = std::min(3.0, 1400.0 / longSide);
+        cv::resize(image, image, cv::Size(), scale, scale, cv::INTER_CUBIC);
+    }
+
+    // موازنة الإضاءة والتباين محلياً على قناة السطوع فقط حتى لا تتغير الألوان
+    cv::Mat lab;
+    cv::cvtColor(image, lab, cv::COLOR_BGR2Lab);
+    std::vector<cv::Mat> channels;
+    cv::split(lab, channels);
+    cv::Mat &light = channels[0];
+    cv::createCLAHE(noise > 8.0 ? 1.3 : 1.8, cv::Size(8, 8))->apply(light, light);
+
+    // زيادة الحدة على الحواف فقط (قناع حدة موجَّه) حتى لا يتضخم التشويش في المساحات الملساء
+    cv::Mat lightF, blurred, detail;
+    light.convertTo(lightF, CV_32F);
+    const double radius = std::max(1.0, std::max(image.cols, image.rows) / 900.0);
+    cv::GaussianBlur(lightF, blurred, cv::Size(0, 0), radius);
+    detail = lightF - blurred;
+    cv::Mat gx, gy, edges;
+    cv::Sobel(blurred, gx, CV_32F, 1, 0);
+    cv::Sobel(blurred, gy, CV_32F, 0, 1);
+    cv::magnitude(gx, gy, edges);
+    cv::GaussianBlur(edges, edges, cv::Size(0, 0), radius * 2.0);
+    double maxEdge = 0.0;
+    cv::minMaxLoc(edges, nullptr, &maxEdge);
+    if (maxEdge > 0.0)
+        edges = cv::min(edges * (3.0 / maxEdge), 1.0);
+    const double amount = std::clamp(1.2 - noise / 8.0, 0.25, 1.0);
+    lightF += detail.mul(edges) * amount;
+    lightF.convertTo(light, CV_8U);
+    cv::merge(channels, lab);
+
+    cv::Mat result;
+    cv::cvtColor(lab, result, cv::COLOR_Lab2BGR);
+    return result;
 }
 
 QImage toQImage(const cv::Mat &bgr)

@@ -326,7 +326,7 @@ void ImageView::paintBusy(QPainter &p, double t)
     const QSizeF size(QFontMetricsF(font).horizontalAdvance(text) + 90, 44);
     const QRectF pill(QPointF(r.center().x() - size.width() / 2, r.center().y() - size.height() / 2), size);
     p.setPen(QPen(withAlpha(Accent, 160), 1));
-    p.setBrush(withAlpha(QColor(0x14, 0x1c, 0x2f), 235));
+    p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 235));
     p.drawRoundedRect(pill, 22, 22);
     p.setPen(Text);
     const bool rtl = isRightToLeft();

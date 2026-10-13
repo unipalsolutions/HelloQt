@@ -3,14 +3,38 @@
 #include "theme.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QIcon>
 #include <QScreen>
+#include <QStandardPaths>
 #include <QStyle>
+
+namespace {
+
+// ينقل بيانات الإصدارات السابقة (HelloQt) إلى مجلد الاسم الجديد مرة واحدة
+void migrateLegacyData()
+{
+    const QString current = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir parent(current);
+    if (QFileInfo::exists(current) || !parent.cdUp())
+        return;
+    const QString legacy = parent.filePath(QStringLiteral("HelloQt"));
+    if (QFileInfo::exists(legacy))
+        QDir().rename(legacy, current);
+}
+
+} // namespace
 
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
-    QApplication::setApplicationName(QStringLiteral("HelloQt"));
+    QApplication::setApplicationName(QStringLiteral("Malamih"));
+    QApplication::setApplicationDisplayName(QStringLiteral("ملامح"));
+    QApplication::setApplicationVersion(QStringLiteral("3.0.0"));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/resources/app-256.png")));
+    migrateLegacyData();
     QApplication::setLayoutDirection(Qt::RightToLeft);
     Theme::apply(app);
     qRegisterMetaType<FaceItem>();

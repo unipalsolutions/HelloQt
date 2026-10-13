@@ -11,23 +11,34 @@
 
 #include <QApplication>
 #include <QButtonGroup>
+#include <QClipboard>
+#include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QImageReader>
 #include <QInputDialog>
 #include <QLabel>
+#include <QKeySequence>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMimeData>
 #include <QMessageBox>
 #include <QPainter>
 #include <QProgressBar>
-#include <QProgressDialog>
+#include <QPushButton>
+#include <QSettings>
+#include <QShortcut>
 #include <QSlider>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QThread>
 #include <QUrl>
@@ -38,6 +49,104 @@ namespace {
 
 const QString ImageFilter = QStringLiteral("الصور (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff);;كل الملفات (*)");
 const QString VideoFilter = QStringLiteral("الفيديو (*.mp4 *.avi *.mkv *.mov *.wmv *.webm *.m4v *.3gp);;كل الملفات (*)");
+
+const QStringList VideoSuffixes{QStringLiteral("mp4"), QStringLiteral("avi"), QStringLiteral("mkv"), QStringLiteral("mov"),
+                                QStringLiteral("wmv"), QStringLiteral("webm"), QStringLiteral("m4v"), QStringLiteral("3gp")};
+
+bool isVideoFile(const QString &path)
+{
+    return VideoSuffixes.contains(QFileInfo(path).suffix().toLower());
+}
+
+bool isImageFile(const QString &path)
+{
+    return !QImageReader::imageFormat(path).isEmpty();
+}
+
+QString settingsPath()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/settings.ini");
+}
+
+// ينفذ عملاً ثقيلاً في الخلفية مع إبقاء الواجهة مستجيبة حتى ينتهي
+template<typename Function>
+auto runResponsive(Function function, bool allowInput = false)
+{
+    QFutureWatcher<decltype(function())> watcher;
+    QEventLoop loop;
+    QObject::connect(&watcher, &QFutureWatcherBase::finished, &loop, &QEventLoop::quit);
+    watcher.setFuture(QtConcurrent::run(std::move(function)));
+    if (!watcher.isFinished())
+        loop.exec(allowInput ? QEventLoop::AllEvents : QEventLoop::ExcludeUserInputEvents);
+    return watcher.result();
+}
+
+// نافذة تقدم لإضافة صور كثيرة مع إيقاف مؤقت واستئناف وإلغاء
+class BatchProgressDialog : public QDialog
+{
+public:
+    BatchProgressDialog(int total, QWidget *parent)
+        : QDialog(parent)
+    {
+        setWindowTitle(QStringLiteral("إضافة صور"));
+        setModal(true);
+        setMinimumWidth(460);
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(20, 18, 20, 16);
+        layout->setSpacing(12);
+        m_label = new QLabel(this);
+        m_label->setWordWrap(true);
+        layout->addWidget(m_label);
+        m_bar = new QProgressBar(this);
+        m_bar->setRange(0, total);
+        m_bar->setTextVisible(false);
+        m_bar->setObjectName(QStringLiteral("thinProgress"));
+        layout->addWidget(m_bar);
+        auto *buttons = new QHBoxLayout;
+        buttons->addStretch();
+        m_pause = new QPushButton(QStringLiteral("إيقاف مؤقت"), this);
+        auto *cancel = new QPushButton(QStringLiteral("إلغاء"), this);
+        buttons->addWidget(m_pause);
+        buttons->addWidget(cancel);
+        layout->addLayout(buttons);
+        connect(m_pause, &QPushButton::clicked, this, [this] {
+            m_paused = !m_paused;
+            m_pause->setText(m_paused ? QStringLiteral("استئناف") : QStringLiteral("إيقاف مؤقت"));
+            m_label->setText(m_paused ? QStringLiteral("متوقف مؤقتاً — %1").arg(m_text) : m_text);
+            if (!m_paused)
+                m_resume.quit();
+        });
+        connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+        connect(this, &QDialog::rejected, this, [this] {
+            m_canceled = true;
+            m_resume.quit();
+        });
+    }
+
+    void setProgress(int value, const QString &text)
+    {
+        m_text = text;
+        m_bar->setValue(value);
+        m_label->setText(text);
+    }
+
+    // يعيد false إذا أُلغيت العملية، وينتظر هنا ما دامت متوقفة مؤقتاً
+    bool proceed()
+    {
+        if (m_paused && !m_canceled)
+            m_resume.exec();
+        return !m_canceled;
+    }
+
+private:
+    QLabel *m_label;
+    QProgressBar *m_bar;
+    QPushButton *m_pause;
+    QString m_text;
+    QEventLoop m_resume;
+    bool m_paused = false;
+    bool m_canceled = false;
+};
 
 QString safeFileName(QString name)
 {
@@ -84,13 +193,9 @@ protected:
     {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        QLinearGradient gradient(0, 0, width(), height());
-        gradient.setColorAt(0, Theme::Accent);
-        gradient.setColorAt(1, Theme::Accent2);
-        p.setPen(Qt::NoPen);
-        p.setBrush(gradient);
-        p.drawRoundedRect(rect(), 12, 12);
-        Icons::paint(p, Icons::Name::Scan, QRectF(9, 9, 24, 24), Qt::white);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        static const QPixmap logo(QStringLiteral(":/resources/app-256.png"));
+        p.drawPixmap(rect(), logo);
     }
 };
 
@@ -112,7 +217,7 @@ QString statusDescription(MatchStatus status)
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle(QStringLiteral("التعرف على الوجوه"));
+    setWindowTitle(QStringLiteral("ملامح"));
 
     auto *central = new QWidget(this);
     auto *layout = new QHBoxLayout(central);
@@ -125,17 +230,20 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(m_pages, 1);
     setCentralWidget(central);
 
-    QString error;
-    if (!m_engine.load(FaceEngine::defaultModelsDir(), &error)) {
-        statusBar()->showMessage(error);
-        QMessageBox::critical(this, windowTitle(), error);
-    } else if (!m_database.open(FaceDatabase::defaultDirectory(), &error)) {
-        statusBar()->showMessage(error);
-        QMessageBox::critical(this, windowTitle(), error);
-    } else {
-        m_ready = true;
-        statusBar()->showMessage(QStringLiteral("جاهز — كل المعالجة تتم محلياً على هذا الجهاز"));
-    }
+    setAcceptDrops(true);
+    setupShortcuts();
+
+    // قاعدة البيانات سريعة الفتح، أما النماذج فتُحمّل في الخلفية حتى تظهر النافذة فوراً
+    m_database.open(FaceDatabase::defaultDirectory(), &m_databaseError);
+    FaceEngine *engine = &m_engine;
+    connect(&m_loadWatcher, &QFutureWatcher<QString>::finished, this, &MainWindow::onEngineLoaded);
+    m_loadWatcher.setFuture(QtConcurrent::run([engine] {
+        QString error;
+        engine->load(FaceEngine::defaultModelsDir(), &error);
+        return error;
+    }));
+    m_view->setBusy(true, QStringLiteral("جارٍ تحميل نماذج التعرف"));
+    statusBar()->showMessage(QStringLiteral("جارٍ تحميل نماذج التعرف…"));
 
     connect(&m_database, &FaceDatabase::changed, this, [this] {
         refreshPersons();
@@ -162,11 +270,159 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_videoWorker, &VideoWorker::finished, this, &MainWindow::onVideoFinished);
     m_videoThread->start();
 
+    loadSettings();
     setBusy(false);
+}
+
+void MainWindow::onEngineLoaded()
+{
+    m_view->setBusy(false);
+    QString error = m_loadWatcher.result();
+    if (error.isEmpty())
+        error = m_databaseError;
+    if (!error.isEmpty()) {
+        statusBar()->showMessage(error);
+        QMessageBox::critical(this, windowTitle(), error);
+        return;
+    }
+    m_ready = true;
+    setBusy(false);
+    statusBar()->showMessage(QStringLiteral("جاهز — كل المعالجة تتم محلياً على هذا الجهاز · اسحب صورة أو فيديو إلى النافذة أو الصق صورة بـ Ctrl+V"));
+    if (!m_pendingFile.isEmpty())
+        openFile(std::exchange(m_pendingFile, QString()));
+}
+
+void MainWindow::setupShortcuts()
+{
+    const auto add = [this](const QKeySequence &key, auto slot) {
+        connect(new QShortcut(key, this), &QShortcut::activated, this, slot);
+    };
+    add(QKeySequence::Open, [this] {
+        if (m_openImageButton->isEnabled())
+            openImage();
+    });
+    add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O), [this] {
+        if (m_openVideoButton->isEnabled())
+            openVideo();
+    });
+    add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), [this] {
+        if (m_cameraButton->isEnabled())
+            openCamera();
+    });
+    add(QKeySequence::Save, [this] {
+        if (m_saveFacesButton->isEnabled())
+            saveFaces();
+    });
+    add(QKeySequence::Paste, [this] { pasteImage(); });
+    add(QKeySequence(Qt::Key_Escape), [this] {
+        if (m_videoRunning)
+            stopVideo();
+    });
+    add(QKeySequence(Qt::Key_Space), [this] {
+        if (m_videoRunning)
+            togglePause();
+    });
+    add(QKeySequence(Qt::Key_F5), [this] {
+        if (!m_currentImagePath.isEmpty() && m_openImageButton->isEnabled())
+            analyzeImage(m_currentImagePath);
+    });
+    add(QKeySequence(Qt::CTRL | Qt::Key_E), [this] { m_enhanceSwitch->toggle(); });
+    add(QKeySequence::Find, [this] {
+        m_navGroup->button(1)->click();
+        m_personFilter->setFocus();
+        m_personFilter->selectAll();
+    });
+    add(QKeySequence(Qt::CTRL | Qt::Key_1), [this] { m_navGroup->button(0)->click(); });
+    add(QKeySequence(Qt::CTRL | Qt::Key_2), [this] { m_navGroup->button(1)->click(); });
+}
+
+void MainWindow::loadSettings()
+{
+    const QSettings settings(settingsPath(), QSettings::IniFormat);
+    m_thresholdSlider->setValue(settings.value(QStringLiteral("threshold"), 30).toInt());
+    m_thoroughSwitch->setChecked(settings.value(QStringLiteral("thorough"), true).toBool());
+    m_enhanceSwitch->setChecked(settings.value(QStringLiteral("enhance"), false).toBool());
+    m_frameStepSpin->setValue(settings.value(QStringLiteral("frameStep"), 0).toInt());
+    m_lastDirectory = settings.value(QStringLiteral("lastDirectory")).toString();
+}
+
+void MainWindow::saveSettings() const
+{
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("threshold"), m_thresholdSlider->value());
+    settings.setValue(QStringLiteral("thorough"), m_thoroughSwitch->isChecked());
+    settings.setValue(QStringLiteral("enhance"), m_enhanceSwitch->isChecked());
+    settings.setValue(QStringLiteral("frameStep"), m_frameStepSpin->value());
+    settings.setValue(QStringLiteral("lastDirectory"), m_lastDirectory);
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    saveSettings();
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (event->mimeData()->hasUrls() || event->mimeData()->hasImage())
+        event->acceptProposedAction();
+}
+
+void MainWindow::dropEvent(QDropEvent *event)
+{
+    QStringList files;
+    for (const QUrl &url : event->mimeData()->urls()) {
+        if (url.isLocalFile())
+            files << url.toLocalFile();
+    }
+    event->acceptProposedAction();
+    if (!m_ready || m_videoRunning || m_analyzing)
+        return;
+
+    // في صفحة قاعدة البيانات تُضاف الصور المسحوبة إلى الشخص المحدد
+    QStringList images;
+    for (const QString &file : files) {
+        if (isImageFile(file))
+            images << file;
+    }
+    const QString personId = selectedPersonId();
+    if (m_pages->currentIndex() == 1 && !personId.isEmpty() && !images.isEmpty()) {
+        addPhotoFiles(personId, images);
+        return;
+    }
+    if (files.isEmpty()) {
+        if (event->mimeData()->hasImage())
+            pasteImage();
+        return;
+    }
+    m_navGroup->button(0)->click();
+    openFile(files.first());
+}
+
+void MainWindow::pasteImage()
+{
+    const QImage image = QApplication::clipboard()->image();
+    if (image.isNull()) {
+        const QList<QUrl> urls = QApplication::clipboard()->mimeData()->urls();
+        if (!urls.isEmpty() && urls.first().isLocalFile())
+            openFile(urls.first().toLocalFile());
+        return;
+    }
+    if (!m_openImageButton->isEnabled())
+        return;
+    const QString path = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
+                             .filePath(QStringLiteral("malamih-clipboard.png"));
+    if (!image.save(path)) {
+        Toast::show(this, QStringLiteral("تعذر قراءة الصورة من الحافظة"), Toast::Kind::Warning);
+        return;
+    }
+    m_navGroup->button(0)->click();
+    analyzeImage(path);
 }
 
 MainWindow::~MainWindow()
 {
+    m_loadWatcher.waitForFinished();
     m_videoWorker->requestStop();
     m_videoThread->quit();
     m_videoThread->wait();
@@ -186,7 +442,7 @@ QWidget *MainWindow::createSidebar()
     brand->addWidget(new LogoMark(sidebar));
     auto *brandText = new QVBoxLayout;
     brandText->setSpacing(0);
-    auto *name = label(QStringLiteral("HelloQt"), QStringLiteral("sectionTitle"), sidebar);
+    auto *name = label(QStringLiteral("ملامح"), QStringLiteral("sectionTitle"), sidebar);
     brandText->addWidget(name);
     brandText->addWidget(label(QStringLiteral("التعرف على الوجوه"), QStringLiteral("muted"), sidebar));
     brand->addLayout(brandText, 1);
@@ -196,6 +452,7 @@ QWidget *MainWindow::createSidebar()
     auto *recognitionNav = new FancyButton(Icons::Name::Scan, QStringLiteral("التعرف"), FancyButton::Kind::Nav, sidebar);
     auto *databaseNav = new FancyButton(Icons::Name::Users, QStringLiteral("قاعدة البيانات"), FancyButton::Kind::Nav, sidebar);
     auto *group = new QButtonGroup(sidebar);
+    m_navGroup = group;
     group->addButton(recognitionNav, 0);
     group->addButton(databaseNav, 1);
     recognitionNav->setChecked(true);
@@ -239,11 +496,19 @@ QWidget *MainWindow::createRecognitionPage()
     m_openImageButton = new FancyButton(Icons::Name::Image, QStringLiteral("فتح صورة"), FancyButton::Kind::Primary, page);
     m_openVideoButton = new FancyButton(Icons::Name::Video, QStringLiteral("فيديو"), FancyButton::Kind::Secondary, page);
     m_cameraButton = new FancyButton(Icons::Name::Camera, QStringLiteral("الكاميرا"), FancyButton::Kind::Secondary, page);
+    m_pauseButton = new FancyButton(Icons::Name::Pause, QStringLiteral("إيقاف مؤقت"), FancyButton::Kind::Secondary, page);
     m_stopButton = new FancyButton(Icons::Name::Stop, QStringLiteral("إيقاف"), FancyButton::Kind::Danger, page);
+    m_openImageButton->setToolTip(QStringLiteral("فتح صورة (Ctrl+O) — أو اسحبها إلى النافذة، أو الصقها بـ Ctrl+V"));
+    m_openVideoButton->setToolTip(QStringLiteral("فتح فيديو (Ctrl+Shift+O)"));
+    m_cameraButton->setToolTip(QStringLiteral("تشغيل الكاميرا (Ctrl+Shift+C)"));
+    m_pauseButton->setToolTip(QStringLiteral("إيقاف مؤقت / استئناف (مسافة)"));
+    m_stopButton->setToolTip(QStringLiteral("إيقاف التحليل (Esc)"));
     m_saveFacesButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ الوجوه"), FancyButton::Kind::Secondary, page);
+    m_saveFacesButton->setToolTip(QStringLiteral("حفظ صور الوجوه المكتشفة (Ctrl+S)"));
     connect(m_openImageButton, &QAbstractButton::clicked, this, &MainWindow::openImage);
     connect(m_openVideoButton, &QAbstractButton::clicked, this, &MainWindow::openVideo);
     connect(m_cameraButton, &QAbstractButton::clicked, this, &MainWindow::openCamera);
+    connect(m_pauseButton, &QAbstractButton::clicked, this, &MainWindow::togglePause);
     connect(m_stopButton, &QAbstractButton::clicked, this, &MainWindow::stopVideo);
     connect(m_saveFacesButton, &QAbstractButton::clicked, this, &MainWindow::saveFaces);
 
@@ -258,6 +523,7 @@ QWidget *MainWindow::createRecognitionPage()
     header->addWidget(m_openImageButton);
     header->addWidget(m_openVideoButton);
     header->addWidget(m_cameraButton);
+    header->addWidget(m_pauseButton);
     header->addWidget(m_stopButton);
     header->addWidget(m_saveFacesButton);
     layout->addLayout(header);
@@ -284,6 +550,15 @@ QWidget *MainWindow::createRecognitionPage()
     m_thoroughSwitch = new ToggleSwitch(QStringLiteral("تحليل معمّق للصور (أدق وأبطأ)"), settings);
     m_thoroughSwitch->setChecked(true);
 
+    m_enhanceSwitch = new ToggleSwitch(QStringLiteral("تحسين الصورة وتوضيحها"), settings);
+    m_enhanceSwitch->setToolTip(QStringLiteral("للصور الصغيرة أو المظلمة أو المشوشة (Ctrl+E):\n"
+                                               "تكبير، إزالة التشويش، موازنة الإضاءة والتباين، ثم زيادة الحدة.\n"
+                                               "تُعرض الصورة المحسّنة ويُحلل منها."));
+    connect(m_enhanceSwitch, &QAbstractButton::toggled, this, [this] {
+        if (!m_videoMode && !m_currentImagePath.isEmpty() && m_openImageButton->isEnabled())
+            analyzeImage(m_currentImagePath);
+    });
+
     m_frameStepSpin = new QSpinBox(settings);
     m_frameStepSpin->setRange(0, 60);
     m_frameStepSpin->setValue(0);
@@ -297,6 +572,7 @@ QWidget *MainWindow::createRecognitionPage()
     settingsLayout->addWidget(m_thresholdValue);
     settingsLayout->addWidget(separator(settings));
     settingsLayout->addWidget(m_thoroughSwitch);
+    settingsLayout->addWidget(m_enhanceSwitch);
     settingsLayout->addWidget(separator(settings));
     settingsLayout->addWidget(new QLabel(QStringLiteral("الفيديو: تحليل إطار من كل"), settings));
     settingsLayout->addWidget(m_frameStepSpin);
@@ -492,6 +768,8 @@ void MainWindow::setBusy(bool busy)
     m_openVideoButton->setEnabled(idle);
     m_cameraButton->setEnabled(idle);
     m_stopButton->setEnabled(m_videoRunning);
+    m_pauseButton->setEnabled(m_videoRunning);
+    m_pauseButton->setVisible(m_videoRunning);
     m_saveFacesButton->setEnabled(!m_faces.isEmpty());
     m_enrollFaceButton->setEnabled(m_ready && m_faceList->currentRow() >= 0);
 }
@@ -500,12 +778,11 @@ void MainWindow::setBusy(bool busy)
 
 void MainWindow::openFile(const QString &path)
 {
-    static const QStringList videoSuffixes{QStringLiteral("mp4"), QStringLiteral("avi"), QStringLiteral("mkv"),
-                                           QStringLiteral("mov"), QStringLiteral("wmv"), QStringLiteral("webm"),
-                                           QStringLiteral("m4v"), QStringLiteral("3gp")};
-    if (!m_ready)
+    if (!m_ready) {
+        m_pendingFile = path; // يُفتح تلقائياً بعد تحميل النماذج
         return;
-    if (videoSuffixes.contains(QFileInfo(path).suffix().toLower()))
+    }
+    if (isVideoFile(path))
         startVideo(path);
     else
         analyzeImage(path);
@@ -513,14 +790,17 @@ void MainWindow::openFile(const QString &path)
 
 void MainWindow::openImage()
 {
-    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("فتح صورة"), QString(), ImageFilter);
-    if (!path.isEmpty())
-        analyzeImage(path);
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("فتح صورة"), m_lastDirectory, ImageFilter);
+    if (path.isEmpty())
+        return;
+    m_lastDirectory = QFileInfo(path).absolutePath();
+    analyzeImage(path);
 }
 
 void MainWindow::analyzeImage(const QString &path)
 {
     m_videoMode = false;
+    m_currentImagePath = path;
     m_faces.clear();
     refreshFaceList();
     m_view->setFaces({});
@@ -532,20 +812,29 @@ void MainWindow::analyzeImage(const QString &path)
     const QImage preview = reader.read();
     if (!preview.isNull())
         m_view->setImage(preview, true);
-    m_view->setBusy(true, QStringLiteral("جارٍ كشف الوجوه والتعرف عليها"));
+    const bool enhance = m_enhanceSwitch->isChecked();
+    m_view->setBusy(true, enhance ? QStringLiteral("جارٍ تحسين الصورة ثم كشف الوجوه")
+                                  : QStringLiteral("جارٍ كشف الوجوه والتعرف عليها"));
     statusBar()->showMessage(QStringLiteral("جارٍ تحليل الصورة…"));
 
     const bool thorough = m_thoroughSwitch->isChecked();
     const FaceEngine *engine = &m_engine;
-    m_imageWatcher.setFuture(QtConcurrent::run([engine, path, thorough] {
+    m_imageWatcher.setFuture(QtConcurrent::run([engine, path, thorough, enhance] {
         ImageAnalysis result;
-        const cv::Mat image = ImageIO::loadImage(path);
+        cv::Mat image = ImageIO::loadImage(path);
         if (image.empty()) {
             result.error = QStringLiteral("تعذر قراءة الصورة: %1").arg(QDir::toNativeSeparators(path));
             return result;
         }
+        std::vector<AnalyzedFace> faces;
+        if (enhance) {
+            const cv::Mat enhanced = ImageIO::enhance(image);
+            faces = engine->analyzeEnhanced(image, enhanced, thorough);
+            image = enhanced;
+        } else {
+            faces = engine->analyze(image, thorough);
+        }
         result.image = ImageIO::toQImage(image);
-        const std::vector<AnalyzedFace> faces = engine->analyze(image, thorough);
         for (size_t i = 0; i < faces.size(); ++i)
             result.faces.append(ImageIO::makeFaceItem(image, faces[i], int(i) + 1));
         return result;
@@ -582,9 +871,11 @@ void MainWindow::onImageAnalyzed()
 
 void MainWindow::openVideo()
 {
-    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("فتح فيديو"), QString(), VideoFilter);
-    if (!path.isEmpty())
-        startVideo(path);
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("فتح فيديو"), m_lastDirectory, VideoFilter);
+    if (path.isEmpty())
+        return;
+    m_lastDirectory = QFileInfo(path).absolutePath();
+    startVideo(path);
 }
 
 void MainWindow::openCamera()
@@ -609,12 +900,35 @@ void MainWindow::startVideo(const QString &source)
     m_videoWorker->setFrameStep(m_frameStepSpin->value());
     m_videoClock.invalidate();
     m_videoStep = 1;
+    m_videoPaused = false;
+    m_pausedMs = 0;
+    m_pauseButton->setIconName(Icons::Name::Pause);
+    m_pauseButton->setText(QStringLiteral("إيقاف مؤقت"));
     QMetaObject::invokeMethod(m_videoWorker, "process", Qt::QueuedConnection, Q_ARG(QString, source));
 }
 
 void MainWindow::stopVideo()
 {
     m_videoWorker->requestStop();
+}
+
+void MainWindow::togglePause()
+{
+    if (!m_videoRunning)
+        return;
+    m_videoPaused = !m_videoPaused;
+    m_videoWorker->setPaused(m_videoPaused);
+    m_pauseButton->setIconName(m_videoPaused ? Icons::Name::Play : Icons::Name::Pause);
+    m_pauseButton->setText(m_videoPaused ? QStringLiteral("استئناف") : QStringLiteral("إيقاف مؤقت"));
+    if (m_videoPaused) {
+        m_pauseClock.start();
+        statusBar()->showMessage(QStringLiteral("متوقف مؤقتاً — اضغط «استئناف» أو مفتاح المسافة للمتابعة من حيث توقف"));
+    } else {
+        if (m_pauseClock.isValid())
+            m_pausedMs += m_pauseClock.elapsed();
+        m_pauseClock.invalidate();
+        statusBar()->showMessage(QStringLiteral("جارٍ استئناف التحليل…"));
+    }
 }
 
 void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces, int frameIndex, int frameCount)
@@ -631,7 +945,7 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     }
     QString status = frameCount > 0 ? QStringLiteral("الإطار %1 من %2").arg(frameIndex).arg(frameCount)
                                     : QStringLiteral("الإطار %1").arg(frameIndex);
-    const double seconds = m_videoClock.isValid() ? m_videoClock.elapsed() / 1000.0 : 0.0;
+    const double seconds = m_videoClock.isValid() ? (m_videoClock.elapsed() - m_pausedMs) / 1000.0 : 0.0;
     if (seconds > 1.0) {
         const double speed = frameIndex / seconds;
         status += QStringLiteral(" · السرعة %1 إطار/ث").arg(speed, 0, 'f', 1);
@@ -645,6 +959,8 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     if (m_videoStep > 1)
         status += QStringLiteral(" · تحليل إطار من كل %1").arg(m_videoStep);
     status += QStringLiteral(" · وجوه في الإطار: %1 · أشخاص مختلفون: %2").arg(faces.size()).arg(m_faces.size());
+    if (m_videoPaused)
+        status.prepend(QStringLiteral("متوقف مؤقتاً · "));
     statusBar()->showMessage(status);
 }
 
@@ -668,6 +984,7 @@ void MainWindow::onTrackUpdated(const FaceItem &track)
 void MainWindow::onVideoFinished(const QString &error)
 {
     m_videoRunning = false;
+    m_videoPaused = false;
     m_view->setBusy(false);
     m_progress->setVisible(false);
     if (!error.isEmpty()) {
@@ -753,7 +1070,7 @@ void MainWindow::showFaceDetails()
                                   "<div style='color:%3'>%4</div>")
                        .arg(Theme::Text.name(), matchLabel(face.match).toHtmlEscaped(), color, statusDescription(face.match.status));
     auto row_ = [](const QString &key, const QString &value) {
-        return QStringLiteral("<br><span style='color:#8b97b3'>%1:</span> <span style='color:#e6eaf2'>%2</span>").arg(key, value.toHtmlEscaped());
+        return QStringLiteral("<br><span style='color:#8aa3c7'>%1:</span> <span style='color:#e6f0ff'>%2</span>").arg(key, value.toHtmlEscaped());
     };
     html += row_(QStringLiteral("درجة التشابه"), QStringLiteral("%1%").arg(qRound(face.match.score * 100)));
     html += row_(QStringLiteral("جودة الوجه"), QStringLiteral("%1%").arg(qRound(face.quality * 100)));
@@ -767,7 +1084,7 @@ void MainWindow::showFaceDetails()
             html += row_(QStringLiteral("ملاحظات"), person.notes);
     }
     if (face.quality < 0.35f)
-        html += QStringLiteral("<br><span style='color:#f59e0b'>جودة الوجه منخفضة: النتيجة أقل موثوقية</span>");
+        html += QStringLiteral("<br><span style='color:#93c5fd'>جودة الوجه منخفضة: النتيجة أقل موثوقية</span>");
     m_faceDetails->setText(html);
 }
 
@@ -824,7 +1141,9 @@ bool MainWindow::enrollFace(const QString &personId, const FaceItem &face)
     if (face.aligned.empty())
         return false;
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    const std::vector<std::vector<float>> embeddings = m_engine.enrollmentEmbeddings(face.aligned);
+    const FaceEngine *engine = &m_engine;
+    const cv::Mat aligned = face.aligned;
+    const std::vector<std::vector<float>> embeddings = runResponsive([engine, aligned] { return engine->enrollmentEmbeddings(aligned); });
     const bool ok = m_database.addPhoto(personId, face.crop, embeddings, face.quality);
     QApplication::restoreOverrideCursor();
     return ok;
@@ -906,7 +1225,7 @@ void MainWindow::showPersonDetails()
     if (id.isEmpty()) {
         m_personAvatar->setPixmap(QPixmap());
         m_personDetails->setText(QStringLiteral("<div style='font-size:15pt; font-weight:600'>اختر شخصاً</div>"
-                                                "<div style='color:#8b97b3'>اختر شخصاً من القائمة لعرض بياناته وصوره، "
+                                                "<div style='color:#8aa3c7'>اختر شخصاً من القائمة لعرض بياناته وصوره، "
                                                 "أو اضغط \"شخص جديد\" لإضافة شخص.</div>"));
         return;
     }
@@ -917,7 +1236,7 @@ void MainWindow::showPersonDetails()
                                   : circularPixmapFromFile(m_database.photoPath(person.id, person.photos.first().file), 96));
 
     auto chip = [](const QString &key, const QString &value) {
-        return QStringLiteral("<span style='color:#8b97b3'>%1</span> <span style='color:#e6eaf2'>%2</span>&nbsp;&nbsp;&nbsp;")
+        return QStringLiteral("<span style='color:#8aa3c7'>%1</span> <span style='color:#e6f0ff'>%2</span>&nbsp;&nbsp;&nbsp;")
             .arg(key, value.toHtmlEscaped());
     };
     QString html = QStringLiteral("<div style='font-size:18pt; font-weight:700'>%1</div><div>").arg(person.name.toHtmlEscaped());
@@ -928,7 +1247,7 @@ void MainWindow::showPersonDetails()
     html += chip(QStringLiteral("أُضيف:"), person.created.toString(QStringLiteral("yyyy/MM/dd  hh:mm")));
     html += QStringLiteral("</div>");
     if (!person.notes.isEmpty())
-        html += QStringLiteral("<div style='color:#8b97b3; margin-top:6px'>%1</div>")
+        html += QStringLiteral("<div style='color:#8aa3c7; margin-top:6px'>%1</div>")
                     .arg(person.notes.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
     m_personDetails->setText(html);
 
@@ -1003,38 +1322,59 @@ void MainWindow::addPhotos()
 
 void MainWindow::addPhotosTo(const QString &personId)
 {
-    const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("اختر صوراً لوجه الشخص"), QString(), ImageFilter);
+    const QStringList files = QFileDialog::getOpenFileNames(this, QStringLiteral("اختر صوراً لوجه الشخص"), m_lastDirectory, ImageFilter);
     if (files.isEmpty())
         return;
+    m_lastDirectory = QFileInfo(files.first()).absolutePath();
+    addPhotoFiles(personId, files);
+}
 
-    QProgressDialog progress(QStringLiteral("جارٍ تحليل الصور…"), QStringLiteral("إلغاء"), 0, int(files.size()), this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
+void MainWindow::addPhotoFiles(const QString &personId, const QStringList &files)
+{
+    struct Enrollment
+    {
+        int faces = 0;
+        FaceItem face;
+        std::vector<std::vector<float>> embeddings;
+    };
+
+    BatchProgressDialog progress(int(files.size()), this);
+    progress.show();
 
     int added = 0;
     QStringList noFace;
     QStringList multipleFaces;
-    for (int i = 0; i < files.size() && !progress.wasCanceled(); ++i) {
-        progress.setValue(i);
-        progress.setLabelText(QStringLiteral("جارٍ تحليل %1…").arg(QFileInfo(files.at(i)).fileName()));
-        QCoreApplication::processEvents();
+    const FaceEngine *engine = &m_engine;
+    for (int i = 0; i < files.size() && progress.proceed(); ++i) {
+        const QString file = files.at(i);
+        progress.setProgress(i, QStringLiteral("جارٍ تحليل %1 (%2 من %3)…").arg(QFileInfo(file).fileName()).arg(i + 1).arg(files.size()));
 
-        const cv::Mat image = ImageIO::loadImage(files.at(i));
-        const std::vector<AnalyzedFace> faces = image.empty() ? std::vector<AnalyzedFace>() : m_engine.analyze(image, true);
-        if (faces.empty()) {
-            noFace << QFileInfo(files.at(i)).fileName();
+        // التحليل في الخلفية حتى تبقى الواجهة وأزرار الإيقاف المؤقت والإلغاء مستجيبة
+        const Enrollment result = runResponsive([engine, file] {
+            Enrollment enrollment;
+            const cv::Mat image = ImageIO::loadImage(file);
+            const std::vector<AnalyzedFace> faces = image.empty() ? std::vector<AnalyzedFace>() : engine->analyze(image, true);
+            enrollment.faces = int(faces.size());
+            if (faces.empty())
+                return enrollment;
+            // عند وجود أكثر من وجه يُعتمد الأكبر
+            const auto largest = std::max_element(faces.begin(), faces.end(), [](const AnalyzedFace &a, const AnalyzedFace &b) {
+                return a.detection.box.area() < b.detection.box.area();
+            });
+            enrollment.face = ImageIO::makeFaceItem(image, *largest, 0);
+            enrollment.embeddings = engine->enrollmentEmbeddings(largest->aligned);
+            return enrollment;
+        }, true);
+        if (result.faces == 0) {
+            noFace << QFileInfo(file).fileName();
             continue;
         }
-        // عند وجود أكثر من وجه يُعتمد الأكبر
-        const auto largest = std::max_element(faces.begin(), faces.end(), [](const AnalyzedFace &a, const AnalyzedFace &b) {
-            return a.detection.box.area() < b.detection.box.area();
-        });
-        if (faces.size() > 1)
-            multipleFaces << QFileInfo(files.at(i)).fileName();
-        if (enrollFace(personId, ImageIO::makeFaceItem(image, *largest, 0)))
+        if (result.faces > 1)
+            multipleFaces << QFileInfo(file).fileName();
+        if (m_database.addPhoto(personId, result.face.crop, result.embeddings, result.face.quality))
             ++added;
     }
-    progress.setValue(int(files.size()));
+    progress.hide();
 
     if (noFace.isEmpty() && multipleFaces.isEmpty()) {
         Toast::show(this, QStringLiteral("أُضيفت %1 صورة").arg(added));

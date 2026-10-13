@@ -1,0 +1,22 @@
+IDI_ICON1 ICON "app.ico"
+
+1 VERSIONINFO
+FILEVERSION 3,0,0,0
+PRODUCTVERSION 3,0,0,0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "Malamih - Offline face recognition"
+            VALUE "ProductName", "Malamih"
+            VALUE "FileVersion", "3.0.0"
+            VALUE "ProductVersion", "3.0.0"
+            VALUE "OriginalFilename", "Malamih.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

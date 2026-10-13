@@ -10,6 +10,7 @@
 #include <QMainWindow>
 
 class AnimatedStack;
+class QButtonGroup;
 class FancyButton;
 class ImageView;
 class QLabel;
@@ -40,7 +41,17 @@ public:
 
     void openFile(const QString &path); // صورة أو فيديو
 
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
+
 private:
+    void onEngineLoaded();
+    void setupShortcuts();
+    void loadSettings();
+    void saveSettings() const;
+    void pasteImage();
     QWidget *createSidebar();
     QWidget *createRecognitionPage();
     QWidget *createDatabasePage();
@@ -52,6 +63,7 @@ private:
     void openCamera();
     void startVideo(const QString &source);
     void stopVideo();
+    void togglePause();
     void onImageAnalyzed();
     void onFrameReady(const QImage &frame, const QList<FaceItem> &faces, int frameIndex, int frameCount);
     void onTrackUpdated(const FaceItem &track);
@@ -77,6 +89,7 @@ private:
     void removePerson();
     void addPhotos();
     void addPhotosTo(const QString &personId);
+    void addPhotoFiles(const QString &personId, const QStringList &files);
     void removePhoto();
     void openDatabaseFolder();
     QString selectedPersonId() const;
@@ -85,6 +98,11 @@ private:
     FaceEngine m_engine;
     FaceDatabase m_database;
     bool m_ready = false;
+    QFutureWatcher<QString> m_loadWatcher; // تحميل النماذج في الخلفية حتى تظهر النافذة فوراً
+    QString m_databaseError;
+    QString m_pendingFile;
+    QString m_currentImagePath;
+    QString m_lastDirectory;
 
     QList<FaceItem> m_faces; // وجوه الصورة الحالية، أو مسارات الوجوه في الفيديو
     bool m_videoMode = false;
@@ -95,8 +113,12 @@ private:
     VideoWorker *m_videoWorker = nullptr;
     QElapsedTimer m_videoClock;
     int m_videoStep = 1;
+    bool m_videoPaused = false;
+    QElapsedTimer m_pauseClock;
+    qint64 m_pausedMs = 0;
 
     AnimatedStack *m_pages = nullptr;
+    QButtonGroup *m_navGroup = nullptr;
     QLabel *m_personCountLabel = nullptr;
     QLabel *m_photoCountLabel = nullptr;
 
@@ -107,12 +129,14 @@ private:
     FancyButton *m_openImageButton = nullptr;
     FancyButton *m_openVideoButton = nullptr;
     FancyButton *m_cameraButton = nullptr;
+    FancyButton *m_pauseButton = nullptr;
     FancyButton *m_stopButton = nullptr;
     FancyButton *m_saveFacesButton = nullptr;
     FancyButton *m_enrollFaceButton = nullptr;
     QSlider *m_thresholdSlider = nullptr;
     QLabel *m_thresholdValue = nullptr;
     ToggleSwitch *m_thoroughSwitch = nullptr;
+    ToggleSwitch *m_enhanceSwitch = nullptr;
     QSpinBox *m_frameStepSpin = nullptr;
     QProgressBar *m_progress = nullptr;
 

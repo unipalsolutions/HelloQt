@@ -34,6 +34,12 @@ FancyButton::FancyButton(Icons::Name icon, const QString &text, Kind kind, QWidg
     connect(this, &QAbstractButton::toggled, this, [this](bool on) { animate(m_checkAnimation, m_check, on ? 1.0 : 0.0); });
 }
 
+void FancyButton::setIconName(Icons::Name icon)
+{
+    m_icon = icon;
+    update();
+}
+
 QVariantAnimation *FancyButton::makeAnimation(double *value, int duration)
 {
     auto *animation = new QVariantAnimation(this);
@@ -121,7 +127,7 @@ void FancyButton::paintEvent(QPaintEvent *)
         break;
     }
     case Kind::Secondary:
-        p.fillPath(shape, enabled ? mix(SurfaceHigh, QColor(0x26, 0x32, 0x55), m_hover) : Surface);
+        p.fillPath(shape, enabled ? mix(SurfaceHigh, QColor(0x1a, 0x38, 0x66), m_hover) : Surface);
         p.setPen(QPen(enabled ? mix(Border, Accent, m_hover) : Border, 1.0));
         p.drawPath(shape);
         foreground = enabled ? Text : Muted;
@@ -131,7 +137,7 @@ void FancyButton::paintEvent(QPaintEvent *)
         p.fillPath(shape, withAlpha(Danger, enabled ? int(30 + 60 * m_hover) : 14));
         p.setPen(QPen(withAlpha(Danger, enabled ? int(90 + 120 * m_hover) : 40), 1.0));
         p.drawPath(shape);
-        foreground = iconColor = enabled ? mix(QColor(0xff, 0x9a, 0xaa), Qt::white, m_hover) : Muted;
+        foreground = iconColor = enabled ? mix(QColor(0xbf, 0xdb, 0xfe), Qt::white, m_hover) : Muted;
         break;
     case Kind::Nav: {
         const double active = std::max(m_hover * 0.6, m_check);
@@ -319,7 +325,7 @@ void Toast::paintEvent(QPaintEvent *)
     const QColor color = m_kind == Kind::Success ? Success : m_kind == Kind::Warning ? Warning : Accent2;
     const QRectF bounds = QRectF(rect()).adjusted(1, 1, -1, -1);
     p.setPen(QPen(withAlpha(color, 120), 1.0));
-    p.setBrush(QColor(0x1d, 0x27, 0x44));
+    p.setBrush(QColor(0x15, 0x28, 0x4a));
     p.drawRoundedRect(bounds, 14, 14);
 
     const bool rtl = isRightToLeft();

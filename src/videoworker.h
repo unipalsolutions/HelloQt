@@ -25,6 +25,8 @@ public:
     void setThreshold(float threshold);
     void setFrameStep(int step); // 0: تلقائي حسب سرعة إطارات الفيديو
     void requestStop();
+    void setPaused(bool paused); // إيقاف مؤقت دون فقدان التقدم أو الأشخاص المكتشفين
+    bool isPaused() const { return m_paused; }
     void frameShown();
 
 public slots:
@@ -43,5 +45,6 @@ private:
     float m_threshold = 0.30f;
     std::atomic<int> m_frameStep{0};
     std::atomic<bool> m_stop{false};
+    std::atomic<bool> m_paused{false};
     std::atomic<int> m_pendingFrames{0};
 };

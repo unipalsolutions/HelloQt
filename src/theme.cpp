@@ -31,7 +31,7 @@ QMainWindow, QDialog, QMessageBox, QProgressDialog, QInputDialog { background: @
 QWidget { color: @text; }
 QFrame#sidebar { background: @sidebar; border: none; border-left: 1px solid @border; }
 QFrame#card { background: @surface; border: 1px solid @border; border-radius: 16px; }
-QFrame#viewCard { background: #080c18; border: 1px solid @border; border-radius: 16px; }
+QFrame#viewCard { background: #050d19; border: 1px solid @border; border-radius: 16px; }
 QFrame#statCard { background: @surfaceHigh; border: 1px solid @border; border-radius: 14px; }
 QFrame#separator { background: @border; max-width: 1px; min-width: 1px; }
 QLabel { background: transparent; }
@@ -39,7 +39,7 @@ QLabel#title { font-size: 20pt; font-weight: 700; }
 QLabel#subtitle, QLabel#muted { color: @muted; }
 QLabel#sectionTitle { font-size: 12pt; font-weight: 600; }
 QLabel#statValue { font-size: 18pt; font-weight: 700; color: @text; }
-QLabel#badge { background: rgba(109, 94, 252, 46); color: @accent2; border-radius: 10px; padding: 2px 10px; font-weight: 600; }
+QLabel#badge { background: rgba(47, 124, 246, 46); color: @accent2; border-radius: 10px; padding: 2px 10px; font-weight: 600; }
 QLineEdit, QSpinBox, QPlainTextEdit, QComboBox {
     background: @surfaceHigh; border: 1px solid @border; border-radius: 10px;
     padding: 7px 10px; color: @text; selection-background-color: @accent;
@@ -53,11 +53,11 @@ QComboBox QAbstractItemView {
 QListWidget { background: transparent; border: none; outline: 0; }
 QListWidget#photoGrid::item { border-radius: 12px; padding: 6px; color: @muted; }
 QListWidget#photoGrid::item:hover { background: @surfaceHigh; }
-QListWidget#photoGrid::item:selected { background: rgba(109, 94, 252, 70); color: @text; }
+QListWidget#photoGrid::item:selected { background: rgba(47, 124, 246, 70); color: @text; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #2a3654; border-radius: 3px; min-height: 30px; min-width: 30px; }
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #3b4b74; }
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #1e3a66; border-radius: 3px; min-height: 30px; min-width: 30px; }
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #2c5390; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 QSlider::groove:horizontal { height: 6px; background: @border; border-radius: 3px; }
@@ -74,9 +74,9 @@ QPushButton {
     background: @surfaceHigh; color: @text; border: 1px solid @border; border-radius: 10px;
     padding: 8px 18px; min-width: 70px;
 }
-QPushButton:hover { border-color: @accent; background: #222d4a; }
+QPushButton:hover { border-color: @accent; background: #17305a; }
 QPushButton:default { background: @accent; border-color: @accent; color: white; }
-QPushButton:default:hover { background: #7d70ff; }
+QPushButton:default:hover { background: #4b90ff; }
 QCheckBox { spacing: 8px; }
 )");
     const QList<QPair<QString, QColor>> colors{

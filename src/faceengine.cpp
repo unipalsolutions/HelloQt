@@ -134,7 +134,7 @@ cv::Mat similarityTransform(const std::array<cv::Point2f, 5> &src, const std::ar
 
 struct FaceEngine::Impl
 {
-    Ort::Env env{ORT_LOGGING_LEVEL_ERROR, "HelloQt"};
+    Ort::Env env{ORT_LOGGING_LEVEL_ERROR, "Malamih"};
     Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     std::unique_ptr<Ort::Session> detector;
     std::unique_ptr<Ort::Session> recognizer;
@@ -520,4 +520,31 @@ void FaceEngine::normalize(std::vector<float> &v)
         for (float &x : v)
             x = float(x / norm);
     }
+}
+
+std::vector<AnalyzedFace> FaceEngine::analyzeEnhanced(const cv::Mat &original, const cv::Mat &enhanced, bool thorough) const
+{
+    std::vector<AnalyzedFace> faces = analyze(enhanced, thorough);
+    if (faces.empty() || original.empty())
+        return faces;
+
+    const float sx = float(original.cols) / float(enhanced.cols);
+    const float sy = float(original.rows) / float(enhanced.rows);
+    std::vector<cv::Mat> aligned;
+    aligned.reserve(faces.size());
+    for (const AnalyzedFace &face : faces) {
+        DetectedFace mapped = face.detection;
+        mapped.box = cv::Rect2f(mapped.box.x * sx, mapped.box.y * sy, mapped.box.width * sx, mapped.box.height * sy);
+        for (cv::Point2f &point : mapped.landmarks)
+            point = cv::Point2f(point.x * sx, point.y * sy);
+        aligned.push_back(align(original, mapped));
+    }
+    const std::vector<std::vector<float>> originals = embedMany(aligned);
+    for (size_t i = 0; i < faces.size() && i < originals.size(); ++i) {
+        std::vector<float> &embedding = faces[i].embedding;
+        for (size_t k = 0; k < embedding.size() && k < originals[i].size(); ++k)
+            embedding[k] += originals[i][k];
+        normalize(embedding);
+    }
+    return faces;
 }

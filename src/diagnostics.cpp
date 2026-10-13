@@ -96,6 +96,38 @@ int selfTest(const QString &first, const QString &second, QTextStream &out)
     return 0;
 }
 
+// يقارن التعرف على صورة رديئة قبل التحسين وبعده، ويحفظ النسخة المحسّنة
+int enhanceTest(const QString &reference, const QString &probe, const QString &enhancedPath, QTextStream &out)
+{
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    const std::vector<AnalyzedFace> ref = engine.analyze(ImageIO::loadImage(reference), true);
+    if (ref.empty())
+        return 1;
+    const std::vector<std::vector<float>> templates = engine.enrollmentEmbeddings(ref.front().aligned);
+    const auto measure = [&](const std::vector<AnalyzedFace> &faces, const char *name) {
+        float best = -1.0f;
+        for (const AnalyzedFace &face : faces) {
+            for (const std::vector<float> &t : templates)
+                best = std::max(best, FaceEngine::cosine(t, face.embedding));
+        }
+        out << name << "_faces=" << faces.size() << "\n" << name << "_similarity=" << best << "\n";
+    };
+    const cv::Mat original = ImageIO::loadImage(probe);
+    if (original.empty())
+        return 1;
+    measure(engine.analyze(original, true), "original");
+    QElapsedTimer timer;
+    timer.start();
+    const cv::Mat enhanced = ImageIO::enhance(original);
+    out << "enhance_ms=" << timer.elapsed() << "\n";
+    measure(engine.analyze(enhanced, true), "enhanced");
+    measure(engine.analyzeEnhanced(original, enhanced, true), "fused");
+    ImageIO::toQImage(enhanced).save(enhancedPath);
+    return 0;
+}
+
 // يحلل فيديو كاملاً كما تفعل الواجهة ويقيس السرعة والذاكرة وعدد الأشخاص
 int videoTest(const QString &path, int step, QTextStream &out)
 {
@@ -260,7 +292,7 @@ int run(const QStringList &args)
         return -1;
     const QString command = args.at(1);
     if (command != QLatin1String("--self-test") && command != QLatin1String("--video-test")
-        && command != QLatin1String("--db-test"))
+        && command != QLatin1String("--db-test") && command != QLatin1String("--enhance-test"))
         return -1;
 
     QFile output(args.last());
@@ -268,15 +300,18 @@ int run(const QStringList &args)
         return 2;
     QTextStream out(&output);
 
-    // HelloQt --self-test <صورة1> <صورة2> <ملف النتائج>
+    // Malamih --self-test <صورة1> <صورة2> <ملف النتائج>
     if (command == QLatin1String("--self-test") && args.size() == 5)
         return selfTest(args.at(2), args.at(3), out);
-    // HelloQt --video-test <فيديو> [تحليل إطار من كل] <ملف النتائج>
+    // Malamih --video-test <فيديو> [تحليل إطار من كل] <ملف النتائج>
     if (command == QLatin1String("--video-test") && (args.size() == 4 || args.size() == 5))
         return videoTest(args.at(2), args.size() == 5 ? args.at(3).toInt() : 1, out);
-    // HelloQt --db-test <مجلد> <عدد الأشخاص> <صور لكل شخص> <ملف النتائج>
+    // Malamih --db-test <مجلد> <عدد الأشخاص> <صور لكل شخص> <ملف النتائج>
     if (command == QLatin1String("--db-test") && args.size() == 6)
         return databaseTest(args.at(2), args.at(3).toInt(), args.at(4).toInt(), out);
+    // Malamih --enhance-test <صورة مرجعية> <صورة رديئة> <حفظ المحسّنة> <ملف النتائج>
+    if (command == QLatin1String("--enhance-test") && args.size() == 6)
+        return enhanceTest(args.at(2), args.at(3), args.at(4), out);
     out << "error=invalid arguments\n";
     return 2;
 }

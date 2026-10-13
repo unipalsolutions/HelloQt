@@ -47,6 +47,25 @@ QPainterPath outline(Name name)
     case Name::Stop:
         p.addRoundedRect(QRectF(6, 6, 12, 12), 2.5, 2.5);
         break;
+    case Name::Pause:
+        line(9, 6, 9, 18);
+        line(15, 6, 15, 18);
+        break;
+    case Name::Play:
+        p.moveTo(8, 5.5);
+        p.lineTo(18.5, 12);
+        p.lineTo(8, 18.5);
+        p.closeSubpath();
+        break;
+    case Name::Sparkle:
+        p.moveTo(10, 3);
+        p.quadTo(10.8, 9.2, 17, 10);
+        p.quadTo(10.8, 10.8, 10, 17);
+        p.quadTo(9.2, 10.8, 3, 10);
+        p.quadTo(9.2, 9.2, 10, 3);
+        line(18, 15, 18, 21);
+        line(15, 18, 21, 18);
+        break;
     case Name::Save:
         line(12, 4, 12, 15);
         p.moveTo(7, 10);

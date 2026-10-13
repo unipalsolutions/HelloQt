@@ -47,6 +47,9 @@ public:
     float quality(const DetectedFace &face, const cv::Mat &aligned) const;
 
     std::vector<AnalyzedFace> analyze(const cv::Mat &bgr, bool thorough) const;
+    // يكشف الوجوه في النسخة المحسّنة (تظهر فيها الوجوه الصغيرة والمظلمة أوضح)، ثم يدمج بصمة كل وجه
+    // من النسختين المحسّنة والأصلية حتى لا يغيّر التحسين ملامح الوجه التي يعتمد عليها التعرف
+    std::vector<AnalyzedFace> analyzeEnhanced(const cv::Mat &original, const cv::Mat &enhanced, bool thorough) const;
 
     static float dot(const float *a, const float *b, size_t size);
     static float cosine(const std::vector<float> &a, const std::vector<float> &b);

@@ -52,14 +52,14 @@ jobs:
 
       - name: Deploy
         run: |
-          New-Item -ItemType Directory dist\HelloQt | Out-Null
-          Copy-Item build\HelloQt.exe, build\*.dll dist\HelloQt\
-          Copy-Item build\models dist\HelloQt\models -Recurse
-          windeployqt --release --no-translations dist\HelloQt\HelloQt.exe
+          New-Item -ItemType Directory dist\Malamih | Out-Null
+          Copy-Item build\Malamih.exe, build\*.dll dist\Malamih\
+          Copy-Item build\models dist\Malamih\models -Recurse
+          windeployqt --release --no-translations dist\Malamih\Malamih.exe
           $crt = Get-ChildItem "$env:VCToolsRedistDir\x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
           if (-not $crt) { throw "MSVC runtime not found under $env:VCToolsRedistDir" }
-          Copy-Item "$($crt.FullName)\*.dll" dist\HelloQt\
-          Get-ChildItem dist\HelloQt
+          Copy-Item "$($crt.FullName)\*.dll" dist\Malamih\
+          Get-ChildItem dist\Malamih
         shell: pwsh
 
       - name: Recognition test
@@ -70,7 +70,7 @@ jobs:
 
           function Compare-Faces($first, $second) {
             $out = Join-Path $PWD "result.txt"
-            $p = Start-Process dist\HelloQt\HelloQt.exe -ArgumentList '--self-test', $first, $second, $out -Wait -PassThru
+            $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--self-test', $first, $second, $out -Wait -PassThru
             $text = Get-Content $out -Raw
             Write-Host "$first vs $second (exit $($p.ExitCode)):`n$text"
             if ($p.ExitCode -ne 0) { throw "Self-test failed" }
@@ -83,19 +83,59 @@ jobs:
           if ($different -gt 0.25) { throw "Different people similarity too high: $different" }
         shell: pwsh
 
+      - name: Enhancement test
+        run: |
+          $out = Join-Path $PWD "enhance.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--enhance-test', 'testdata\obama.jpg', 'testdata\obama2.jpg', (Join-Path $PWD "enhanced.png"), $out -Wait -PassThru
+          $text = Get-Content $out -Raw
+          Write-Host "exit $($p.ExitCode):`n$text"
+          if ($p.ExitCode -ne 0) { throw "Enhancement test failed" }
+          $fused = [double](($text | Select-String 'fused_similarity=([-\d.]+)').Matches[0].Groups[1].Value)
+          if ($fused -lt 0.5) { throw "Recognition after enhancement too low: $fused" }
+        shell: pwsh
+
+      - name: Long video test
+        run: |
+          Invoke-WebRequest "https://raw.githubusercontent.com/ageitgey/face_recognition/master/examples/hamilton_clip.mp4" -OutFile testdata\clip.mp4
+          $out = Join-Path $PWD "video.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--video-test', 'testdata\clip.mp4', '6', $out -Wait -PassThru
+          $text = Get-Content $out -Raw
+          Write-Host "exit $($p.ExitCode):`n$text"
+          if ($p.ExitCode -ne 0) { throw "Video test failed" }
+          $frames = [int](($text | Select-String 'frames=(\d+)').Matches[0].Groups[1].Value)
+          $people = [int](($text | Select-String 'people=(\d+)').Matches[0].Groups[1].Value)
+          $memory = [double](($text | Select-String 'peak_memory_mb=([\d.]+)').Matches[0].Groups[1].Value)
+          if ($frames -lt 2000) { throw "Video was not fully processed: $frames frames" }
+          if ($people -lt 1) { throw "No people found in video" }
+          if ($memory -gt 1500) { throw "Memory use too high: $memory MB" }
+        shell: pwsh
+
+      - name: Large database test
+        run: |
+          $out = Join-Path $PWD "database.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--db-test', (Join-Path $PWD "dbtest"), '2000', '2', $out -Wait -PassThru
+          $text = Get-Content $out -Raw
+          Write-Host "exit $($p.ExitCode):`n$text"
+          if ($p.ExitCode -ne 0) { throw "Database test failed" }
+          $add = [double](($text | Select-String 'last_photo_add_ms=([\d.]+)').Matches[0].Groups[1].Value)
+          $open = [double](($text | Select-String 'open_ms=([\d.]+)').Matches[0].Groups[1].Value)
+          if ($add -gt 500) { throw "Adding a photo to a large database is too slow: $add ms" }
+          if ($open -gt 3000) { throw "Opening a large database is too slow: $open ms" }
+        shell: pwsh
+
       - name: Smoke test
         run: |
-          $p = Start-Process dist\HelloQt\HelloQt.exe -PassThru
+          $p = Start-Process dist\Malamih\Malamih.exe -PassThru
           Start-Sleep -Seconds 10
           $p.Refresh()
-          if ($p.HasExited) { throw "HelloQt exited early with code $($p.ExitCode)" }
+          if ($p.HasExited) { throw "Malamih exited early with code $($p.ExitCode)" }
           $title = $p.MainWindowTitle
           Write-Host "Window title: $title"
           Stop-Process -Id $p.Id
-          if ($title -ne "التعرف على الوجوه") { throw "Unexpected window title: '$title'" }
+          if ($title -ne "ملامح") { throw "Unexpected window title: '$title'" }
         shell: pwsh
 
       - uses: actions/upload-artifact@v4
         with:
-          name: HelloQt-windows-x64
-          path: dist/HelloQt
+          name: Malamih-windows-x64
+          path: dist/Malamih

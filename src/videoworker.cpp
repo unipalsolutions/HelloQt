@@ -4,6 +4,7 @@
 #include "imageio.h"
 
 #include <QMutexLocker>
+#include <QThread>
 
 #include <algorithm>
 #include <cmath>
@@ -107,6 +108,11 @@ void VideoWorker::requestStop()
     m_stop = true;
 }
 
+void VideoWorker::setPaused(bool paused)
+{
+    m_paused = paused;
+}
+
 void VideoWorker::frameShown()
 {
     --m_pendingFrames;
@@ -115,6 +121,7 @@ void VideoWorker::frameShown()
 void VideoWorker::process(const QString &source)
 {
     m_stop = false;
+    m_paused = false;
     m_pendingFrames = 0;
 
     cv::VideoCapture capture;
@@ -163,6 +170,8 @@ void VideoWorker::process(const QString &source)
     };
 
     while (!m_stop) {
+        while (m_paused && !m_stop)
+            QThread::msleep(25);
         // الإطارات المتخطاة تُقرأ دون فك ترميزها بالكامل، وهذا أسرع بكثير
         if (!camera && frameIndex % step != 0) {
             if (!capture.grab())
