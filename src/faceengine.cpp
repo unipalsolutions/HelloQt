@@ -146,7 +146,7 @@ struct FaceEngine::Impl
     std::vector<DetectedFace> detectAt(const cv::Mat &bgr, int inputSize, float threshold) const;
     bool recognizerBatch = false; // هل يقبل نموذج البصمة أكثر من وجه في التشغيل الواحد
 
-    std::vector<std::vector<float>> recognize(const std::vector<cv::Mat> &faces) const;
+    std::vector<std::vector<float>> recognize(const std::vector<cv::Mat> &faces, std::vector<float> *norms = nullptr) const;
 };
 
 std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inputSize, float threshold) const
@@ -223,7 +223,7 @@ std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inp
     return faces;
 }
 
-std::vector<std::vector<float>> FaceEngine::Impl::recognize(const std::vector<cv::Mat> &faces) const
+std::vector<std::vector<float>> FaceEngine::Impl::recognize(const std::vector<cv::Mat> &faces, std::vector<float> *norms) const
 {
     std::vector<std::vector<float>> result;
     if (faces.empty())
@@ -248,6 +248,13 @@ std::vector<std::vector<float>> FaceEngine::Impl::recognize(const std::vector<cv
         const size_t size = outputs[0].GetTensorTypeAndShapeInfo().GetElementCount() / count;
         for (size_t i = 0; i < count; ++i) {
             std::vector<float> embedding(data + i * size, data + (i + 1) * size);
+            // طول البصمة قبل التطبيع يرتفع كلما رأى النموذج وجهاً سليماً واضحاً
+            if (norms) {
+                double sum = 0.0;
+                for (float x : embedding)
+                    sum += double(x) * x;
+                norms->push_back(float(std::sqrt(sum)));
+            }
             FaceEngine::normalize(embedding);
             result.push_back(std::move(embedding));
         }
@@ -440,6 +447,12 @@ std::vector<std::vector<float>> FaceEngine::enrollmentEmbeddings(const cv::Mat &
     cv::Mat blurred;
     cv::GaussianBlur(aligned, blurred, cv::Size(0, 0), 1.8);
     versions.push_back(blurred);
+    // ضبابية حركة أفقية (كاميرا تهتز أو شخص يتحرك)
+    cv::Mat kernel = cv::Mat::zeros(9, 9, CV_32F);
+    kernel.row(4).setTo(1.0f / 9.0f);
+    cv::Mat moving;
+    cv::filter2D(aligned, moving, -1, kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
+    versions.push_back(moving);
     return embedMany(versions);
 }
 
@@ -547,4 +560,282 @@ std::vector<AnalyzedFace> FaceEngine::analyzeEnhanced(const cv::Mat &original, c
         normalize(embedding);
     }
     return faces;
+}
+
+namespace {
+
+// ينقل كشفاً من صورة محوّلة إلى إحداثيات الصورة الأصلية (inverse: من المحوّلة إلى الأصلية)
+DetectedFace mapBack(const DetectedFace &face, const cv::Matx23d &inverse)
+{
+    auto map = [&inverse](const cv::Point2f &p) {
+        return cv::Point2f(float(inverse(0, 0) * p.x + inverse(0, 1) * p.y + inverse(0, 2)),
+                           float(inverse(1, 0) * p.x + inverse(1, 1) * p.y + inverse(1, 2)));
+    };
+    DetectedFace out = face;
+    for (cv::Point2f &p : out.landmarks)
+        p = map(p);
+    const cv::Point2f corners[4] = {map({face.box.x, face.box.y}), map({face.box.x + face.box.width, face.box.y}),
+                                    map({face.box.x, face.box.y + face.box.height}),
+                                    map({face.box.x + face.box.width, face.box.y + face.box.height})};
+    float x1 = corners[0].x, y1 = corners[0].y, x2 = x1, y2 = y1;
+    for (const cv::Point2f &c : corners) {
+        x1 = std::min(x1, c.x);
+        y1 = std::min(y1, c.y);
+        x2 = std::max(x2, c.x);
+        y2 = std::max(y2, c.y);
+    }
+    // الصندوق المحيط بصندوق مُدار أكبر من الوجه، فيُصغَّر حول مركزه
+    const float rotatedArea = (x2 - x1) * (y2 - y1);
+    const float shrink = rotatedArea > 0 ? std::sqrt(std::max(0.5f, std::min(1.0f, face.box.area() * float(std::abs(cv::determinant(cv::Matx22d(inverse(0, 0), inverse(0, 1), inverse(1, 0), inverse(1, 1))))) / rotatedArea))) : 1.0f;
+    const cv::Point2f center((x1 + x2) / 2, (y1 + y2) / 2);
+    const float w = (x2 - x1) * shrink, h = (y2 - y1) * shrink;
+    out.box = cv::Rect2f(center.x - w / 2, center.y - h / 2, w, h);
+    return out;
+}
+
+// شكل منطقي لنقاط الوجه: العينان فوق الفم، والأنف بينهما، والمسافات متناسبة مع الصندوق
+bool plausibleFace(const DetectedFace &face)
+{
+    const auto &l = face.landmarks;
+    const cv::Point2f eyes = (l[0] + l[1]) / 2.0f, mouth = (l[3] + l[4]) / 2.0f;
+    const float eyeDistance = float(cv::norm(l[1] - l[0]));
+    const float eyeToMouth = float(cv::norm(mouth - eyes));
+    const float size = std::max(face.box.width, face.box.height);
+    if (eyeDistance < size * 0.18f || eyeDistance > size * 0.8f)
+        return false;
+    if (eyeToMouth < eyeDistance * 0.45f || eyeToMouth > eyeDistance * 2.2f)
+        return false;
+    // الأنف بين العينين والفم على المحور العمودي للوجه
+    const cv::Point2f axis = (mouth - eyes) / std::max(1e-3f, eyeToMouth);
+    const float along = (l[2] - eyes).dot(axis) / eyeToMouth;
+    return along > 0.15f && along < 0.95f;
+}
+
+bool insideFrame(const DetectedFace &f, const cv::Rect2f &frame)
+{
+    if (f.box.width < 6 || f.box.height < 6)
+        return false;
+    if ((f.box & frame).area() < f.box.area() * 0.75f)
+        return false;
+    return std::all_of(f.landmarks.begin(), f.landmarks.end(), [&frame](const cv::Point2f &p) { return frame.contains(p); });
+}
+
+} // namespace
+
+std::vector<AnalyzedFace> FaceEngine::analyzeRobust(const cv::Mat &bgr) const
+{
+    if (!isLoaded() || bgr.empty())
+        return {};
+    const cv::Rect2f frame(0.0f, 0.0f, float(bgr.cols), float(bgr.rows));
+    std::vector<DetectedFace> all = detect(bgr, true);
+    const bool poorlyLit = isPoorlyLit(bgr);
+    cv::Mat lit = bgr;
+    if (poorlyLit) {
+        // الصورة المحروقة تُغمَّق أولاً حتى تعود تفاصيل الوجه قبل تحسين التباين
+        cv::Mat gray;
+        cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
+        if (cv::mean(gray)[0] > 170.0) {
+            cv::Mat lut(1, 256, CV_8U);
+            for (int i = 0; i < 256; ++i)
+                lut.at<uchar>(i) = cv::saturate_cast<uchar>(255.0 * std::pow(i / 255.0, 2.2));
+            cv::LUT(bgr, lut, lit);
+        }
+        lit = enhance(lit);
+    }
+
+    // الكشوفات الضعيفة (وجه من زاوية حادة أو بعيد) تُقبل فقط إن اتفق عليها تمريران مختلفان
+    constexpr float Strong = 0.45f, Weak = 0.28f;
+    struct WeakFace
+    {
+        DetectedFace face;
+        int pass;
+    };
+    std::vector<WeakFace> weak;
+    int pass = 0;
+    auto collect = [&](const std::vector<DetectedFace> &faces, const cv::Matx23d &inverse) {
+        ++pass;
+        for (const DetectedFace &face : faces) {
+            DetectedFace mapped = mapBack(face, inverse);
+            if (!insideFrame(mapped, frame) || !plausibleFace(mapped))
+                continue;
+            if (mapped.score >= Strong)
+                all.push_back(mapped);
+            else
+                weak.push_back({mapped, pass});
+        }
+    };
+    collect(d->detectAt(lit, 1280, Weak), cv::Matx23d(1, 0, 0, 0, 1, 0));
+
+    // 1) الوجوه البعيدة في الصور الكبيرة: مربعات متداخلة بدقتها الأصلية تُكبَّر 1.5 مرة قبل الكشف
+    if (std::max(bgr.cols, bgr.rows) > 1280) {
+        const int tile = 640, step = 540;
+        for (int y = 0;; y += step) {
+            for (int x = 0;; x += step) {
+                const cv::Rect r = cv::Rect(x, y, tile, tile) & cv::Rect(0, 0, bgr.cols, bgr.rows);
+                if (r.width >= tile / 3 && r.height >= tile / 3)
+                    collect(d->detectAt(lit(r), tile * 3 / 2, Weak), cv::Matx23d(1, 0, r.x, 0, 1, r.y));
+                if (x + tile >= bgr.cols)
+                    break;
+            }
+            if (y + tile >= bgr.rows)
+                break;
+        }
+    }
+
+    // 2) الكاميرا المرتفعة تضغط الوجه رأسياً؛ مدّ الصورة رأسياً يعيد نسبه فيسهل كشفه
+    {
+        constexpr double Stretch = 1.5;
+        cv::Mat tall;
+        cv::resize(lit, tall, cv::Size(), 1.0, Stretch, cv::INTER_LINEAR);
+        collect(d->detectAt(tall, 1280, Weak), cv::Matx23d(1, 0, 0, 0, 1.0 / Stretch, 0));
+    }
+
+    // 3) صورة مقلوبة أو مدارة أو رأس مائل جداً: يُجرَّب فقط إن لم يوجد أي وجه
+    auto rotatedPass = [&](double degrees, float threshold) {
+        const cv::Point2f center(bgr.cols / 2.0f, bgr.rows / 2.0f);
+        cv::Mat forward = cv::getRotationMatrix2D(center, degrees, 1.0);
+        const cv::Rect2f bounds = cv::RotatedRect(center, bgr.size(), float(degrees)).boundingRect2f();
+        forward.at<double>(0, 2) += bounds.width / 2.0 - center.x;
+        forward.at<double>(1, 2) += bounds.height / 2.0 - center.y;
+        cv::Mat rotated;
+        cv::warpAffine(lit, rotated, forward, bounds.size(), cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+        cv::Mat inverse;
+        cv::invertAffineTransform(forward, inverse);
+        collect(d->detectAt(rotated, 960, threshold), cv::Matx23d(inverse));
+    };
+    auto acceptWeak = [&] {
+        for (size_t i = 0; i < weak.size(); ++i) {
+            for (size_t j = 0; j < weak.size(); ++j) {
+                if (weak[i].pass != weak[j].pass && iou(weak[i].face.box, weak[j].face.box) > 0.35f) {
+                    all.push_back(weak[i].face);
+                    break;
+                }
+            }
+        }
+        weak.clear();
+    };
+    acceptWeak();
+    // إن لم يوجد وجه واضح فقد تكون الصورة مدارة أو مقلوبة أو الرأس مائلاً جداً
+    auto clearFace = [&all] {
+        return std::any_of(all.begin(), all.end(), [](const DetectedFace &f) { return f.score >= 0.6f; });
+    };
+    if (!clearFace()) {
+        for (double degrees : {180.0, 90.0, -90.0})
+            rotatedPass(degrees, Weak);
+        acceptWeak();
+    }
+    if (!clearFace()) {
+        for (double degrees : {30.0, -30.0, 55.0, -55.0})
+            rotatedPass(degrees, Weak);
+        acceptWeak();
+    }
+
+    std::vector<DetectedFace> faces = nms(std::move(all), 0.4f);
+    faces.erase(std::remove_if(faces.begin(), faces.end(), [&frame](const DetectedFace &f) { return !insideFrame(f, frame); }),
+                faces.end());
+
+    // 5) اتجاه كل وجه: الكاشف قد يجد وجهاً مقلوباً أو مداراً لكن بنقاط خاطئة (العينان مكان الفم)،
+    // فتُدار منطقته وحدها في الاتجاهات الأربعة
+    for (DetectedFace &face : faces) {
+        const float side = std::max(face.box.width, face.box.height) * 2.0f;
+        const cv::Point2f center(face.box.x + face.box.width / 2, face.box.y + face.box.height / 2);
+        const cv::Rect region = cv::Rect(cv::Rect2f(center.x - side / 2, center.y - side / 2, side, side))
+                                & cv::Rect(0, 0, bgr.cols, bgr.rows);
+        if (region.width < 12 || region.height < 12)
+            continue;
+        const cv::Mat crop = lit(region);
+        const int input = std::clamp(int(std::max(region.width, region.height) * 1.5), 160, 480);
+        auto bestIn = [&](const std::vector<DetectedFace> &found, const cv::Matx23d &inverse, DetectedFace &best) {
+            float bestScore = -1.0f;
+            for (const DetectedFace &f : found) {
+                DetectedFace mapped = mapBack(f, inverse);
+                mapped.box.x += float(region.x);
+                mapped.box.y += float(region.y);
+                for (cv::Point2f &p : mapped.landmarks)
+                    p += cv::Point2f(float(region.x), float(region.y));
+                // صندوق الكشف الخاطئ قد ينزاح عن الوجه الحقيقي، فيكفي قرب المركز وتقارب الحجم
+                const cv::Point2f c(mapped.box.x + mapped.box.width / 2, mapped.box.y + mapped.box.height / 2);
+                const float size = std::max(face.box.width, face.box.height);
+                const float ratio = std::max(mapped.box.width, mapped.box.height) / std::max(1.0f, size);
+                if (cv::norm(c - center) < size * 0.6f && ratio > 0.5f && ratio < 2.0f && mapped.score > bestScore) {
+                    bestScore = mapped.score;
+                    best = mapped;
+                }
+            }
+            return bestScore;
+        };
+        // درجة الكاشف لا تكفي: يعطي الوجه المقلوب درجة عالية أيضاً. لذلك يُكشف الوجه في كل اتجاه،
+        // ويُعتمد الاتجاه الذي يرى فيه نموذج التعرف وجهاً أوضح (أطول بصمة قبل التطبيع)
+        std::vector<DetectedFace> options{face};
+        for (const cv::RotateFlags flag : {cv::ROTATE_180, cv::ROTATE_90_CLOCKWISE, cv::ROTATE_90_COUNTERCLOCKWISE}) {
+            cv::Mat rotated;
+            cv::rotate(crop, rotated, flag);
+            const double w = crop.cols, h = crop.rows;
+            // من إحداثيات الصورة المدارة إلى إحداثيات المنطقة
+            const cv::Matx23d inverse = flag == cv::ROTATE_180 ? cv::Matx23d(-1, 0, w, 0, -1, h)
+                                      : flag == cv::ROTATE_90_CLOCKWISE ? cv::Matx23d(0, 1, 0, -1, 0, h)
+                                                                        : cv::Matx23d(0, -1, w, 1, 0, 0);
+            DetectedFace candidate;
+            if (bestIn(d->detectAt(rotated, input, 0.3f), inverse, candidate) > 0.0f)
+                options.push_back(candidate);
+        }
+        if (options.size() < 2)
+            continue;
+        std::vector<cv::Mat> crops;
+        for (const DetectedFace &option : options)
+            crops.push_back(align(lit, option));
+        std::vector<float> norms;
+        d->recognize(crops, &norms);
+        if (norms.size() != options.size())
+            continue;
+        size_t best = 0;
+        for (size_t i = 1; i < norms.size(); ++i)
+            if (norms[i] > norms[best])
+                best = i;
+        // الاتجاه الحالي يُستبدل فقط إن كان واضح الخطأ: بصمته أقصر بكثير،
+        // أو اتجاه آخر كشفه أوضح بفارق كبير وبصمته ليست أقصر
+        if (best != 0 && norms[best] > norms[0] * 1.25f) {
+            face = options[best];
+            continue;
+        }
+        size_t clearest = 0;
+        for (size_t i = 1; i < options.size(); ++i)
+            if (options[i].score > options[clearest].score)
+                clearest = i;
+        if (clearest != 0 && options[clearest].score > options[0].score + 0.08f && norms[clearest] >= norms[0] * 0.97f)
+            face = options[clearest];
+    }
+
+    std::vector<AnalyzedFace> result;
+    std::vector<cv::Mat> aligned, alignedLit;
+    for (const DetectedFace &face : faces) {
+        AnalyzedFace analyzed;
+        analyzed.detection = face;
+        analyzed.aligned = align(bgr, face);
+        analyzed.quality = quality(face, analyzed.aligned);
+        aligned.push_back(analyzed.aligned);
+        if (poorlyLit)
+            alignedLit.push_back(align(lit, face));
+        result.push_back(std::move(analyzed));
+    }
+    constexpr size_t Chunk = 16;
+    for (size_t start = 0; start < aligned.size(); start += Chunk) {
+        const size_t end = std::min(aligned.size(), start + Chunk);
+        const auto slice = [&](const std::vector<cv::Mat> &v) {
+            return std::vector<cv::Mat>(v.begin() + std::ptrdiff_t(start), v.begin() + std::ptrdiff_t(end));
+        };
+        std::vector<std::vector<float>> embeddings = embedMany(slice(aligned));
+        // في الإضاءة السيئة تُدمج بصمة النسخة المحسّنة مع الأصلية
+        if (poorlyLit) {
+            const std::vector<std::vector<float>> extra = embedMany(slice(alignedLit));
+            for (size_t i = 0; i < embeddings.size() && i < extra.size(); ++i) {
+                for (size_t k = 0; k < embeddings[i].size() && k < extra[i].size(); ++k)
+                    embeddings[i][k] += extra[i][k];
+                normalize(embeddings[i]);
+            }
+        }
+        for (size_t i = start; i < end; ++i)
+            result[i].embedding = std::move(embeddings[i - start]);
+    }
+    return result;
 }

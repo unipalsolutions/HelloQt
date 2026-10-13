@@ -1246,7 +1246,8 @@ void MainWindow::analyzeImage(const QString &path)
             faces = engine->analyzeEnhanced(image, enhanced, thorough);
             image = enhanced;
         } else {
-            faces = engine->analyze(image, thorough);
+            // التحليل المعمّق يجرّب كل الحيل: الوجوه البعيدة، والزوايا العلوية، والصور المدارة، والإضاءة السيئة
+            faces = thorough ? engine->analyzeRobust(image) : engine->analyze(image, false);
         }
         result.image = ImageIO::toQImage(image);
         for (size_t i = 0; i < faces.size(); ++i)
@@ -2495,7 +2496,9 @@ void MainWindow::addPhotoFiles(const QString &personId, const QStringList &files
         const Enrollment result = runResponsive([engine, file] {
             Enrollment enrollment;
             const cv::Mat image = ImageIO::loadImage(file);
-            const std::vector<AnalyzedFace> faces = image.empty() ? std::vector<AnalyzedFace>() : engine->analyze(image, true);
+            std::vector<AnalyzedFace> faces = image.empty() ? std::vector<AnalyzedFace>() : engine->analyze(image, true);
+            if (faces.empty() && !image.empty())
+                faces = engine->analyzeRobust(image);
             enrollment.faces = int(faces.size());
             if (faces.empty())
                 return enrollment;

@@ -13,7 +13,12 @@
 #include <QSet>
 #include <QTextStream>
 
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+
 #include <algorithm>
+#include <array>
+#include <functional>
 #include <random>
 
 #ifdef _WIN32
@@ -485,6 +490,318 @@ int databaseTest(const QString &directory, int persons, int photosPerPerson, QTe
     return goodOk && profileOk && !firstPage.isEmpty() && !byId.isEmpty() ? 0 : 1;
 }
 
+// ───────────── اختبار أسوأ الظروف ─────────────
+
+struct Scenario
+{
+    const char *name;
+    std::function<cv::Mat(const cv::Mat &, const std::vector<AnalyzedFace> &)> apply;
+};
+
+cv::Mat scaleTo(const cv::Mat &image, int width)
+{
+    cv::Mat out;
+    const double f = double(width) / image.cols;
+    cv::resize(image, out, cv::Size(), f, f, f < 1.0 ? cv::INTER_AREA : cv::INTER_CUBIC);
+    return out;
+}
+
+cv::Mat addNoise(const cv::Mat &image, double sigma, unsigned seed)
+{
+    cv::Mat noise(image.size(), CV_16SC3);
+    cv::theRNG().state = seed;
+    cv::randn(noise, cv::Scalar::all(0), cv::Scalar::all(sigma));
+    cv::Mat out;
+    cv::Mat wide;
+    image.convertTo(wide, CV_16SC3);
+    cv::add(wide, noise, wide);
+    wide.convertTo(out, CV_8UC3);
+    return out;
+}
+
+cv::Mat jpeg(const cv::Mat &image, int quality)
+{
+    std::vector<uchar> buffer;
+    cv::imencode(".jpg", image, buffer, {cv::IMWRITE_JPEG_QUALITY, quality});
+    return cv::imdecode(buffer, cv::IMREAD_COLOR);
+}
+
+cv::Mat lighting(const cv::Mat &image, double gain, double gamma)
+{
+    cv::Mat lut(1, 256, CV_8U);
+    for (int i = 0; i < 256; ++i)
+        lut.at<uchar>(i) = cv::saturate_cast<uchar>(255.0 * std::pow(i / 255.0, gamma) * gain);
+    cv::Mat out;
+    cv::LUT(image, lut, out);
+    return out;
+}
+
+cv::Mat rotate(const cv::Mat &image, double degrees)
+{
+    const cv::Point2f center(image.cols / 2.0f, image.rows / 2.0f);
+    cv::Mat m = cv::getRotationMatrix2D(center, degrees, 1.0);
+    const cv::Rect2f bounds = cv::RotatedRect(center, image.size(), float(degrees)).boundingRect2f();
+    m.at<double>(0, 2) += bounds.width / 2.0 - center.x;
+    m.at<double>(1, 2) += bounds.height / 2.0 - center.y;
+    cv::Mat out;
+    cv::warpAffine(image, out, m, bounds.size(), cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+    return out;
+}
+
+// يغطي جزءاً من كل وجه (كمامة أو نظارة شمسية) اعتماداً على نقاط الوجه في الصورة الأصلية
+cv::Mat cover(const cv::Mat &image, const std::vector<AnalyzedFace> &faces, bool mouth)
+{
+    cv::Mat out = image.clone();
+    for (const AnalyzedFace &face : faces) {
+        const auto &l = face.detection.landmarks;
+        const float eye = float(cv::norm(l[1] - l[0]));
+        if (mouth) {
+            const float top = l[2].y + eye * 0.12f;
+            const cv::Rect2f box = face.detection.box;
+            cv::rectangle(out, cv::Rect2f(box.x - eye * 0.1f, top, box.width + eye * 0.2f, box.y + box.height - top + eye * 0.2f),
+                          cv::Scalar(205, 200, 190), cv::FILLED);
+        } else {
+            const cv::Point2f mid = (l[0] + l[1]) / 2.0f;
+            cv::rectangle(out, cv::Rect2f(mid.x - eye * 1.05f, mid.y - eye * 0.32f, eye * 2.1f, eye * 0.62f), cv::Scalar(20, 20, 20),
+                          cv::FILLED);
+        }
+    }
+    return out;
+}
+
+// كاميرا مرتفعة تنظر إلى الأسفل: أعلى الرأس أقرب وأعرض، والذقن أبعد ومنضغط
+cv::Mat highAngle(const cv::Mat &image, double strength)
+{
+    const float w = float(image.cols), h = float(image.rows);
+    const float inset = float(w * 0.18 * strength);
+    const std::array<cv::Point2f, 4> from{cv::Point2f(0, 0), cv::Point2f(w, 0), cv::Point2f(w, h), cv::Point2f(0, h)};
+    const float squash = float(h * (1.0 - 0.32 * strength));
+    const std::array<cv::Point2f, 4> to{cv::Point2f(0, 0), cv::Point2f(w, 0), cv::Point2f(w - inset, squash), cv::Point2f(inset, squash)};
+    cv::Mat out;
+    cv::warpPerspective(image, out, cv::getPerspectiveTransform(from.data(), to.data()), cv::Size(int(w), int(squash)),
+                        cv::INTER_LINEAR, cv::BORDER_REPLICATE);
+    return out;
+}
+
+// الصورة مصغّرة داخل لقطة كبيرة بخلفية متنوعة، فيبدو الوجه بعيداً (faceWidth بكسل تقريباً)
+cv::Mat farAway(const cv::Mat &image, const std::vector<AnalyzedFace> &faces, float faceWidth, cv::Size canvasSize)
+{
+    float widest = 0.0f;
+    for (const AnalyzedFace &face : faces)
+        widest = std::max(widest, face.detection.box.width);
+    const double f = widest > 0 ? std::min(1.0, double(faceWidth / widest)) : 0.15;
+    cv::Mat small;
+    cv::resize(image, small, cv::Size(), f, f, cv::INTER_AREA);
+    cv::Mat canvas(canvasSize, CV_8UC3);
+    cv::theRNG().state = 21;
+    cv::randu(canvas, cv::Scalar::all(40), cv::Scalar::all(200));
+    cv::GaussianBlur(canvas, canvas, cv::Size(0, 0), 9);
+    const int x = std::max(0, int(canvas.cols * 0.62) - small.cols / 2), y = std::max(0, int(canvas.rows * 0.55) - small.rows / 2);
+    const cv::Rect roi = cv::Rect(x, y, small.cols, small.rows) & cv::Rect(0, 0, canvas.cols, canvas.rows);
+    small(cv::Rect(0, 0, roi.width, roi.height)).copyTo(canvas(roi));
+    return canvas;
+}
+
+std::vector<Scenario> scenarios()
+{
+    using Faces = std::vector<AnalyzedFace>;
+    auto motion = [](const cv::Mat &m, int size) {
+        cv::Mat kernel = cv::Mat::zeros(size, size, CV_32F);
+        kernel.row(size / 2).setTo(1.0f / size);
+        cv::Mat out;
+        cv::filter2D(m, out, -1, kernel);
+        return out;
+    };
+    auto blur = [](const cv::Mat &m, double sigma) {
+        cv::Mat out;
+        cv::GaussianBlur(m, out, cv::Size(0, 0), sigma);
+        return out;
+    };
+    return {
+        {"original", [](const cv::Mat &m, const Faces &) { return m.clone(); }},
+        {"dark", [](const cv::Mat &m, const Faces &) { return lighting(m, 0.35, 1.6); }},
+        {"very_dark_noisy", [](const cv::Mat &m, const Faces &) { return addNoise(lighting(m, 0.18, 1.8), 6, 3); }},
+        {"overexposed", [](const cv::Mat &m, const Faces &) { return lighting(m, 1.9, 0.6); }},
+        {"low_contrast", [](const cv::Mat &m, const Faces &) {
+             cv::Mat out;
+             m.convertTo(out, -1, 0.35, 120);
+             return out;
+         }},
+        {"tiny", [](const cv::Mat &m, const Faces &) { return scaleTo(m, std::min(m.cols, 150)); }},
+        {"small", [](const cv::Mat &m, const Faces &) { return scaleTo(m, std::min(m.cols, 240)); }},
+        {"blur", [blur](const cv::Mat &m, const Faces &) { return blur(m, std::max(2.0, m.cols / 220.0)); }},
+        {"motion_blur", [motion](const cv::Mat &m, const Faces &) { return motion(m, std::max(9, m.cols / 45) | 1); }},
+        {"noise", [](const cv::Mat &m, const Faces &) { return addNoise(m, 28, 5); }},
+        {"jpeg_q6", [](const cv::Mat &m, const Faces &) { return jpeg(m, 6); }},
+        {"grayscale", [](const cv::Mat &m, const Faces &) {
+             cv::Mat gray, out;
+             cv::cvtColor(m, gray, cv::COLOR_BGR2GRAY);
+             cv::cvtColor(gray, out, cv::COLOR_GRAY2BGR);
+             return out;
+         }},
+        {"color_cast", [](const cv::Mat &m, const Faces &) {
+             cv::Mat out;
+             cv::multiply(m, cv::Scalar(1.35, 0.85, 0.55), out);
+             return out;
+         }},
+        {"tilt_35", [](const cv::Mat &m, const Faces &) { return rotate(m, 35); }},
+        {"rotated_90", [](const cv::Mat &m, const Faces &) {
+             cv::Mat out;
+             cv::rotate(m, out, cv::ROTATE_90_CLOCKWISE);
+             return out;
+         }},
+        {"upside_down", [](const cv::Mat &m, const Faces &) {
+             cv::Mat out;
+             cv::rotate(m, out, cv::ROTATE_180);
+             return out;
+         }},
+        {"mirrored", [](const cv::Mat &m, const Faces &) {
+             cv::Mat out;
+             cv::flip(m, out, 1);
+             return out;
+         }},
+        {"mask", [](const cv::Mat &m, const Faces &f) { return cover(m, f, true); }},
+        {"sunglasses", [](const cv::Mat &m, const Faces &f) { return cover(m, f, false); }},
+        {"high_angle", [](const cv::Mat &m, const Faces &) { return highAngle(m, 1.0); }},
+        {"high_angle_steep", [](const cv::Mat &m, const Faces &) { return highAngle(m, 1.6); }},
+        {"high_angle_steep_far", [](const cv::Mat &m, const Faces &f) { return farAway(highAngle(m, 1.6), f, 36, cv::Size(1920, 1080)); }},
+        {"far_24px", [](const cv::Mat &m, const Faces &f) { return farAway(m, f, 24, cv::Size(1920, 1080)); }},
+        {"far_16px_4k", [](const cv::Mat &m, const Faces &f) { return farAway(m, f, 16, cv::Size(3840, 2160)); }},
+        {"high_angle_far", [](const cv::Mat &m, const Faces &f) { return farAway(highAngle(m, 1.0), f, 30, cv::Size(2560, 1440)); }},
+        {"high_angle_far_tilt", [](const cv::Mat &m, const Faces &f) {
+             return farAway(rotate(highAngle(m, 1.2), 25), f, 34, cv::Size(1920, 1080));
+         }},
+        {"cctv", [blur](const cv::Mat &m, const Faces &) { return jpeg(addNoise(blur(scaleTo(m, std::min(m.cols, 260)), 0.8), 10, 9), 25); }},
+        {"night_cctv", [blur](const cv::Mat &m, const Faces &) {
+             return jpeg(addNoise(lighting(blur(scaleTo(m, std::min(m.cols, 320)), 0.7), 0.3, 1.5), 7, 11), 30);
+         }},
+    };
+}
+
+// يسجّل الأشخاص من مجلد (مجلد فرعي لكل شخص)، ثم يطبّق كل ظرف سيئ على صور الاختبار ويتحقق من التعرف.
+// اسم صورة الاختبار يحدد من فيها: "obama+biden__x.jpg"، و"unknown__x.jpg" لشخص غير مسجل
+int stressTest(const QString &enrollDir, const QString &probeDir, QTextStream &out)
+{
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    const QString dbDir = QDir::temp().filePath(QStringLiteral("malamih-stress"));
+    QDir(dbDir).removeRecursively();
+    FaceDatabase database;
+    QString error;
+    if (!database.open(dbDir, &error)) {
+        out << "error=" << error << "\n";
+        return 1;
+    }
+
+    QHash<QString, QString> names; // معرّف الشخص -> اسم المجلد
+    for (const QFileInfo &folder : QDir(enrollDir).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+        Person person;
+        person.name = folder.fileName();
+        const QString id = database.addPerson(person);
+        names.insert(id, person.name);
+        for (const QFileInfo &file : QDir(folder.filePath()).entryInfoList(QDir::Files, QDir::Name)) {
+            const cv::Mat image = ImageIO::loadImage(file.filePath());
+            std::vector<AnalyzedFace> faces = engine.analyze(image, true);
+            if (faces.empty()) {
+                out << "enroll_failed=" << file.fileName() << "\n";
+                continue;
+            }
+            const auto largest = std::max_element(faces.begin(), faces.end(), [](const AnalyzedFace &a, const AnalyzedFace &b) {
+                return a.detection.box.area() < b.detection.box.area();
+            });
+            const FaceItem item = ImageIO::makeFaceItem(image, *largest, 1);
+            database.addPhoto(id, ImageIO::faceCrop(item), engine.enrollmentEmbeddings(largest->aligned), largest->quality);
+        }
+    }
+    const GalleryPtr gallery = database.gallery();
+    constexpr float Threshold = 0.30f;
+
+    struct Probe
+    {
+        QString file;
+        cv::Mat image;
+        QSet<QString> expected;
+        std::vector<AnalyzedFace> reference;
+    };
+    std::vector<Probe> probes;
+    for (const QFileInfo &file : QDir(probeDir).entryInfoList(QDir::Files, QDir::Name)) {
+        Probe probe;
+        probe.file = file.fileName();
+        probe.image = ImageIO::loadImage(file.filePath());
+        if (probe.image.empty())
+            continue;
+        for (const QString &name : file.completeBaseName().section(QStringLiteral("__"), 0, 0).split(QLatin1Char('+')))
+            if (name != QLatin1String("unknown"))
+                probe.expected.insert(name);
+        probe.reference = engine.analyze(probe.image, true);
+        probes.push_back(std::move(probe));
+    }
+
+    // للمقارنة مع المسار القديم: MALAMIH_STRESS_BASELINE=1
+    const bool baseline = qEnvironmentVariableIntValue("MALAMIH_STRESS_BASELINE") == 1;
+    const QString only = qEnvironmentVariable("MALAMIH_STRESS_ONLY");
+    int totalExpected = 0, totalFound = 0, totalWrong = 0;
+    QElapsedTimer timer;
+    timer.start();
+    for (const Scenario &scenario : scenarios()) {
+        if (!only.isEmpty() && !only.split(QLatin1Char(',')).contains(QLatin1String(scenario.name)))
+            continue;
+        int expected = 0, found = 0, wrong = 0;
+        double similarity = 0.0;
+        int similarityCount = 0;
+        QStringList misses;
+        for (const Probe &probe : probes) {
+            const cv::Mat degraded = scenario.apply(probe.image, probe.reference);
+            const std::vector<AnalyzedFace> faces = baseline ? engine.analyze(degraded, true) : engine.analyzeRobust(degraded);
+            QSet<QString> seen;
+            for (const AnalyzedFace &face : faces) {
+                const MatchResult match = FaceDatabase::identify(*gallery, face.embedding, Threshold);
+                const QString name = names.value(match.personId);
+                if (match.status == MatchStatus::Confirmed) {
+                    if (probe.expected.contains(name)) {
+                        seen.insert(name);
+                        similarity += match.score;
+                        ++similarityCount;
+                    } else {
+                        ++wrong;
+                        misses << QStringLiteral("%1:wrong=%2").arg(probe.file, name);
+                    }
+                }
+            }
+            expected += int(probe.expected.size());
+            found += int(seen.size());
+            for (const QString &name : probe.expected) {
+                if (seen.contains(name))
+                    continue;
+                // أعلى تشابه مع الشخص المفقود يبين هل فشل الكشف (لا وجوه) أم التعرف (تشابه منخفض)
+                float best = -1.0f;
+                for (const AnalyzedFace &face : faces)
+                    for (const MatchResult &c : FaceDatabase::candidates(*gallery, face.embedding, 5, Threshold))
+                        if (names.value(c.personId) == name)
+                            best = std::max(best, c.score);
+                misses << QStringLiteral("%1:miss=%2(faces=%3,sim=%4)").arg(probe.file, name).arg(faces.size()).arg(best, 0, 'f', 2);
+            }
+        }
+        totalExpected += expected;
+        totalFound += found;
+        totalWrong += wrong;
+        out << "scenario=" << scenario.name << " found=" << found << "/" << expected << " wrong=" << wrong
+            << " mean_similarity=" << (similarityCount ? similarity / similarityCount : 0.0);
+        if (!misses.isEmpty())
+            out << " misses=" << misses.join(QLatin1Char(','));
+        out << "\n";
+        out.flush();
+    }
+    out << "total_found=" << totalFound << "/" << totalExpected << "\n";
+    out << "recall=" << (totalExpected ? double(totalFound) / totalExpected : 0.0) << "\n";
+    out << "total_wrong=" << totalWrong << "\n";
+    out << "elapsed_s=" << timer.elapsed() / 1000.0 << "\n";
+    database.close();
+    QDir(dbDir).removeRecursively();
+    return totalWrong == 0 ? 0 : 1;
+}
+
 } // namespace
 
 int run(const QStringList &args)
@@ -494,7 +811,7 @@ int run(const QStringList &args)
     const QString command = args.at(1);
     if (command != QLatin1String("--self-test") && command != QLatin1String("--video-test")
         && command != QLatin1String("--db-test") && command != QLatin1String("--enhance-test")
-        && command != QLatin1String("--embed-dump"))
+        && command != QLatin1String("--embed-dump") && command != QLatin1String("--stress-test"))
         return -1;
 
     QFile output(args.last());
@@ -517,6 +834,9 @@ int run(const QStringList &args)
     // Malamih --enhance-test <صورة مرجعية> <صورة رديئة> <حفظ المحسّنة> <ملف النتائج>
     if (command == QLatin1String("--enhance-test") && args.size() == 6)
         return enhanceTest(args.at(2), args.at(3), args.at(4), out);
+    // Malamih --stress-test <مجلد التسجيل> <مجلد صور الاختبار> <ملف النتائج>
+    if (command == QLatin1String("--stress-test") && args.size() == 5)
+        return stressTest(args.at(2), args.at(3), out);
     out << "error=invalid arguments\n";
     return 2;
 }

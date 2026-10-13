@@ -647,7 +647,7 @@ void MatchPage::load(int slot, const QString &path)
             result.error = QStringLiteral("تعذر قراءة الصورة");
             return result;
         }
-        const std::vector<AnalyzedFace> faces = engine->analyze(image, true);
+        const std::vector<AnalyzedFace> faces = engine->analyzeRobust(image);
         result.image = ImageIO::toQImage(image);
         for (size_t i = 0; i < faces.size(); ++i)
             result.faces.append(ImageIO::makeFaceItem(image, faces[i], int(i) + 1));
