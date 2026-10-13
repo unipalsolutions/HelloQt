@@ -1,0 +1,39 @@
+name: Build Windows
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Deploy
+        run: |
+          mkdir dist\HelloQt
+          copy build\HelloQt.exe dist\HelloQt\
+          windeployqt --release --no-translations dist\HelloQt\HelloQt.exe
+          copy "%VCToolsRedistDir%x64\Microsoft.VC143.CRT\*.dll" dist\HelloQt\
+        shell: cmd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HelloQt-windows-x64
+          path: dist/HelloQt
