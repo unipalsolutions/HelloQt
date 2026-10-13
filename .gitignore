@@ -1,6 +1,7 @@
 build/
 build-*/
 dist/
+.deps-cache/
 CMakeLists.txt.user*
 *.autosave
 .vs/

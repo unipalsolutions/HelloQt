@@ -1,0 +1,459 @@
+#include "faceengine.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
+#include <QThread>
+
+#include <onnxruntime_cxx_api.h>
+#include <opencv2/imgproc.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+
+namespace {
+
+const char *const DetectorFile = "det_10g.onnx";
+const char *const RecognizerFile = "w600k_r50.onnx";
+
+constexpr int AlignedSize = 112;
+
+// مواضع النقاط الخمس المرجعية في مدخل ArcFace بحجم 112x112
+const std::array<cv::Point2f, 5> ArcFaceTemplate = {{
+    {38.2946f, 51.6963f},
+    {73.5318f, 51.5014f},
+    {56.0252f, 71.7366f},
+    {41.5493f, 92.3655f},
+    {70.7299f, 92.2041f},
+}};
+
+std::basic_string<ORTCHAR_T> toOrtPath(const QString &path)
+{
+#ifdef _WIN32
+    return QDir::toNativeSeparators(path).toStdWString();
+#else
+    return QFile::encodeName(path).toStdString();
+#endif
+}
+
+// BGR uint8 بترتيب HWC إلى RGB float بترتيب NCHW مع (x - mean) * scale
+std::vector<float> toBlob(const cv::Mat &bgr, float mean, float scale)
+{
+    const int h = bgr.rows;
+    const int w = bgr.cols;
+    std::vector<float> blob(size_t(3) * h * w);
+    float *r = blob.data();
+    float *g = r + size_t(h) * w;
+    float *b = g + size_t(h) * w;
+    for (int y = 0; y < h; ++y) {
+        const auto *row = bgr.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < w; ++x) {
+            const size_t i = size_t(y) * w + x;
+            b[i] = (row[x][0] - mean) * scale;
+            g[i] = (row[x][1] - mean) * scale;
+            r[i] = (row[x][2] - mean) * scale;
+        }
+    }
+    return blob;
+}
+
+float iou(const cv::Rect2f &a, const cv::Rect2f &b)
+{
+    const float inter = (a & b).area();
+    const float total = a.area() + b.area() - inter;
+    return total > 0.0f ? inter / total : 0.0f;
+}
+
+std::vector<DetectedFace> nms(std::vector<DetectedFace> faces, float threshold)
+{
+    std::sort(faces.begin(), faces.end(),
+              [](const DetectedFace &a, const DetectedFace &b) { return a.score > b.score; });
+    std::vector<DetectedFace> kept;
+    for (const DetectedFace &face : faces) {
+        const bool overlaps = std::any_of(kept.begin(), kept.end(), [&](const DetectedFace &k) {
+            return iou(k.box, face.box) > threshold;
+        });
+        if (!overlaps)
+            kept.push_back(face);
+    }
+    return kept;
+}
+
+bool isPoorlyLit(const cv::Mat &bgr)
+{
+    cv::Mat gray;
+    cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
+    cv::Scalar mean, stddev;
+    cv::meanStdDev(gray, mean, stddev);
+    return mean[0] < 80.0 || mean[0] > 200.0 || stddev[0] < 35.0;
+}
+
+// تحسين التباين المحلي (CLAHE) على قناة الإضاءة فقط
+cv::Mat enhance(const cv::Mat &bgr)
+{
+    cv::Mat lab;
+    cv::cvtColor(bgr, lab, cv::COLOR_BGR2Lab);
+    std::vector<cv::Mat> channels;
+    cv::split(lab, channels);
+    cv::createCLAHE(2.5, cv::Size(8, 8))->apply(channels[0], channels[0]);
+    cv::merge(channels, lab);
+    cv::Mat result;
+    cv::cvtColor(lab, result, cv::COLOR_Lab2BGR);
+    return result;
+}
+
+// تحويل تشابه (دوران + تكبير + إزاحة) بأقل مربعات من src إلى dst
+cv::Mat similarityTransform(const std::array<cv::Point2f, 5> &src, const std::array<cv::Point2f, 5> &dst)
+{
+    cv::Point2d srcMean, dstMean;
+    for (size_t i = 0; i < src.size(); ++i) {
+        srcMean += cv::Point2d(src[i]);
+        dstMean += cv::Point2d(dst[i]);
+    }
+    srcMean /= double(src.size());
+    dstMean /= double(dst.size());
+
+    double numA = 0.0, numB = 0.0, den = 0.0;
+    for (size_t i = 0; i < src.size(); ++i) {
+        const cv::Point2d s = cv::Point2d(src[i]) - srcMean;
+        const cv::Point2d t = cv::Point2d(dst[i]) - dstMean;
+        numA += s.x * t.x + s.y * t.y;
+        numB += s.x * t.y - s.y * t.x;
+        den += s.x * s.x + s.y * s.y;
+    }
+    if (den <= 0.0)
+        den = 1.0;
+    const double a = numA / den;
+    const double b = numB / den;
+    return (cv::Mat_<double>(2, 3) << a, -b, dstMean.x - (a * srcMean.x - b * srcMean.y),
+                                      b, a, dstMean.y - (b * srcMean.x + a * srcMean.y));
+}
+
+} // namespace
+
+struct FaceEngine::Impl
+{
+    Ort::Env env{ORT_LOGGING_LEVEL_ERROR, "HelloQt"};
+    Ort::MemoryInfo memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    std::unique_ptr<Ort::Session> detector;
+    std::unique_ptr<Ort::Session> recognizer;
+    std::string detectorInput;
+    std::vector<std::string> detectorOutputs;
+    std::string recognizerInput;
+    std::string recognizerOutput;
+
+    std::vector<DetectedFace> detectAt(const cv::Mat &bgr, int inputSize, float threshold) const;
+    std::vector<float> recognize(const cv::Mat &aligned) const;
+};
+
+std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inputSize, float threshold) const
+{
+    // تصغير/تكبير مع الحفاظ على النسبة ثم وضع الصورة في مربع inputSize
+    const float ratio = float(bgr.rows) / float(bgr.cols);
+    int width = inputSize;
+    int height = std::max(1, int(inputSize * ratio));
+    if (ratio > 1.0f) {
+        height = inputSize;
+        width = std::max(1, int(inputSize / ratio));
+    }
+    const float scale = float(height) / float(bgr.rows);
+
+    cv::Mat resized;
+    cv::resize(bgr, resized, cv::Size(width, height), 0, 0, scale > 1.0f ? cv::INTER_CUBIC : cv::INTER_AREA);
+    cv::Mat canvas(inputSize, inputSize, CV_8UC3, cv::Scalar::all(0));
+    resized.copyTo(canvas(cv::Rect(0, 0, width, height)));
+
+    std::vector<float> blob = toBlob(canvas, 127.5f, 1.0f / 128.0f);
+    const std::array<int64_t, 4> shape{1, 3, inputSize, inputSize};
+    Ort::Value input = Ort::Value::CreateTensor<float>(memory, blob.data(), blob.size(), shape.data(), shape.size());
+
+    const char *inputName = detectorInput.c_str();
+    std::vector<const char *> outputNames;
+    for (const std::string &name : detectorOutputs)
+        outputNames.push_back(name.c_str());
+    std::vector<Ort::Value> outputs = detector->Run(Ort::RunOptions{nullptr}, &inputName, &input, 1,
+                                                    outputNames.data(), outputNames.size());
+
+    // مخرجات SCRFD: درجات ثم صناديق ثم نقاط لكل خطوة (8، 16، 32) مع مرساتين لكل خلية
+    const int strides[3] = {8, 16, 32};
+    std::vector<DetectedFace> faces;
+    for (int level = 0; level < 3; ++level) {
+        const int stride = strides[level];
+        const int grid = inputSize / stride;
+        const size_t count = size_t(grid) * grid * 2;
+        const Ort::Value &scoreOut = outputs[level];
+        const Ort::Value &boxOut = outputs[level + 3];
+        const Ort::Value &kpsOut = outputs[level + 6];
+        if (scoreOut.GetTensorTypeAndShapeInfo().GetElementCount() != count
+            || boxOut.GetTensorTypeAndShapeInfo().GetElementCount() != count * 4
+            || kpsOut.GetTensorTypeAndShapeInfo().GetElementCount() != count * 10)
+            throw std::runtime_error("Unexpected face detector output layout");
+
+        const float *scores = scoreOut.GetTensorData<float>();
+        const float *boxes = boxOut.GetTensorData<float>();
+        const float *kps = kpsOut.GetTensorData<float>();
+        for (size_t k = 0; k < count; ++k) {
+            if (scores[k] < threshold)
+                continue;
+            const size_t cell = k / 2;
+            const float cx = float(cell % grid) * stride;
+            const float cy = float(cell / grid) * stride;
+            const float *b = boxes + k * 4;
+            const float x1 = (cx - b[0] * stride) / scale;
+            const float y1 = (cy - b[1] * stride) / scale;
+            const float x2 = (cx + b[2] * stride) / scale;
+            const float y2 = (cy + b[3] * stride) / scale;
+
+            DetectedFace face;
+            face.score = scores[k];
+            face.box = cv::Rect2f(x1, y1, x2 - x1, y2 - y1);
+            for (int j = 0; j < 5; ++j) {
+                face.landmarks[j] = cv::Point2f((cx + kps[k * 10 + j * 2] * stride) / scale,
+                                                (cy + kps[k * 10 + j * 2 + 1] * stride) / scale);
+            }
+            faces.push_back(face);
+        }
+    }
+    return faces;
+}
+
+std::vector<float> FaceEngine::Impl::recognize(const cv::Mat &aligned) const
+{
+    std::vector<float> blob = toBlob(aligned, 127.5f, 1.0f / 127.5f);
+    const std::array<int64_t, 4> shape{1, 3, AlignedSize, AlignedSize};
+    Ort::Value input = Ort::Value::CreateTensor<float>(memory, blob.data(), blob.size(), shape.data(), shape.size());
+
+    const char *inputName = recognizerInput.c_str();
+    const char *outputName = recognizerOutput.c_str();
+    std::vector<Ort::Value> outputs = recognizer->Run(Ort::RunOptions{nullptr}, &inputName, &input, 1, &outputName, 1);
+    const float *data = outputs[0].GetTensorData<float>();
+    const size_t size = outputs[0].GetTensorTypeAndShapeInfo().GetElementCount();
+    std::vector<float> embedding(data, data + size);
+    FaceEngine::normalize(embedding);
+    return embedding;
+}
+
+FaceEngine::FaceEngine()
+    : d(std::make_unique<Impl>())
+{
+}
+
+FaceEngine::~FaceEngine() = default;
+
+QString FaceEngine::defaultModelsDir()
+{
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/models");
+}
+
+bool FaceEngine::load(const QString &modelsDir, QString *error)
+{
+    const QString detectorPath = QDir(modelsDir).filePath(QString::fromLatin1(DetectorFile));
+    const QString recognizerPath = QDir(modelsDir).filePath(QString::fromLatin1(RecognizerFile));
+    for (const QString &path : {detectorPath, recognizerPath}) {
+        if (!QFileInfo::exists(path)) {
+            if (error)
+                *error = QStringLiteral("ملف النموذج غير موجود: %1").arg(QDir::toNativeSeparators(path));
+            return false;
+        }
+    }
+
+    try {
+        Ort::SessionOptions options;
+        options.SetIntraOpNumThreads(std::max(1, QThread::idealThreadCount()));
+        options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+
+        d->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(detectorPath).c_str(), options);
+        d->recognizer = std::make_unique<Ort::Session>(d->env, toOrtPath(recognizerPath).c_str(), options);
+
+        Ort::AllocatorWithDefaultOptions allocator;
+        d->detectorInput = d->detector->GetInputNameAllocated(0, allocator).get();
+        d->detectorOutputs.clear();
+        for (size_t i = 0; i < d->detector->GetOutputCount(); ++i)
+            d->detectorOutputs.emplace_back(d->detector->GetOutputNameAllocated(i, allocator).get());
+        d->recognizerInput = d->recognizer->GetInputNameAllocated(0, allocator).get();
+        d->recognizerOutput = d->recognizer->GetOutputNameAllocated(0, allocator).get();
+
+        if (d->detectorOutputs.size() != 9)
+            throw std::runtime_error("Unsupported face detector model");
+    } catch (const std::exception &e) {
+        d->detector.reset();
+        d->recognizer.reset();
+        if (error)
+            *error = QStringLiteral("تعذر تحميل النماذج: %1").arg(QString::fromLocal8Bit(e.what()));
+        return false;
+    }
+    return true;
+}
+
+bool FaceEngine::isLoaded() const
+{
+    return d->detector && d->recognizer;
+}
+
+std::vector<DetectedFace> FaceEngine::detect(const cv::Mat &bgr, bool thorough, float threshold) const
+{
+    if (!isLoaded() || bgr.empty())
+        return {};
+
+    std::vector<DetectedFace> all;
+    auto collect = [&all](std::vector<DetectedFace> faces, cv::Point2f offset = {}) {
+        for (DetectedFace &face : faces) {
+            face.box.x += offset.x;
+            face.box.y += offset.y;
+            for (cv::Point2f &p : face.landmarks)
+                p += offset;
+            all.push_back(face);
+        }
+    };
+
+    collect(d->detectAt(bgr, 640, threshold));
+
+    const bool poorlyLit = isPoorlyLit(bgr);
+    cv::Mat enhanced;
+    if (poorlyLit) {
+        enhanced = enhance(bgr);
+        collect(d->detectAt(enhanced, 640, threshold));
+    }
+
+    if (thorough) {
+        // دقة أعلى تكشف الوجوه الصغيرة والبعيدة، وتكبّر الصور الصغيرة
+        collect(d->detectAt(bgr, 1280, threshold));
+        if (poorlyLit)
+            collect(d->detectAt(enhanced, 1280, threshold));
+
+        // الصور الكبيرة جداً تُقسَّم إلى أربعة أجزاء متداخلة حتى لا تضيع الوجوه الصغيرة
+        if (std::max(bgr.cols, bgr.rows) > 1920) {
+            const int tileW = int(bgr.cols * 0.6);
+            const int tileH = int(bgr.rows * 0.6);
+            for (int x : {0, bgr.cols - tileW}) {
+                for (int y : {0, bgr.rows - tileH}) {
+                    const cv::Rect tile(x, y, tileW, tileH);
+                    collect(d->detectAt(bgr(tile), 1280, threshold), cv::Point2f(float(x), float(y)));
+                }
+            }
+        }
+    }
+
+    // استبعاد الكشوفات المقطوعة عند حافة الإطار: نقاط الوجه خارج الصورة أو ربع الصندوق خارجها
+    const cv::Rect2f frame(0.0f, 0.0f, float(bgr.cols), float(bgr.rows));
+    auto invalid = [&frame](const DetectedFace &f) {
+        if (f.box.width < 6 || f.box.height < 6)
+            return true;
+        if ((f.box & frame).area() < f.box.area() * 0.75f)
+            return true;
+        return std::any_of(f.landmarks.begin(), f.landmarks.end(),
+                           [&frame](const cv::Point2f &p) { return !frame.contains(p); });
+    };
+    std::vector<DetectedFace> faces = nms(std::move(all), 0.4f);
+    faces.erase(std::remove_if(faces.begin(), faces.end(), invalid), faces.end());
+    return faces;
+}
+
+cv::Mat FaceEngine::align(const cv::Mat &bgr, const DetectedFace &face) const
+{
+    const cv::Mat transform = similarityTransform(face.landmarks, ArcFaceTemplate);
+    const double scale = std::hypot(transform.at<double>(0, 0), transform.at<double>(1, 0));
+    cv::Mat aligned;
+    cv::warpAffine(bgr, aligned, transform, cv::Size(AlignedSize, AlignedSize),
+                   scale > 1.0 ? cv::INTER_CUBIC : cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar::all(0));
+    return aligned;
+}
+
+std::vector<float> FaceEngine::embed(const cv::Mat &aligned) const
+{
+    if (!isLoaded() || aligned.empty())
+        return {};
+
+    // متوسط بصمة الوجه وصورته المعكوسة أثبت أمام الزوايا والإضاءة
+    std::vector<float> embedding = d->recognize(aligned);
+    cv::Mat flipped;
+    cv::flip(aligned, flipped, 1);
+    const std::vector<float> mirrored = d->recognize(flipped);
+    for (size_t i = 0; i < embedding.size(); ++i)
+        embedding[i] += mirrored[i];
+
+    if (isPoorlyLit(aligned)) {
+        const std::vector<float> enhanced = d->recognize(enhance(aligned));
+        for (size_t i = 0; i < embedding.size(); ++i)
+            embedding[i] += enhanced[i];
+    }
+
+    normalize(embedding);
+    return embedding;
+}
+
+std::vector<std::vector<float>> FaceEngine::enrollmentEmbeddings(const cv::Mat &aligned) const
+{
+    std::vector<std::vector<float>> result;
+    result.push_back(embed(aligned));
+
+    // محاكاة لقطات منخفضة الدقة ومشوشة حتى تتطابق الصور الرديئة مع صور التسجيل
+    for (int size : {24, 40}) {
+        cv::Mat small, restored;
+        cv::resize(aligned, small, cv::Size(size, size), 0, 0, cv::INTER_AREA);
+        cv::resize(small, restored, aligned.size(), 0, 0, cv::INTER_CUBIC);
+        result.push_back(embed(restored));
+    }
+    cv::Mat blurred;
+    cv::GaussianBlur(aligned, blurred, cv::Size(0, 0), 1.8);
+    result.push_back(embed(blurred));
+    return result;
+}
+
+float FaceEngine::quality(const DetectedFace &face, const cv::Mat &aligned) const
+{
+    const float sizeScore = std::clamp(std::min(face.box.width, face.box.height) / 80.0f, 0.0f, 1.0f);
+
+    cv::Mat gray, laplacian;
+    cv::cvtColor(aligned, gray, cv::COLOR_BGR2GRAY);
+    cv::Laplacian(gray, laplacian, CV_32F);
+    cv::Scalar mean, stddev;
+    cv::meanStdDev(laplacian, mean, stddev);
+    const float sharpness = std::clamp(float(stddev[0] * stddev[0]) / 300.0f, 0.0f, 1.0f);
+
+    // وجه أمامي: الأنف في منتصف المسافة بين العينين
+    const auto &l = face.landmarks;
+    const float eyeDistance = std::max(1.0f, float(cv::norm(l[1] - l[0])));
+    const float noseOffset = std::abs(l[2].x - (l[0].x + l[1].x) / 2.0f) / eyeDistance;
+    const float frontal = std::clamp(1.0f - noseOffset * 1.5f, 0.0f, 1.0f);
+
+    return std::clamp(0.35f * sizeScore + 0.25f * sharpness + 0.2f * frontal + 0.2f * std::min(1.0f, face.score),
+                      0.0f, 1.0f);
+}
+
+std::vector<AnalyzedFace> FaceEngine::analyze(const cv::Mat &bgr, bool thorough) const
+{
+    std::vector<AnalyzedFace> result;
+    for (const DetectedFace &face : detect(bgr, thorough)) {
+        AnalyzedFace analyzed;
+        analyzed.detection = face;
+        analyzed.aligned = align(bgr, face);
+        analyzed.embedding = embed(analyzed.aligned);
+        analyzed.quality = quality(face, analyzed.aligned);
+        result.push_back(std::move(analyzed));
+    }
+    return result;
+}
+
+float FaceEngine::cosine(const std::vector<float> &a, const std::vector<float> &b)
+{
+    if (a.empty() || a.size() != b.size())
+        return 0.0f;
+    double dot = 0.0;
+    for (size_t i = 0; i < a.size(); ++i)
+        dot += double(a[i]) * b[i];
+    return float(dot);
+}
+
+void FaceEngine::normalize(std::vector<float> &v)
+{
+    double norm = 0.0;
+    for (float x : v)
+        norm += double(x) * x;
+    norm = std::sqrt(norm);
+    if (norm > 0.0) {
+        for (float &x : v)
+            x = float(x / norm);
+    }
+}
