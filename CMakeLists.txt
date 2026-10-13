@@ -24,6 +24,14 @@ qt_add_executable(HelloQt
     src/facedatabase.h
     src/facedatabase.cpp
     src/facetypes.h
+    src/carddelegates.h
+    src/carddelegates.cpp
+    src/icons.h
+    src/icons.cpp
+    src/theme.h
+    src/theme.cpp
+    src/widgets.h
+    src/widgets.cpp
     src/imageio.h
     src/imageio.cpp
     src/imageview.h

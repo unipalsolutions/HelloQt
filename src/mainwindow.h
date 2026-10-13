@@ -8,17 +8,18 @@
 #include <QList>
 #include <QMainWindow>
 
+class AnimatedStack;
+class FancyButton;
 class ImageView;
-class QCheckBox;
-class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QProgressBar;
-class QPushButton;
+class QSlider;
 class QSpinBox;
 class QThread;
+class ToggleSwitch;
 class VideoWorker;
 
 struct ImageAnalysis
@@ -39,8 +40,9 @@ public:
     void openFile(const QString &path); // صورة أو فيديو
 
 private:
-    QWidget *createRecognitionTab();
-    QWidget *createDatabaseTab();
+    QWidget *createSidebar();
+    QWidget *createRecognitionPage();
+    QWidget *createDatabasePage();
 
     // التعرف
     void openImage();
@@ -60,11 +62,13 @@ private:
     void refreshMatches();
     void refreshFaceList();
     void updateFaceListItem(QListWidgetItem *listItem, const FaceItem &face);
+    void updateFaceCount();
     void setBusy(bool busy);
     float threshold() const;
 
     // قاعدة البيانات
     void refreshPersons();
+    void refreshStats();
     void showPersonDetails();
     void addPerson();
     void editPerson();
@@ -83,30 +87,37 @@ private:
     QList<FaceItem> m_faces; // وجوه الصورة الحالية، أو مسارات الوجوه في الفيديو
     bool m_videoMode = false;
     bool m_videoRunning = false;
+    bool m_analyzing = false;
     QFutureWatcher<ImageAnalysis> m_imageWatcher;
     QThread *m_videoThread = nullptr;
     VideoWorker *m_videoWorker = nullptr;
 
+    AnimatedStack *m_pages = nullptr;
+    QLabel *m_personCountLabel = nullptr;
+    QLabel *m_photoCountLabel = nullptr;
+
     ImageView *m_view = nullptr;
     QListWidget *m_faceList = nullptr;
+    QLabel *m_faceCount = nullptr;
     QLabel *m_faceDetails = nullptr;
-    QPushButton *m_openImageButton = nullptr;
-    QPushButton *m_openVideoButton = nullptr;
-    QPushButton *m_cameraButton = nullptr;
-    QPushButton *m_stopButton = nullptr;
-    QPushButton *m_saveFacesButton = nullptr;
-    QPushButton *m_enrollFaceButton = nullptr;
-    QDoubleSpinBox *m_thresholdSpin = nullptr;
-    QCheckBox *m_thoroughCheck = nullptr;
+    FancyButton *m_openImageButton = nullptr;
+    FancyButton *m_openVideoButton = nullptr;
+    FancyButton *m_cameraButton = nullptr;
+    FancyButton *m_stopButton = nullptr;
+    FancyButton *m_saveFacesButton = nullptr;
+    FancyButton *m_enrollFaceButton = nullptr;
+    QSlider *m_thresholdSlider = nullptr;
+    QLabel *m_thresholdValue = nullptr;
+    ToggleSwitch *m_thoroughSwitch = nullptr;
     QSpinBox *m_frameStepSpin = nullptr;
     QProgressBar *m_progress = nullptr;
 
+    QLabel *m_databaseSubtitle = nullptr;
     QLineEdit *m_personFilter = nullptr;
     QListWidget *m_personList = nullptr;
+    QLabel *m_personAvatar = nullptr;
     QLabel *m_personDetails = nullptr;
     QListWidget *m_photoList = nullptr;
-    QPushButton *m_editPersonButton = nullptr;
-    QPushButton *m_removePersonButton = nullptr;
-    QPushButton *m_addPhotosButton = nullptr;
-    QPushButton *m_removePhotoButton = nullptr;
+    QWidget *m_personActions = nullptr;
+    FancyButton *m_removePhotoButton = nullptr;
 };

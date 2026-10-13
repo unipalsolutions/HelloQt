@@ -1,31 +1,34 @@
 #include "mainwindow.h"
 
+#include "carddelegates.h"
+#include "icons.h"
 #include "imageio.h"
 #include "imageview.h"
 #include "persondialog.h"
+#include "theme.h"
 #include "videoworker.h"
+#include "widgets.h"
 
 #include <QApplication>
-#include <QCheckBox>
+#include <QButtonGroup>
 #include <QDesktopServices>
 #include <QDir>
-#include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QGroupBox>
 #include <QHBoxLayout>
+#include <QImageReader>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QPainter>
 #include <QProgressBar>
 #include <QProgressDialog>
-#include <QPushButton>
+#include <QSlider>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStatusBar>
-#include <QTabWidget>
 #include <QThread>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -44,6 +47,66 @@ QString safeFileName(QString name)
     return name;
 }
 
+QFrame *card(QWidget *parent, const QString &name = QStringLiteral("card"))
+{
+    auto *frame = new QFrame(parent);
+    frame->setObjectName(name);
+    return frame;
+}
+
+QLabel *label(const QString &text, const QString &objectName, QWidget *parent)
+{
+    auto *l = new QLabel(text, parent);
+    l->setObjectName(objectName);
+    return l;
+}
+
+QFrame *separator(QWidget *parent)
+{
+    auto *line = new QFrame(parent);
+    line->setObjectName(QStringLiteral("separator"));
+    line->setFixedHeight(24);
+    return line;
+}
+
+// شعار التطبيق: مربع متدرج بأيقونة مسح الوجه
+class LogoMark : public QWidget
+{
+public:
+    explicit LogoMark(QWidget *parent)
+        : QWidget(parent)
+    {
+        setFixedSize(42, 42);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        QLinearGradient gradient(0, 0, width(), height());
+        gradient.setColorAt(0, Theme::Accent);
+        gradient.setColorAt(1, Theme::Accent2);
+        p.setPen(Qt::NoPen);
+        p.setBrush(gradient);
+        p.drawRoundedRect(rect(), 12, 12);
+        Icons::paint(p, Icons::Name::Scan, QRectF(9, 9, 24, 24), Qt::white);
+    }
+};
+
+QString statusDescription(MatchStatus status)
+{
+    switch (status) {
+    case MatchStatus::Confirmed:
+        return QStringLiteral("تطابق مؤكد");
+    case MatchStatus::Possible:
+        return QStringLiteral("تطابق محتمل — يُنصح بالتحقق");
+    case MatchStatus::Unknown:
+        break;
+    }
+    return QStringLiteral("غير موجود في قاعدة البيانات");
+}
+
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent)
@@ -51,15 +114,16 @@ MainWindow::MainWindow(QWidget *parent)
 {
     setWindowTitle(QStringLiteral("التعرف على الوجوه"));
 
-    auto *tabs = new QTabWidget(this);
-    tabs->addTab(createRecognitionTab(), QStringLiteral("التعرف على الوجوه"));
-    tabs->addTab(createDatabaseTab(), QStringLiteral("قاعدة البيانات"));
-    setCentralWidget(tabs);
-
-    m_progress = new QProgressBar(this);
-    m_progress->setMaximumWidth(240);
-    m_progress->setVisible(false);
-    statusBar()->addPermanentWidget(m_progress);
+    auto *central = new QWidget(this);
+    auto *layout = new QHBoxLayout(central);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    m_pages = new AnimatedStack(central);
+    m_pages->addWidget(createRecognitionPage());
+    m_pages->addWidget(createDatabasePage());
+    layout->addWidget(createSidebar());
+    layout->addWidget(m_pages, 1);
+    setCentralWidget(central);
 
     QString error;
     if (!m_engine.load(FaceEngine::defaultModelsDir(), &error)) {
@@ -105,175 +169,316 @@ MainWindow::~MainWindow()
     m_imageWatcher.waitForFinished();
 }
 
-QWidget *MainWindow::createRecognitionTab()
+QWidget *MainWindow::createSidebar()
+{
+    auto *sidebar = card(this, QStringLiteral("sidebar"));
+    sidebar->setFixedWidth(240);
+    auto *layout = new QVBoxLayout(sidebar);
+    layout->setContentsMargins(18, 22, 18, 18);
+    layout->setSpacing(6);
+
+    auto *brand = new QHBoxLayout;
+    brand->setSpacing(12);
+    brand->addWidget(new LogoMark(sidebar));
+    auto *brandText = new QVBoxLayout;
+    brandText->setSpacing(0);
+    auto *name = label(QStringLiteral("HelloQt"), QStringLiteral("sectionTitle"), sidebar);
+    brandText->addWidget(name);
+    brandText->addWidget(label(QStringLiteral("التعرف على الوجوه"), QStringLiteral("muted"), sidebar));
+    brand->addLayout(brandText, 1);
+    layout->addLayout(brand);
+    layout->addSpacing(26);
+
+    auto *recognitionNav = new FancyButton(Icons::Name::Scan, QStringLiteral("التعرف"), FancyButton::Kind::Nav, sidebar);
+    auto *databaseNav = new FancyButton(Icons::Name::Users, QStringLiteral("قاعدة البيانات"), FancyButton::Kind::Nav, sidebar);
+    auto *group = new QButtonGroup(sidebar);
+    group->addButton(recognitionNav, 0);
+    group->addButton(databaseNav, 1);
+    recognitionNav->setChecked(true);
+    connect(group, &QButtonGroup::idClicked, this, [this](int id) { m_pages->slideTo(id); });
+    layout->addWidget(recognitionNav);
+    layout->addWidget(databaseNav);
+    layout->addStretch();
+
+    auto *stats = card(sidebar, QStringLiteral("statCard"));
+    auto *statsLayout = new QGridLayout(stats);
+    statsLayout->setContentsMargins(14, 12, 14, 12);
+    statsLayout->setVerticalSpacing(0);
+    m_personCountLabel = label(QStringLiteral("0"), QStringLiteral("statValue"), stats);
+    m_photoCountLabel = label(QStringLiteral("0"), QStringLiteral("statValue"), stats);
+    statsLayout->addWidget(m_personCountLabel, 0, 0);
+    statsLayout->addWidget(m_photoCountLabel, 0, 1);
+    statsLayout->addWidget(label(QStringLiteral("شخص"), QStringLiteral("muted"), stats), 1, 0);
+    statsLayout->addWidget(label(QStringLiteral("صورة وجه"), QStringLiteral("muted"), stats), 1, 1);
+    layout->addWidget(stats);
+    layout->addSpacing(10);
+
+    auto *offline = new QHBoxLayout;
+    auto *lock = new QLabel(sidebar);
+    lock->setPixmap(Icons::icon(Icons::Name::Lock, Theme::Success, 16).pixmap(16, 16));
+    offline->addWidget(lock);
+    auto *offlineText = label(QStringLiteral("يعمل محلياً بالكامل، دون إنترنت"), QStringLiteral("muted"), sidebar);
+    offlineText->setWordWrap(true);
+    offline->addWidget(offlineText, 1);
+    layout->addLayout(offline);
+    return sidebar;
+}
+
+QWidget *MainWindow::createRecognitionPage()
 {
     auto *page = new QWidget(this);
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(26, 22, 26, 18);
+    layout->setSpacing(14);
 
-    m_openImageButton = new QPushButton(QStringLiteral("فتح صورة"), page);
-    m_openVideoButton = new QPushButton(QStringLiteral("فتح فيديو"), page);
-    m_cameraButton = new QPushButton(QStringLiteral("الكاميرا"), page);
-    m_stopButton = new QPushButton(QStringLiteral("إيقاف"), page);
-    m_saveFacesButton = new QPushButton(QStringLiteral("حفظ الوجوه المستخرجة"), page);
-    connect(m_openImageButton, &QPushButton::clicked, this, &MainWindow::openImage);
-    connect(m_openVideoButton, &QPushButton::clicked, this, &MainWindow::openVideo);
-    connect(m_cameraButton, &QPushButton::clicked, this, &MainWindow::openCamera);
-    connect(m_stopButton, &QPushButton::clicked, this, &MainWindow::stopVideo);
-    connect(m_saveFacesButton, &QPushButton::clicked, this, &MainWindow::saveFaces);
+    // العنوان والأزرار
+    m_openImageButton = new FancyButton(Icons::Name::Image, QStringLiteral("فتح صورة"), FancyButton::Kind::Primary, page);
+    m_openVideoButton = new FancyButton(Icons::Name::Video, QStringLiteral("فيديو"), FancyButton::Kind::Secondary, page);
+    m_cameraButton = new FancyButton(Icons::Name::Camera, QStringLiteral("الكاميرا"), FancyButton::Kind::Secondary, page);
+    m_stopButton = new FancyButton(Icons::Name::Stop, QStringLiteral("إيقاف"), FancyButton::Kind::Danger, page);
+    m_saveFacesButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ الوجوه"), FancyButton::Kind::Secondary, page);
+    connect(m_openImageButton, &QAbstractButton::clicked, this, &MainWindow::openImage);
+    connect(m_openVideoButton, &QAbstractButton::clicked, this, &MainWindow::openVideo);
+    connect(m_cameraButton, &QAbstractButton::clicked, this, &MainWindow::openCamera);
+    connect(m_stopButton, &QAbstractButton::clicked, this, &MainWindow::stopVideo);
+    connect(m_saveFacesButton, &QAbstractButton::clicked, this, &MainWindow::saveFaces);
 
-    m_thresholdSpin = new QDoubleSpinBox(page);
-    m_thresholdSpin->setRange(0.15, 0.80);
-    m_thresholdSpin->setSingleStep(0.01);
-    m_thresholdSpin->setValue(0.30);
-    m_thresholdSpin->setToolTip(QStringLiteral("أعلى = أخطاء أقل لكن قد لا يُتعرف على صور رديئة. أقل = يتعرف أكثر مع احتمال خطأ أكبر."));
-    connect(m_thresholdSpin, &QDoubleSpinBox::valueChanged, this, [this] {
+    auto *header = new QHBoxLayout;
+    auto *titles = new QVBoxLayout;
+    titles->setSpacing(2);
+    titles->addWidget(label(QStringLiteral("التعرف على الوجوه"), QStringLiteral("title"), page));
+    titles->addWidget(label(QStringLiteral("افتح صورة أو فيديو، أو شغّل الكاميرا، ليتم كشف الوجوه ومطابقتها مع قاعدة البيانات"),
+                            QStringLiteral("subtitle"), page));
+    header->addLayout(titles, 1);
+    header->setSpacing(10);
+    header->addWidget(m_openImageButton);
+    header->addWidget(m_openVideoButton);
+    header->addWidget(m_cameraButton);
+    header->addWidget(m_stopButton);
+    header->addWidget(m_saveFacesButton);
+    layout->addLayout(header);
+
+    // الإعدادات
+    auto *settings = card(page);
+    auto *settingsLayout = new QHBoxLayout(settings);
+    settingsLayout->setContentsMargins(18, 10, 18, 10);
+    settingsLayout->setSpacing(14);
+
+    m_thresholdSlider = new QSlider(Qt::Horizontal, settings);
+    m_thresholdSlider->setRange(15, 80);
+    m_thresholdSlider->setValue(30);
+    m_thresholdSlider->setFixedWidth(180);
+    m_thresholdSlider->setCursor(Qt::PointingHandCursor);
+    m_thresholdSlider->setToolTip(QStringLiteral("أعلى = أخطاء أقل لكن قد لا يُتعرف على الصور الرديئة جداً.\nأقل = يتعرف أكثر مع احتمال خطأ أكبر."));
+    m_thresholdValue = label(QStringLiteral("30%"), QStringLiteral("badge"), settings);
+    connect(m_thresholdSlider, &QSlider::valueChanged, this, [this](int value) {
+        m_thresholdValue->setText(QStringLiteral("%1%").arg(value));
         m_videoWorker->setThreshold(threshold());
         refreshMatches();
     });
 
-    m_thoroughCheck = new QCheckBox(QStringLiteral("تحليل معمّق للصور (أدق وأبطأ)"), page);
-    m_thoroughCheck->setChecked(true);
+    m_thoroughSwitch = new ToggleSwitch(QStringLiteral("تحليل معمّق للصور (أدق وأبطأ)"), settings);
+    m_thoroughSwitch->setChecked(true);
 
-    m_frameStepSpin = new QSpinBox(page);
+    m_frameStepSpin = new QSpinBox(settings);
     m_frameStepSpin->setRange(1, 30);
     m_frameStepSpin->setValue(1);
     m_frameStepSpin->setToolTip(QStringLiteral("1 = تحليل كل إطار (أدق). قيمة أكبر = أسرع."));
     connect(m_frameStepSpin, &QSpinBox::valueChanged, this, [this](int value) { m_videoWorker->setFrameStep(value); });
 
-    auto *toolbar = new QHBoxLayout;
-    toolbar->addWidget(m_openImageButton);
-    toolbar->addWidget(m_openVideoButton);
-    toolbar->addWidget(m_cameraButton);
-    toolbar->addWidget(m_stopButton);
-    toolbar->addSpacing(16);
-    toolbar->addWidget(new QLabel(QStringLiteral("حد التعرف:"), page));
-    toolbar->addWidget(m_thresholdSpin);
-    toolbar->addWidget(m_thoroughCheck);
-    toolbar->addWidget(new QLabel(QStringLiteral("فيديو: تحليل إطار من كل"), page));
-    toolbar->addWidget(m_frameStepSpin);
-    toolbar->addStretch();
-    toolbar->addWidget(m_saveFacesButton);
+    settingsLayout->addWidget(new QLabel(QStringLiteral("حد التعرف"), settings));
+    settingsLayout->addWidget(m_thresholdSlider);
+    settingsLayout->addWidget(m_thresholdValue);
+    settingsLayout->addWidget(separator(settings));
+    settingsLayout->addWidget(m_thoroughSwitch);
+    settingsLayout->addWidget(separator(settings));
+    settingsLayout->addWidget(new QLabel(QStringLiteral("الفيديو: تحليل إطار من كل"), settings));
+    settingsLayout->addWidget(m_frameStepSpin);
+    settingsLayout->addStretch();
+    layout->addWidget(settings);
 
-    m_view = new ImageView(page);
+    m_progress = new QProgressBar(page);
+    m_progress->setObjectName(QStringLiteral("thinProgress"));
+    m_progress->setTextVisible(false);
+    m_progress->setFixedHeight(4);
+    auto *progressSlot = new QWidget(page);
+    progressSlot->setFixedHeight(4);
+    auto *progressLayout = new QVBoxLayout(progressSlot);
+    progressLayout->setContentsMargins(0, 0, 0, 0);
+    progressLayout->addWidget(m_progress);
+    m_progress->setVisible(false);
+    layout->addWidget(progressSlot);
+
+    // العرض والقائمة الجانبية
+    auto *viewCard = card(page, QStringLiteral("viewCard"));
+    auto *viewLayout = new QVBoxLayout(viewCard);
+    viewLayout->setContentsMargins(2, 2, 2, 2);
+    m_view = new ImageView(viewCard);
+    viewLayout->addWidget(m_view);
     connect(m_view, &ImageView::faceClicked, this, &MainWindow::selectFace);
 
-    m_faceList = new QListWidget(page);
-    m_faceList->setIconSize(QSize(72, 72));
-    m_faceList->setSpacing(2);
-    connect(m_faceList, &QListWidget::currentRowChanged, this, &MainWindow::showFaceDetails);
+    auto *side = card(page);
+    side->setMinimumWidth(300);
+    auto *sideLayout = new QVBoxLayout(side);
+    sideLayout->setContentsMargins(14, 16, 14, 14);
+    sideLayout->setSpacing(10);
+    auto *sideHeader = new QHBoxLayout;
+    sideHeader->addWidget(label(QStringLiteral("الوجوه المكتشفة"), QStringLiteral("sectionTitle"), side));
+    sideHeader->addStretch();
+    m_faceCount = label(QStringLiteral("0"), QStringLiteral("badge"), side);
+    sideHeader->addWidget(m_faceCount);
+    sideLayout->addLayout(sideHeader);
 
-    m_faceDetails = new QLabel(page);
+    m_faceList = new QListWidget(side);
+    m_faceList->setItemDelegate(new FaceCardDelegate(m_faceList));
+    m_faceList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_faceList->setMouseTracking(true);
+    connect(m_faceList, &QListWidget::currentRowChanged, this, &MainWindow::showFaceDetails);
+    sideLayout->addWidget(m_faceList, 1);
+
+    m_faceDetails = new QLabel(side);
     m_faceDetails->setWordWrap(true);
     m_faceDetails->setTextFormat(Qt::RichText);
-    m_faceDetails->setMinimumHeight(90);
+    m_faceDetails->setMinimumHeight(96);
     m_faceDetails->setAlignment(Qt::AlignTop);
-
-    m_enrollFaceButton = new QPushButton(QStringLiteral("إضافة الوجه المحدد إلى قاعدة البيانات"), page);
-    connect(m_enrollFaceButton, &QPushButton::clicked, this, &MainWindow::addSelectedFaceToDatabase);
-
-    auto *sidePanel = new QWidget(page);
-    auto *sideLayout = new QVBoxLayout(sidePanel);
-    sideLayout->setContentsMargins(0, 0, 0, 0);
-    sideLayout->addWidget(new QLabel(QStringLiteral("الوجوه المستخرجة:"), sidePanel));
-    sideLayout->addWidget(m_faceList, 1);
+    m_faceDetails->setObjectName(QStringLiteral("muted"));
     sideLayout->addWidget(m_faceDetails);
+
+    m_enrollFaceButton = new FancyButton(Icons::Name::UserPlus, QStringLiteral("إضافة الوجه إلى قاعدة البيانات"),
+                                         FancyButton::Kind::Primary, side);
+    m_enrollFaceButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    connect(m_enrollFaceButton, &QAbstractButton::clicked, this, &MainWindow::addSelectedFaceToDatabase);
     sideLayout->addWidget(m_enrollFaceButton);
 
     auto *splitter = new QSplitter(Qt::Horizontal, page);
-    splitter->addWidget(m_view);
-    splitter->addWidget(sidePanel);
+    splitter->setHandleWidth(14);
+    splitter->addWidget(viewCard);
+    splitter->addWidget(side);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 1);
-    splitter->setSizes({900, 320});
-
-    auto *layout = new QVBoxLayout(page);
-    layout->addLayout(toolbar);
+    splitter->setSizes({900, 330});
     layout->addWidget(splitter, 1);
     return page;
 }
 
-QWidget *MainWindow::createDatabaseTab()
+QWidget *MainWindow::createDatabasePage()
 {
     auto *page = new QWidget(this);
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(26, 22, 26, 18);
+    layout->setSpacing(14);
 
-    auto *addPersonButton = new QPushButton(QStringLiteral("شخص جديد"), page);
-    m_editPersonButton = new QPushButton(QStringLiteral("تعديل البيانات"), page);
-    m_removePersonButton = new QPushButton(QStringLiteral("حذف الشخص"), page);
-    m_addPhotosButton = new QPushButton(QStringLiteral("إضافة صور"), page);
-    m_removePhotoButton = new QPushButton(QStringLiteral("حذف الصورة المحددة"), page);
-    auto *openFolderButton = new QPushButton(QStringLiteral("فتح مجلد القاعدة"), page);
-    connect(addPersonButton, &QPushButton::clicked, this, &MainWindow::addPerson);
-    connect(m_editPersonButton, &QPushButton::clicked, this, &MainWindow::editPerson);
-    connect(m_removePersonButton, &QPushButton::clicked, this, &MainWindow::removePerson);
-    connect(m_addPhotosButton, &QPushButton::clicked, this, &MainWindow::addPhotos);
-    connect(m_removePhotoButton, &QPushButton::clicked, this, &MainWindow::removePhoto);
-    connect(openFolderButton, &QPushButton::clicked, this, &MainWindow::openDatabaseFolder);
+    auto *addPersonButton = new FancyButton(Icons::Name::UserPlus, QStringLiteral("شخص جديد"), FancyButton::Kind::Primary, page);
+    auto *openFolderButton = new FancyButton(Icons::Name::Folder, QStringLiteral("فتح المجلد"), FancyButton::Kind::Secondary, page);
+    connect(addPersonButton, &QAbstractButton::clicked, this, &MainWindow::addPerson);
+    connect(openFolderButton, &QAbstractButton::clicked, this, &MainWindow::openDatabaseFolder);
 
-    auto *toolbar = new QHBoxLayout;
-    toolbar->addWidget(addPersonButton);
-    toolbar->addWidget(m_editPersonButton);
-    toolbar->addWidget(m_removePersonButton);
-    toolbar->addSpacing(16);
-    toolbar->addWidget(m_addPhotosButton);
-    toolbar->addWidget(m_removePhotoButton);
-    toolbar->addStretch();
-    toolbar->addWidget(openFolderButton);
+    auto *header = new QHBoxLayout;
+    header->setSpacing(10);
+    auto *titles = new QVBoxLayout;
+    titles->setSpacing(2);
+    titles->addWidget(label(QStringLiteral("قاعدة البيانات"), QStringLiteral("title"), page));
+    m_databaseSubtitle = label(QString(), QStringLiteral("subtitle"), page);
+    titles->addWidget(m_databaseSubtitle);
+    header->addLayout(titles, 1);
+    header->addWidget(addPersonButton);
+    header->addWidget(openFolderButton);
+    layout->addLayout(header);
 
-    m_personFilter = new QLineEdit(page);
+    // قائمة الأشخاص
+    auto *listCard = card(page);
+    listCard->setMinimumWidth(290);
+    auto *listLayout = new QVBoxLayout(listCard);
+    listLayout->setContentsMargins(14, 14, 14, 14);
+    listLayout->setSpacing(10);
+    m_personFilter = new QLineEdit(listCard);
     m_personFilter->setPlaceholderText(QStringLiteral("بحث بالاسم أو رقم الهوية…"));
     m_personFilter->setClearButtonEnabled(true);
+    m_personFilter->addAction(Icons::icon(Icons::Name::Search, Theme::Muted, 18), QLineEdit::LeadingPosition);
     connect(m_personFilter, &QLineEdit::textChanged, this, &MainWindow::refreshPersons);
-
-    m_personList = new QListWidget(page);
-    m_personList->setIconSize(QSize(56, 56));
+    m_personList = new QListWidget(listCard);
+    m_personList->setItemDelegate(new PersonCardDelegate(m_personList));
+    m_personList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_personList->setMouseTracking(true);
     connect(m_personList, &QListWidget::currentRowChanged, this, &MainWindow::showPersonDetails);
     connect(m_personList, &QListWidget::itemDoubleClicked, this, &MainWindow::editPerson);
-
-    auto *listPanel = new QWidget(page);
-    auto *listLayout = new QVBoxLayout(listPanel);
-    listLayout->setContentsMargins(0, 0, 0, 0);
     listLayout->addWidget(m_personFilter);
     listLayout->addWidget(m_personList, 1);
 
-    m_personDetails = new QLabel(page);
+    // تفاصيل الشخص
+    auto *detailsCard = card(page);
+    auto *detailsLayout = new QVBoxLayout(detailsCard);
+    detailsLayout->setContentsMargins(22, 20, 22, 18);
+    detailsLayout->setSpacing(14);
+
+    auto *profile = new QHBoxLayout;
+    profile->setSpacing(18);
+    m_personAvatar = new QLabel(detailsCard);
+    m_personAvatar->setFixedSize(96, 96);
+    profile->addWidget(m_personAvatar, 0, Qt::AlignTop);
+    m_personDetails = new QLabel(detailsCard);
     m_personDetails->setTextFormat(Qt::RichText);
     m_personDetails->setWordWrap(true);
     m_personDetails->setAlignment(Qt::AlignTop);
     m_personDetails->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    profile->addWidget(m_personDetails, 1);
+    detailsLayout->addLayout(profile);
 
-    m_photoList = new QListWidget(page);
+    m_personActions = new QWidget(detailsCard);
+    auto *actions = new QHBoxLayout(m_personActions);
+    actions->setContentsMargins(0, 0, 0, 0);
+    actions->setSpacing(10);
+    auto *editButton = new FancyButton(Icons::Name::Edit, QStringLiteral("تعديل البيانات"), FancyButton::Kind::Secondary, m_personActions);
+    auto *addPhotosButton = new FancyButton(Icons::Name::PhotoAdd, QStringLiteral("إضافة صور"), FancyButton::Kind::Primary, m_personActions);
+    auto *removeButton = new FancyButton(Icons::Name::Trash, QStringLiteral("حذف الشخص"), FancyButton::Kind::Danger, m_personActions);
+    connect(editButton, &QAbstractButton::clicked, this, &MainWindow::editPerson);
+    connect(addPhotosButton, &QAbstractButton::clicked, this, &MainWindow::addPhotos);
+    connect(removeButton, &QAbstractButton::clicked, this, &MainWindow::removePerson);
+    actions->addWidget(addPhotosButton);
+    actions->addWidget(editButton);
+    actions->addStretch();
+    actions->addWidget(removeButton);
+    detailsLayout->addWidget(m_personActions);
+
+    auto *photosHeader = new QHBoxLayout;
+    auto *photosTitle = label(QStringLiteral("صور الوجه المسجلة"), QStringLiteral("sectionTitle"), detailsCard);
+    photosHeader->addWidget(photosTitle);
+    photosHeader->addWidget(label(QStringLiteral("كلما زادت الصور وتنوعت زادت دقة التعرف"), QStringLiteral("muted"), detailsCard), 1);
+    m_removePhotoButton = new FancyButton(Icons::Name::Trash, QStringLiteral("حذف الصورة"), FancyButton::Kind::Danger, detailsCard);
+    connect(m_removePhotoButton, &QAbstractButton::clicked, this, &MainWindow::removePhoto);
+    photosHeader->addWidget(m_removePhotoButton);
+    detailsLayout->addLayout(photosHeader);
+
+    m_photoList = new QListWidget(detailsCard);
+    m_photoList->setObjectName(QStringLiteral("photoGrid"));
     m_photoList->setViewMode(QListView::IconMode);
-    m_photoList->setIconSize(QSize(128, 128));
+    m_photoList->setIconSize(QSize(132, 132));
+    m_photoList->setGridSize(QSize(156, 172));
     m_photoList->setResizeMode(QListView::Adjust);
     m_photoList->setMovement(QListView::Static);
-    m_photoList->setSpacing(6);
+    m_photoList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     connect(m_photoList, &QListWidget::currentRowChanged, this, [this] { m_removePhotoButton->setEnabled(m_photoList->currentItem()); });
-
-    auto *detailsPanel = new QWidget(page);
-    auto *detailsLayout = new QVBoxLayout(detailsPanel);
-    detailsLayout->setContentsMargins(0, 0, 0, 0);
-    detailsLayout->addWidget(m_personDetails);
-    detailsLayout->addWidget(new QLabel(QStringLiteral("صور الوجه المسجلة (كلما زادت الصور وتنوعت زادت دقة التعرف):"), detailsPanel));
     detailsLayout->addWidget(m_photoList, 1);
 
     auto *splitter = new QSplitter(Qt::Horizontal, page);
-    splitter->addWidget(listPanel);
-    splitter->addWidget(detailsPanel);
+    splitter->setHandleWidth(14);
+    splitter->addWidget(listCard);
+    splitter->addWidget(detailsCard);
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 2);
-
-    auto *layout = new QVBoxLayout(page);
-    layout->addLayout(toolbar);
+    splitter->setSizes({330, 800});
     layout->addWidget(splitter, 1);
     return page;
 }
 
 float MainWindow::threshold() const
 {
-    return float(m_thresholdSpin->value());
+    return m_thresholdSlider->value() / 100.0f;
 }
 
 void MainWindow::setBusy(bool busy)
 {
+    m_analyzing = busy;
     const bool idle = m_ready && !busy && !m_videoRunning;
     m_openImageButton->setEnabled(idle);
     m_openVideoButton->setEnabled(idle);
@@ -281,7 +486,6 @@ void MainWindow::setBusy(bool busy)
     m_stopButton->setEnabled(m_videoRunning);
     m_saveFacesButton->setEnabled(!m_faces.isEmpty());
     m_enrollFaceButton->setEnabled(m_ready && m_faceList->currentRow() >= 0);
-    m_addPhotosButton->setEnabled(m_ready && !selectedPersonId().isEmpty());
 }
 
 // ───────────── التعرف ─────────────
@@ -311,12 +515,19 @@ void MainWindow::analyzeImage(const QString &path)
     m_videoMode = false;
     m_faces.clear();
     refreshFaceList();
+    m_view->setFaces({});
     setBusy(true);
-    m_progress->setRange(0, 0);
-    m_progress->setVisible(true);
+
+    // عرض الصورة فوراً مع حركة المسح إلى أن ينتهي التحليل
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    const QImage preview = reader.read();
+    if (!preview.isNull())
+        m_view->setImage(preview, true);
+    m_view->setBusy(true, QStringLiteral("جارٍ كشف الوجوه والتعرف عليها"));
     statusBar()->showMessage(QStringLiteral("جارٍ تحليل الصورة…"));
 
-    const bool thorough = m_thoroughCheck->isChecked();
+    const bool thorough = m_thoroughSwitch->isChecked();
     const FaceEngine *engine = &m_engine;
     m_imageWatcher.setFuture(QtConcurrent::run([engine, path, thorough] {
         ImageAnalysis result;
@@ -336,21 +547,28 @@ void MainWindow::analyzeImage(const QString &path)
 void MainWindow::onImageAnalyzed()
 {
     const ImageAnalysis result = m_imageWatcher.result();
-    m_progress->setVisible(false);
+    m_view->setBusy(false);
     if (!result.error.isEmpty()) {
         statusBar()->showMessage(result.error);
-        QMessageBox::warning(this, windowTitle(), result.error);
+        Toast::show(this, result.error, Toast::Kind::Warning);
         setBusy(false);
         return;
     }
 
     m_faces = result.faces;
-    m_view->setImage(result.image);
+    m_view->setImage(result.image, false);
     refreshMatches();
     if (!m_faces.isEmpty())
         m_faceList->setCurrentRow(0);
-    statusBar()->showMessage(m_faces.isEmpty() ? QStringLiteral("لم يُعثر على وجوه في الصورة")
-                                               : QStringLiteral("عدد الوجوه: %1").arg(m_faces.size()));
+
+    int known = 0;
+    for (const FaceItem &face : m_faces)
+        known += face.match.status == MatchStatus::Confirmed ? 1 : 0;
+    const QString summary = m_faces.isEmpty()
+        ? QStringLiteral("لم يُعثر على وجوه في الصورة")
+        : QStringLiteral("عدد الوجوه: %1 — تم التعرف على %2").arg(m_faces.size()).arg(known);
+    statusBar()->showMessage(summary);
+    Toast::show(this, summary, m_faces.isEmpty() ? Toast::Kind::Warning : Toast::Kind::Success);
     setBusy(false);
 }
 
@@ -373,6 +591,8 @@ void MainWindow::startVideo(const QString &source)
     m_faces.clear();
     refreshFaceList();
     m_view->clear();
+    m_view->setBusy(true, source.startsWith(QStringLiteral("camera:")) ? QStringLiteral("جارٍ تشغيل الكاميرا")
+                                                                       : QStringLiteral("جارٍ فتح الفيديو"));
     m_progress->setRange(0, 0);
     m_progress->setVisible(true);
     statusBar()->showMessage(QStringLiteral("جارٍ التحليل…"));
@@ -392,6 +612,7 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     m_videoWorker->frameShown();
     if (!m_videoRunning)
         return;
+    m_view->setBusy(false);
     m_view->setImage(frame);
     m_view->setFaces(faces);
     if (frameCount > 0) {
@@ -416,20 +637,23 @@ void MainWindow::onTrackUpdated(const FaceItem &track)
         }
     }
     m_faces.append(track);
-    auto *item = new QListWidgetItem(m_faceList);
-    updateFaceListItem(item, track);
+    updateFaceListItem(new QListWidgetItem(m_faceList), track);
+    updateFaceCount();
     m_saveFacesButton->setEnabled(true);
 }
 
 void MainWindow::onVideoFinished(const QString &error)
 {
     m_videoRunning = false;
+    m_view->setBusy(false);
     m_progress->setVisible(false);
     if (!error.isEmpty()) {
         statusBar()->showMessage(error);
-        QMessageBox::warning(this, windowTitle(), error);
+        Toast::show(this, error, Toast::Kind::Warning);
     } else {
-        statusBar()->showMessage(QStringLiteral("انتهى التحليل — أشخاص مختلفون: %1").arg(m_faces.size()));
+        const QString summary = QStringLiteral("انتهى التحليل — أشخاص مختلفون: %1").arg(m_faces.size());
+        statusBar()->showMessage(summary);
+        Toast::show(this, summary, Toast::Kind::Info);
     }
     setBusy(false);
 }
@@ -452,24 +676,30 @@ void MainWindow::refreshFaceList()
         updateFaceListItem(new QListWidgetItem(m_faceList), face);
     if (row >= 0 && row < m_faceList->count())
         m_faceList->setCurrentRow(row);
+    updateFaceCount();
     showFaceDetails();
-    setBusy(false);
+    setBusy(m_analyzing);
+}
+
+void MainWindow::updateFaceCount()
+{
+    m_faceCount->setText(QString::number(m_faces.size()));
 }
 
 void MainWindow::updateFaceListItem(QListWidgetItem *listItem, const FaceItem &face)
 {
     if (!listItem)
         return;
-    QString text = matchLabel(face.match);
-    QString info = QStringLiteral("تشابه %1% · جودة %2%")
-                       .arg(qRound(face.match.score * 100))
-                       .arg(qRound(face.quality * 100));
+    QString subtitle = QStringLiteral("جودة الصورة %1%").arg(qRound(face.quality * 100));
     if (m_videoMode)
-        info += QStringLiteral(" · %1 إطار").arg(face.frames);
-    listItem->setText(text + QLatin1Char('\n') + info);
-    listItem->setForeground(matchColor(face.match.status));
-    listItem->setIcon(QIcon(QPixmap::fromImage(face.crop.scaled(72, 72, Qt::KeepAspectRatio, Qt::SmoothTransformation))));
-    listItem->setData(Qt::UserRole, face.id);
+        subtitle += QStringLiteral(" · ظهر في %1 إطار").arg(face.frames);
+    listItem->setData(CardRole::Id, face.id);
+    listItem->setData(CardRole::Title, matchLabel(face.match));
+    listItem->setData(CardRole::Subtitle, subtitle);
+    listItem->setData(CardRole::Status, int(face.match.status));
+    listItem->setData(CardRole::Score, double(face.match.score));
+    if (!listItem->data(CardRole::Avatar).isValid() || m_videoMode)
+        listItem->setData(CardRole::Avatar, circularPixmap(face.crop, 54));
 }
 
 void MainWindow::selectFace(int id)
@@ -477,6 +707,7 @@ void MainWindow::selectFace(int id)
     for (int i = 0; i < m_faces.size(); ++i) {
         if (m_faces.at(i).id == id) {
             m_faceList->setCurrentRow(i);
+            m_faceList->scrollToItem(m_faceList->item(i));
             return;
         }
     }
@@ -487,41 +718,33 @@ void MainWindow::showFaceDetails()
     const int row = m_faceList->currentRow();
     m_enrollFaceButton->setEnabled(m_ready && row >= 0);
     if (row < 0 || row >= m_faces.size()) {
-        m_faceDetails->setText(QStringLiteral("اختر وجهاً من القائمة أو اضغط عليه في الصورة."));
+        m_faceDetails->setText(QStringLiteral("اختر وجهاً من القائمة أو اضغط عليه في الصورة لعرض تفاصيله."));
         m_view->setSelectedFace(-1);
         return;
     }
 
     const FaceItem &face = m_faces.at(row);
     m_view->setSelectedFace(face.id);
-    QString status;
-    switch (face.match.status) {
-    case MatchStatus::Confirmed:
-        status = QStringLiteral("تطابق مؤكد");
-        break;
-    case MatchStatus::Possible:
-        status = QStringLiteral("تطابق محتمل — يُنصح بالتحقق");
-        break;
-    case MatchStatus::Unknown:
-        status = QStringLiteral("غير موجود في قاعدة البيانات");
-        break;
-    }
-
-    QString html = QStringLiteral("<b style='font-size:14pt'>%1</b><br>%2<br>درجة التشابه: %3%<br>جودة الوجه: %4%")
-                       .arg(matchLabel(face.match).toHtmlEscaped(), status)
-                       .arg(qRound(face.match.score * 100))
-                       .arg(qRound(face.quality * 100));
+    const QString color = matchColor(face.match.status).name();
+    QString html = QStringLiteral("<div style='font-size:13pt; font-weight:600; color:%1'>%2</div>"
+                                  "<div style='color:%3'>%4</div>")
+                       .arg(Theme::Text.name(), matchLabel(face.match).toHtmlEscaped(), color, statusDescription(face.match.status));
+    auto row_ = [](const QString &key, const QString &value) {
+        return QStringLiteral("<br><span style='color:#8b97b3'>%1:</span> <span style='color:#e6eaf2'>%2</span>").arg(key, value.toHtmlEscaped());
+    };
+    html += row_(QStringLiteral("درجة التشابه"), QStringLiteral("%1%").arg(qRound(face.match.score * 100)));
+    html += row_(QStringLiteral("جودة الوجه"), QStringLiteral("%1%").arg(qRound(face.quality * 100)));
     if (!face.match.personId.isEmpty()) {
         const Person person = m_database.person(face.match.personId);
         if (!person.nationalId.isEmpty())
-            html += QStringLiteral("<br>رقم الهوية: %1").arg(person.nationalId.toHtmlEscaped());
+            html += row_(QStringLiteral("رقم الهوية"), person.nationalId);
         if (!person.phone.isEmpty())
-            html += QStringLiteral("<br>الهاتف: %1").arg(person.phone.toHtmlEscaped());
+            html += row_(QStringLiteral("الهاتف"), person.phone);
         if (!person.notes.isEmpty())
-            html += QStringLiteral("<br>ملاحظات: %1").arg(person.notes.toHtmlEscaped());
+            html += row_(QStringLiteral("ملاحظات"), person.notes);
     }
     if (face.quality < 0.35f)
-        html += QStringLiteral("<br><span style='color:#d68a00'>جودة الوجه منخفضة: النتيجة أقل موثوقية</span>");
+        html += QStringLiteral("<br><span style='color:#f59e0b'>جودة الوجه منخفضة: النتيجة أقل موثوقية</span>");
     m_faceDetails->setText(html);
 }
 
@@ -541,7 +764,7 @@ void MainWindow::saveFaces()
         if (face.crop.save(file))
             ++saved;
     }
-    statusBar()->showMessage(QStringLiteral("تم حفظ %1 وجه في %2").arg(saved).arg(QDir::toNativeSeparators(folder)));
+    Toast::show(this, QStringLiteral("تم حفظ %1 وجه").arg(saved));
 }
 
 void MainWindow::addSelectedFaceToDatabase()
@@ -575,15 +798,15 @@ void MainWindow::addSelectedFaceToDatabase()
             return;
         personId = m_database.addPerson(dialog.person());
         if (personId.isEmpty()) {
-            QMessageBox::warning(this, windowTitle(), QStringLiteral("تعذر حفظ الشخص"));
+            Toast::show(this, QStringLiteral("تعذر حفظ الشخص"), Toast::Kind::Warning);
             return;
         }
     }
 
     if (enrollFace(personId, face))
-        statusBar()->showMessage(QStringLiteral("أُضيف الوجه إلى %1").arg(m_database.person(personId).name));
+        Toast::show(this, QStringLiteral("أُضيف الوجه إلى %1").arg(m_database.person(personId).name));
     else
-        QMessageBox::warning(this, windowTitle(), QStringLiteral("تعذر إضافة الوجه"));
+        Toast::show(this, QStringLiteral("تعذر إضافة الوجه"), Toast::Kind::Warning);
 }
 
 bool MainWindow::enrollFace(const QString &personId, const FaceItem &face)
@@ -604,13 +827,27 @@ QString MainWindow::selectedPersonId() const
     if (!m_personList)
         return {};
     const QListWidgetItem *item = m_personList->currentItem();
-    return item ? item->data(Qt::UserRole).toString() : QString();
+    return item ? item->data(CardRole::Id).toString() : QString();
+}
+
+void MainWindow::refreshStats()
+{
+    int photos = 0;
+    const QList<Person> persons = m_database.persons();
+    for (const Person &person : persons)
+        photos += int(person.photos.size());
+    m_personCountLabel->setText(QString::number(persons.size()));
+    m_photoCountLabel->setText(QString::number(photos));
+    m_databaseSubtitle->setText(QStringLiteral("%1 شخص مسجل · %2 صورة وجه · محفوظة على هذا الجهاز فقط")
+                                    .arg(persons.size())
+                                    .arg(photos));
 }
 
 void MainWindow::refreshPersons()
 {
     if (!m_personList)
         return;
+    refreshStats();
     const QString selected = selectedPersonId();
     const QString filter = m_personFilter->text().trimmed();
 
@@ -620,12 +857,15 @@ void MainWindow::refreshPersons()
             && !person.nationalId.contains(filter, Qt::CaseInsensitive))
             continue;
         auto *item = new QListWidgetItem(m_personList);
-        item->setText(QStringLiteral("%1\nعدد الصور: %2").arg(person.name).arg(person.photos.size()));
-        item->setData(Qt::UserRole, person.id);
-        if (!person.photos.isEmpty()) {
-            const QPixmap pixmap(m_database.photoPath(person.id, person.photos.first().file));
-            item->setIcon(QIcon(pixmap.scaled(56, 56, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
-        }
+        item->setData(CardRole::Id, person.id);
+        item->setData(CardRole::Title, person.name);
+        QString subtitle = QStringLiteral("%1 صورة").arg(person.photos.size());
+        if (!person.nationalId.isEmpty())
+            subtitle = QStringLiteral("رقم الهوية %1 · ").arg(person.nationalId) + subtitle;
+        item->setData(CardRole::Subtitle, subtitle);
+        item->setData(CardRole::Status, -1);
+        if (!person.photos.isEmpty())
+            item->setData(CardRole::Avatar, circularPixmap(QImage(m_database.photoPath(person.id, person.photos.first().file)), 46));
         if (person.id == selected)
             m_personList->setCurrentItem(item);
     }
@@ -635,27 +875,38 @@ void MainWindow::refreshPersons()
 void MainWindow::showPersonDetails()
 {
     const QString id = selectedPersonId();
-    m_editPersonButton->setEnabled(!id.isEmpty());
-    m_removePersonButton->setEnabled(!id.isEmpty());
-    m_addPhotosButton->setEnabled(m_ready && !id.isEmpty());
     m_photoList->clear();
     m_removePhotoButton->setEnabled(false);
+    m_personActions->setVisible(!id.isEmpty());
+    m_removePhotoButton->setVisible(!id.isEmpty());
 
     if (id.isEmpty()) {
-        m_personDetails->setText(QStringLiteral("عدد الأشخاص في القاعدة: %1<br>اختر شخصاً لعرض بياناته، أو أضف شخصاً جديداً.")
-                                     .arg(m_database.persons().size()));
+        m_personAvatar->setPixmap(QPixmap());
+        m_personDetails->setText(QStringLiteral("<div style='font-size:15pt; font-weight:600'>اختر شخصاً</div>"
+                                                "<div style='color:#8b97b3'>اختر شخصاً من القائمة لعرض بياناته وصوره، "
+                                                "أو اضغط \"شخص جديد\" لإضافة شخص.</div>"));
         return;
     }
 
     const Person person = m_database.person(id);
-    QString html = QStringLiteral("<b style='font-size:15pt'>%1</b>").arg(person.name.toHtmlEscaped());
+    m_personAvatar->setPixmap(person.photos.isEmpty()
+                                  ? Icons::icon(Icons::Name::Users, Theme::Muted, 96).pixmap(96, 96)
+                                  : circularPixmap(QImage(m_database.photoPath(person.id, person.photos.first().file)), 96));
+
+    auto chip = [](const QString &key, const QString &value) {
+        return QStringLiteral("<span style='color:#8b97b3'>%1</span> <span style='color:#e6eaf2'>%2</span>&nbsp;&nbsp;&nbsp;")
+            .arg(key, value.toHtmlEscaped());
+    };
+    QString html = QStringLiteral("<div style='font-size:18pt; font-weight:700'>%1</div><div>").arg(person.name.toHtmlEscaped());
     if (!person.nationalId.isEmpty())
-        html += QStringLiteral("<br>رقم الهوية: %1").arg(person.nationalId.toHtmlEscaped());
+        html += chip(QStringLiteral("رقم الهوية:"), person.nationalId);
     if (!person.phone.isEmpty())
-        html += QStringLiteral("<br>الهاتف: %1").arg(person.phone.toHtmlEscaped());
+        html += chip(QStringLiteral("الهاتف:"), person.phone);
+    html += chip(QStringLiteral("أُضيف:"), person.created.toString(QStringLiteral("yyyy/MM/dd  hh:mm")));
+    html += QStringLiteral("</div>");
     if (!person.notes.isEmpty())
-        html += QStringLiteral("<br>ملاحظات: %1").arg(person.notes.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
-    html += QStringLiteral("<br>تاريخ الإضافة: %1").arg(QLocale().toString(person.created, QLocale::ShortFormat));
+        html += QStringLiteral("<div style='color:#8b97b3; margin-top:6px'>%1</div>")
+                    .arg(person.notes.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
     m_personDetails->setText(html);
 
     for (const FacePhoto &photo : person.photos) {
@@ -673,14 +924,15 @@ void MainWindow::addPerson()
         return;
     const QString id = m_database.addPerson(dialog.person());
     if (id.isEmpty()) {
-        QMessageBox::warning(this, windowTitle(), QStringLiteral("تعذر حفظ الشخص"));
+        Toast::show(this, QStringLiteral("تعذر حفظ الشخص"), Toast::Kind::Warning);
         return;
     }
     m_personFilter->clear();
     for (int i = 0; i < m_personList->count(); ++i) {
-        if (m_personList->item(i)->data(Qt::UserRole).toString() == id)
+        if (m_personList->item(i)->data(CardRole::Id).toString() == id)
             m_personList->setCurrentRow(i);
     }
+    Toast::show(this, QStringLiteral("تمت إضافة %1 — أضف الآن صوراً لوجهه").arg(dialog.person().name));
     if (m_ready)
         addPhotosTo(id);
 }
@@ -691,8 +943,12 @@ void MainWindow::editPerson()
     if (id.isEmpty())
         return;
     PersonDialog dialog(m_database.person(id), this);
-    if (dialog.exec() == QDialog::Accepted && !m_database.updatePerson(dialog.person()))
-        QMessageBox::warning(this, windowTitle(), QStringLiteral("تعذر حفظ التعديلات"));
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    if (m_database.updatePerson(dialog.person()))
+        Toast::show(this, QStringLiteral("تم حفظ التعديلات"));
+    else
+        Toast::show(this, QStringLiteral("تعذر حفظ التعديلات"), Toast::Kind::Warning);
 }
 
 void MainWindow::removePerson()
@@ -703,14 +959,18 @@ void MainWindow::removePerson()
     const Person person = m_database.person(id);
     const auto answer = QMessageBox::question(this, QStringLiteral("حذف الشخص"),
                                               QStringLiteral("هل تريد حذف \"%1\" وكل صوره من قاعدة البيانات؟").arg(person.name));
-    if (answer == QMessageBox::Yes && !m_database.removePerson(id))
-        QMessageBox::warning(this, windowTitle(), QStringLiteral("تعذر حذف الشخص"));
+    if (answer != QMessageBox::Yes)
+        return;
+    if (m_database.removePerson(id))
+        Toast::show(this, QStringLiteral("تم حذف %1").arg(person.name), Toast::Kind::Info);
+    else
+        Toast::show(this, QStringLiteral("تعذر حذف الشخص"), Toast::Kind::Warning);
 }
 
 void MainWindow::addPhotos()
 {
     const QString id = selectedPersonId();
-    if (!id.isEmpty())
+    if (!id.isEmpty() && m_ready)
         addPhotosTo(id);
 }
 
@@ -749,6 +1009,10 @@ void MainWindow::addPhotosTo(const QString &personId)
     }
     progress.setValue(int(files.size()));
 
+    if (noFace.isEmpty() && multipleFaces.isEmpty()) {
+        Toast::show(this, QStringLiteral("أُضيفت %1 صورة").arg(added));
+        return;
+    }
     QString message = QStringLiteral("أُضيفت %1 صورة.").arg(added);
     if (!noFace.isEmpty())
         message += QStringLiteral("\n\nلم يُعثر على وجه في:\n") + noFace.join(QLatin1Char('\n'));
@@ -765,8 +1029,10 @@ void MainWindow::removePhoto()
         return;
     if (QMessageBox::question(this, QStringLiteral("حذف الصورة"), QStringLiteral("هل تريد حذف هذه الصورة؟")) != QMessageBox::Yes)
         return;
-    if (!m_database.removePhoto(id, item->data(Qt::UserRole).toString()))
-        QMessageBox::warning(this, windowTitle(), QStringLiteral("تعذر حذف الصورة"));
+    if (m_database.removePhoto(id, item->data(Qt::UserRole).toString()))
+        Toast::show(this, QStringLiteral("تم حذف الصورة"), Toast::Kind::Info);
+    else
+        Toast::show(this, QStringLiteral("تعذر حذف الصورة"), Toast::Kind::Warning);
 }
 
 void MainWindow::openDatabaseFolder()

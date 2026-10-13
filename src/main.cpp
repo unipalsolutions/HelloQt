@@ -1,6 +1,7 @@
 #include "faceengine.h"
 #include "imageio.h"
 #include "mainwindow.h"
+#include "theme.h"
 
 #include <QApplication>
 #include <QElapsedTimer>
@@ -56,6 +57,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("HelloQt"));
     QApplication::setLayoutDirection(Qt::RightToLeft);
+    Theme::apply(app);
     qRegisterMetaType<FaceItem>();
     qRegisterMetaType<QList<FaceItem>>();
 

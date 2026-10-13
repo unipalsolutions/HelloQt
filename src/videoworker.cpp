@@ -14,6 +14,7 @@ namespace {
 constexpr int MaxTrackGap = 15;      // إطارات يُحتفظ فيها بالمسار دون ظهور الوجه
 constexpr int MaxReidentifyGap = 150; // إعادة ربط الوجه بمساره بعد اختفاء مؤقت
 constexpr int MaxPendingFrames = 2;
+constexpr int MinTrackHits = 3;       // لا يُعرض المسار قبل ظهوره في عدة إطارات متقاربة
 
 struct Track
 {
@@ -21,7 +22,9 @@ struct Track
     QRectF box;
     std::vector<float> sum;
     int frames = 0;
+    int firstSeen = 0;
     int lastSeen = 0;
+    bool confirmed = false;
     FaceItem best;
 };
 
@@ -144,6 +147,7 @@ void VideoWorker::process(const QString &source)
             if (match < 0) {
                 Track track;
                 track.id = nextId++;
+                track.firstSeen = processed;
                 track.sum.assign(item.embedding.size(), 0.0f);
                 tracks.push_back(track);
                 used.push_back(false);
@@ -161,6 +165,13 @@ void VideoWorker::process(const QString &source)
             track.box = item.box;
             if (track.best.crop.isNull() || item.quality >= track.best.quality)
                 track.best = item;
+
+            // كشف عابر في إطارات متفرقة (مثل يد مرفوعة) لا يُعتمد كوجه
+            if (!track.confirmed && track.frames >= MinTrackHits
+                && track.frames * 2 >= processed - track.firstSeen + 1)
+                track.confirmed = true;
+            if (!track.confirmed)
+                continue;
 
             FaceItem summary = track.best;
             summary.id = track.id;
