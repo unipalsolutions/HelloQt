@@ -408,6 +408,58 @@ int databaseTest(const QString &directory, int persons, int photosPerPerson, QTe
         out << "unknown_false_matches=" << falseMatches << "/200\n";
     }
 
+    // ملف الشخص: المرشحون، تماسك الصور، سجل الظهور، ودمج شخصين
+    bool profileOk = true;
+    {
+        const int p = persons / 3;
+        const QString id = expectedId(p);
+        const QList<MatchResult> top = FaceDatabase::candidates(*gallery, noisy(identityOf(p), 0.8f, random), 5, 0.3f);
+        const bool candidatesOk = top.size() == 5 && top.first().personId == id
+            && std::is_sorted(top.cbegin(), top.cend(), [](const MatchResult &a, const MatchResult &b) { return a.score > b.score; });
+        out << "candidates_ok=" << candidatesOk << " top=" << (top.isEmpty() ? 0.0f : top.first().score) << "\n";
+        const QHash<qint64, float> consistency = database.photoConsistency(id);
+        float minConsistency = 1.0f;
+        for (float value : consistency)
+            minConsistency = std::min(minConsistency, value);
+        out << "consistency_photos=" << consistency.size() << " min=" << minConsistency << "\n";
+
+        database.addSighting(id, QStringLiteral("video.mp4"), 12000, 0.7f, crop);
+        database.addSighting(id, QStringLiteral("video.mp4"), 13500, 0.8f, crop); // الموضع نفسه تقريباً: لا يتكرر
+        database.addSighting(id, QStringLiteral("photo.jpg"), -1, 0.6f, crop);
+        const QList<Sighting> seen = database.sightings(id);
+        const Person seenPerson = database.person(id);
+        const bool sightingsOk = seen.size() == 2 && seenPerson.seenCount == 2 && seenPerson.lastSeen.isValid();
+        out << "sightings=" << seen.size() << " seen_count=" << seenPerson.seenCount << " ok=" << sightingsOk << "\n";
+
+        // الصورة الرئيسية وحذف صورة أخرى (يجب أن تبقى الرئيسية كما هي)
+        bool photosOk = true;
+        const Person before = database.person(id);
+        if (before.photos.size() >= 2) {
+            const qint64 cover = before.photos.last().id;
+            database.setCoverPhoto(id, cover);
+            database.removePhoto(id, before.photos.first().id);
+            const Person afterRemove = database.person(id);
+            photosOk = afterRemove.photoCount == before.photoCount - 1 && afterRemove.coverPhoto == cover;
+            out << "remove_photo_ok=" << photosOk << " cover_kept=" << (afterRemove.coverPhoto == cover) << "\n";
+        }
+
+        // دمج شخص آخر فيه: تنتقل صوره وسجله ويُحذف
+        const QString other = expectedId(p + 1);
+        const int photosBefore = database.person(id).photoCount + database.person(other).photoCount;
+        database.addSighting(other, QStringLiteral("other.mp4"), 5000, 0.9f, crop);
+        timer.restart();
+        const bool merged = database.mergePersons(id, other);
+        out << "merge_ms=" << timer.elapsed() << "\n";
+        const Person after = database.person(id);
+        const bool mergeOk = merged && database.person(other).id.isEmpty() && after.photoCount == photosBefore
+            && database.sightings(id).size() == 3;
+        out << "merge_ok=" << mergeOk << " photos=" << after.photoCount << "\n";
+        const MatchResult otherMatch = FaceDatabase::identify(*database.gallery(), noisy(identityOf(p + 1), 0.8f, random), 0.3f);
+        const bool mergedIdentifyOk = otherMatch.personId == id;
+        out << "merged_identify_ok=" << mergedIdentifyOk << "\n";
+        profileOk = candidatesOk && sightingsOk && photosOk && mergeOk && mergedIdentifyOk && consistency.size() == photosPerPerson;
+    }
+
     // البحث بالاسم ورقم الهوية
     timer.restart();
     const QList<Person> firstPage = database.findPersons(QString(), 0, 100);
@@ -430,7 +482,7 @@ int databaseTest(const QString &directory, int persons, int photosPerPerson, QTe
 
     out << "disk_mb=" << folderSize(directory) / (1024.0 * 1024.0) << "\n";
     out << "peak_memory_mb=" << peakMemoryMb() << "\n";
-    return goodOk && !firstPage.isEmpty() && !byId.isEmpty() ? 0 : 1;
+    return goodOk && profileOk && !firstPage.isEmpty() && !byId.isEmpty() ? 0 : 1;
 }
 
 } // namespace

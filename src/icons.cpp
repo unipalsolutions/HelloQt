@@ -250,12 +250,8 @@ QPainterPath outline(Name name)
         line(17, 12, 14, 15);
         break;
     case Name::Compare:
-        p.addEllipse(QPointF(7, 9), 3.2, 3.2);
-        p.moveTo(2, 20);
-        p.cubicTo(2, 15, 12, 15, 12, 20);
-        p.addEllipse(QPointF(17, 9), 3.2, 3.2);
-        p.moveTo(12, 20);
-        p.cubicTo(12, 15, 22, 15, 22, 20);
+        p.addEllipse(QPointF(8.5, 12), 6.5, 6.5);
+        p.addEllipse(QPointF(15.5, 12), 6.5, 6.5);
         break;
     case Name::Collect:
         p.addRoundedRect(QRectF(3, 4, 13, 11), 2, 2);

@@ -32,6 +32,10 @@ class QThread;
 class ToggleSwitch;
 class TimelineView;
 class VideoWorker;
+class MatchPage;
+class QFrame;
+class QStackedWidget;
+class StrengthMeter;
 
 struct ImageAnalysis
 {
@@ -110,6 +114,7 @@ private:
     // قاعدة البيانات
     void refreshPersons();
     void applyPersonFilter();
+    void showPerson(const QString &personId);
     void updateDatabaseSubtitle();
     void refreshStats();
     void showPersonDetails();
@@ -123,8 +128,17 @@ private:
     void openDatabaseFolder();
     QString selectedPersonId() const;
     bool enrollFace(const QString &personId, const FaceItem &face);
+    int enrollFaces(const QString &personId, const QList<FaceItem> &faces);
+    QString choosePerson(const QString &suggestedId);
+    void harvestPhotos(const QString &personId);
+    void harvestFromFace(int faceId);
+    void recordSightings(const QString &source);
+    void setCoverPhoto();
+    void mergeDuplicate();
+    void exportPerson();
 
     FaceEngine m_engine;
+    MatchPage *m_matchPage = nullptr;
     FaceDatabase m_database;
     bool m_ready = false;
     QFutureWatcher<QString> m_loadWatcher; // تحميل النماذج في الخلفية حتى تظهر النافذة فوراً
@@ -214,4 +228,14 @@ private:
     QListWidget *m_photoList = nullptr;
     QWidget *m_personActions = nullptr;
     FancyButton *m_removePhotoButton = nullptr;
+    FancyButton *m_coverButton = nullptr;
+    FancyButton *m_harvestButton = nullptr;
+    FancyButton *m_photosTab = nullptr;
+    FancyButton *m_sightingsTab = nullptr;
+    QStackedWidget *m_profileStack = nullptr;
+    QListWidget *m_sightingList = nullptr;
+    StrengthMeter *m_strengthMeter = nullptr;
+    QFrame *m_duplicateBanner = nullptr;
+    QLabel *m_duplicateText = nullptr;
+    QString m_duplicateId;
 };

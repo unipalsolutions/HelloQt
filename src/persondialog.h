@@ -7,6 +7,9 @@
 class PersonListModel;
 class QLineEdit;
 class QListView;
+class QComboBox;
+class QDateEdit;
+class QCheckBox;
 class QPlainTextEdit;
 
 class PersonDialog : public QDialog
@@ -25,6 +28,12 @@ private:
     QLineEdit *m_name;
     QLineEdit *m_nationalId;
     QLineEdit *m_phone;
+    QComboBox *m_gender;
+    QCheckBox *m_hasBirthDate;
+    QDateEdit *m_birthDate;
+    QLineEdit *m_email;
+    QLineEdit *m_address;
+    QLineEdit *m_tags;
     QPlainTextEdit *m_notes;
 };
 

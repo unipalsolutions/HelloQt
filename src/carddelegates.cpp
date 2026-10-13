@@ -106,7 +106,9 @@ void FaceCardDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, co
     QFont smallFont = option.font;
     smallFont.setPointSizeF(8.5);
 
-    const QString statusText = status == MatchStatus::Confirmed ? QStringLiteral("مؤكد")
+    const QString customStatus = index.data(CardRole::StatusText).toString();
+    const QString statusText = !customStatus.isEmpty()              ? customStatus
+                             : status == MatchStatus::Confirmed ? QStringLiteral("مؤكد")
                              : status == MatchStatus::Possible  ? QStringLiteral("محتمل")
                                                                 : QStringLiteral("غير مسجل");
     const QFontMetricsF smallMetrics(smallFont);

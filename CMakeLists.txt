@@ -48,6 +48,12 @@ qt_add_executable(Malamih
     src/shotviewer.cpp
     src/timelineview.h
     src/timelineview.cpp
+    src/matchpage.h
+    src/matchpage.cpp
+    src/personprofile.h
+    src/personprofile.cpp
+    src/harvestdialog.h
+    src/harvestdialog.cpp
 )
 
 # أيقونة التطبيق: داخل الملف التنفيذي على Windows وللنافذة عبر موارد Qt

@@ -2,7 +2,12 @@
 
 #include "personmodel.h"
 
+#include <QCheckBox>
+#include <QComboBox>
+#include <QCompleter>
+#include <QDateEdit>
 #include <QDialogButtonBox>
+#include <QHBoxLayout>
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -11,6 +16,7 @@
 #include <QPlainTextEdit>
 #include <QSignalBlocker>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QVBoxLayout>
 #include <QTimer>
 
@@ -20,15 +26,48 @@ PersonDialog::PersonDialog(const Person &person, QWidget *parent)
     , m_name(new QLineEdit(person.name, this))
     , m_nationalId(new QLineEdit(person.nationalId, this))
     , m_phone(new QLineEdit(person.phone, this))
+    , m_gender(new QComboBox(this))
+    , m_hasBirthDate(new QCheckBox(this))
+    , m_birthDate(new QDateEdit(this))
+    , m_email(new QLineEdit(person.email, this))
+    , m_address(new QLineEdit(person.address, this))
+    , m_tags(new QLineEdit(person.tags, this))
     , m_notes(new QPlainTextEdit(person.notes, this))
 {
     setWindowTitle(person.id.isEmpty() ? QStringLiteral("شخص جديد") : QStringLiteral("تعديل بيانات الشخص"));
-    resize(420, 320);
+    resize(460, 480);
+
+    m_gender->addItems({QStringLiteral("غير محدد"), QStringLiteral("ذكر"), QStringLiteral("أنثى")});
+    m_gender->setCurrentIndex(std::max(0, m_gender->findText(person.gender)));
+    m_birthDate->setDisplayFormat(QStringLiteral("yyyy/MM/dd"));
+    m_birthDate->setCalendarPopup(true);
+    m_birthDate->setMaximumDate(QDate::currentDate());
+    m_birthDate->setDate(person.birthDate.isValid() ? person.birthDate : QDate(1990, 1, 1));
+    m_hasBirthDate->setChecked(person.birthDate.isValid());
+    m_birthDate->setEnabled(m_hasBirthDate->isChecked());
+    connect(m_hasBirthDate, &QCheckBox::toggled, m_birthDate, &QWidget::setEnabled);
+    auto *birthRow = new QHBoxLayout;
+    birthRow->addWidget(m_hasBirthDate);
+    birthRow->addWidget(m_birthDate, 1);
+    m_email->setPlaceholderText(QStringLiteral("name@example.com"));
+    m_tags->setPlaceholderText(QStringLiteral("مثال: موظف، زائر، مطلوب"));
+    m_tags->setToolTip(QStringLiteral("تصنيفات مفصولة بفواصل، يمكن البحث بها في القاعدة"));
+    auto *completer = new QCompleter({QStringLiteral("موظف"), QStringLiteral("زائر"), QStringLiteral("عميل"), QStringLiteral("مطلوب"),
+                                      QStringLiteral("ممنوع من الدخول"), QStringLiteral("VIP"), QStringLiteral("مفقود")},
+                                     this);
+    completer->setCaseSensitivity(Qt::CaseInsensitive);
+    m_tags->setCompleter(completer);
+    m_notes->setMinimumHeight(80);
 
     auto *form = new QFormLayout;
     form->addRow(QStringLiteral("الاسم:"), m_name);
     form->addRow(QStringLiteral("رقم الهوية:"), m_nationalId);
+    form->addRow(QStringLiteral("الجنس:"), m_gender);
+    form->addRow(QStringLiteral("تاريخ الميلاد:"), birthRow);
     form->addRow(QStringLiteral("الهاتف:"), m_phone);
+    form->addRow(QStringLiteral("البريد:"), m_email);
+    form->addRow(QStringLiteral("العنوان:"), m_address);
+    form->addRow(QStringLiteral("التصنيفات:"), m_tags);
     form->addRow(QStringLiteral("ملاحظات:"), m_notes);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
@@ -48,6 +87,17 @@ Person PersonDialog::person() const
     person.name = m_name->text().trimmed();
     person.nationalId = m_nationalId->text().trimmed();
     person.phone = m_phone->text().trimmed();
+    person.gender = m_gender->currentIndex() > 0 ? m_gender->currentText() : QString();
+    person.birthDate = m_hasBirthDate->isChecked() ? m_birthDate->date() : QDate();
+    person.email = m_email->text().trimmed();
+    person.address = m_address->text().trimmed();
+    QStringList tags;
+    for (QString tag : m_tags->text().split(QRegularExpression(QStringLiteral("[,،]")), Qt::SkipEmptyParts)) {
+        tag = tag.trimmed();
+        if (!tag.isEmpty() && !tags.contains(tag))
+            tags << tag;
+    }
+    person.tags = tags.join(QStringLiteral("، "));
     person.notes = m_notes->toPlainText().trimmed();
     return person;
 }

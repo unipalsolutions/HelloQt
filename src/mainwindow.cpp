@@ -1,5 +1,9 @@
 #include "mainwindow.h"
 
+#include "harvestdialog.h"
+#include "matchpage.h"
+#include "personprofile.h"
+
 #include "carddelegates.h"
 #include "icons.h"
 #include "imageio.h"
@@ -46,7 +50,9 @@
 #include <QShortcut>
 #include <QSlider>
 #include <QSpinBox>
+#include <QPainterPath>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QTextStream>
@@ -159,6 +165,40 @@ private:
     bool m_canceled = false;
 };
 
+// صورة وجه في شبكة صور الشخص، مع نجمة للصورة الرئيسية وعلامة تحذير للصورة المشكوك فيها
+QPixmap decoratedPhoto(const QImage &image, int size, bool cover, bool suspect)
+{
+    QPixmap pixmap(size * 2, size * 2);
+    pixmap.setDevicePixelRatio(2.0);
+    pixmap.fill(Qt::transparent);
+    QPainter p(&pixmap);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setRenderHint(QPainter::SmoothPixmapTransform);
+    QPainterPath clip;
+    clip.addRoundedRect(QRectF(0, 0, size, size), 12, 12);
+    p.save();
+    p.setClipPath(clip);
+    const QImage scaled = image.scaled(size * 2, size * 2, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    p.drawImage(QRectF((size - scaled.width() / 2.0) / 2.0, (size - scaled.height() / 2.0) / 2.0, scaled.width() / 2.0, scaled.height() / 2.0), scaled);
+    p.restore();
+    if (suspect) {
+        p.setPen(QPen(QColor(0xfb, 0x71, 0x85), 3));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(QRectF(1.5, 1.5, size - 3, size - 3), 11, 11);
+    }
+    auto badge = [&](const QPointF &center, const QColor &color, Icons::Name icon) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(7, 17, 31, 220));
+        p.drawEllipse(center, 14, 14);
+        Icons::paint(p, icon, QRectF(center.x() - 9, center.y() - 9, 18, 18), color);
+    };
+    if (cover)
+        badge(QPointF(size - 18, 18), QColor(0xfa, 0xcc, 0x15), Icons::Name::Star);
+    if (suspect)
+        badge(QPointF(18, 18), QColor(0xfb, 0x71, 0x85), Icons::Name::Alert);
+    return pixmap;
+}
+
 QString safeFileName(QString name)
 {
     static const QString invalid = QStringLiteral("\\/:*?\"<>|");
@@ -237,6 +277,16 @@ MainWindow::MainWindow(QWidget *parent)
     m_pages = new AnimatedStack(central);
     m_pages->addWidget(createRecognitionPage());
     m_pages->addWidget(createDatabasePage());
+    m_matchPage = new MatchPage(&m_engine, &m_database, [this] { return threshold(); }, m_pages);
+    m_matchPage->setReady(false);
+    m_pages->addWidget(m_matchPage);
+    connect(m_matchPage, &MatchPage::openPersonRequested, this, &MainWindow::showPerson);
+    connect(m_matchPage, &MatchPage::enrollRequested, this, [this](const QString &personId, const FaceItem &face) {
+        if (enrollFace(personId, face))
+            Toast::show(this, QStringLiteral("أضيفت الصورة إلى ملف %1").arg(m_database.person(personId).name));
+        else
+            Toast::show(this, QStringLiteral("تعذرت إضافة الصورة"), Toast::Kind::Warning);
+    });
     layout->addWidget(createSidebar());
     layout->addWidget(m_pages, 1);
     setCentralWidget(central);
@@ -259,6 +309,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(&m_database, &FaceDatabase::changed, this, [this] {
         refreshStats();
         refreshMatches();
+        m_matchPage->refresh();
     });
     connect(&m_database, &FaceDatabase::personsReset, this, &MainWindow::refreshPersons);
     connect(&m_database, &FaceDatabase::personUpdated, this, [this](const QString &id) {
@@ -315,6 +366,7 @@ void MainWindow::onEngineLoaded()
         return;
     }
     m_ready = true;
+    m_matchPage->setReady(true);
     setBusy(false);
     statusBar()->showMessage(QStringLiteral("جاهز — كل المعالجة تتم محلياً على هذا الجهاز · اسحب صورة أو فيديو إلى النافذة أو الصق صورة بـ Ctrl+V"));
     if (!m_pendingFile.isEmpty())
@@ -363,6 +415,7 @@ void MainWindow::setupShortcuts()
     });
     add(QKeySequence(Qt::CTRL | Qt::Key_1), [this] { m_navGroup->button(0)->click(); });
     add(QKeySequence(Qt::CTRL | Qt::Key_2), [this] { m_navGroup->button(1)->click(); });
+    add(QKeySequence(Qt::CTRL | Qt::Key_3), [this] { m_navGroup->button(2)->click(); });
 }
 
 void MainWindow::loadSettings()
@@ -426,6 +479,12 @@ void MainWindow::dropEvent(QDropEvent *event)
             pasteImage();
         return;
     }
+    if (m_pages->currentIndex() == 2 && !images.isEmpty()) {
+        m_matchPage->openFile(images.first());
+        if (images.size() > 1)
+            m_matchPage->openFile(images.at(1));
+        return;
+    }
     m_navGroup->button(0)->click();
     openFile(files.first());
 }
@@ -435,8 +494,12 @@ void MainWindow::pasteImage()
     const QImage image = QApplication::clipboard()->image();
     if (image.isNull()) {
         const QList<QUrl> urls = QApplication::clipboard()->mimeData()->urls();
-        if (!urls.isEmpty() && urls.first().isLocalFile())
-            openFile(urls.first().toLocalFile());
+        if (!urls.isEmpty() && urls.first().isLocalFile()) {
+            if (m_pages->currentIndex() == 2)
+                m_matchPage->openFile(urls.first().toLocalFile());
+            else
+                openFile(urls.first().toLocalFile());
+        }
         return;
     }
     if (!m_openImageButton->isEnabled())
@@ -445,6 +508,10 @@ void MainWindow::pasteImage()
                              .filePath(QStringLiteral("malamih-clipboard.png"));
     if (!image.save(path)) {
         Toast::show(this, QStringLiteral("تعذر قراءة الصورة من الحافظة"), Toast::Kind::Warning);
+        return;
+    }
+    if (m_pages->currentIndex() == 2) {
+        m_matchPage->openFile(path);
         return;
     }
     m_navGroup->button(0)->click();
@@ -485,15 +552,18 @@ QWidget *MainWindow::createSidebar()
 
     auto *recognitionNav = new FancyButton(Icons::Name::Scan, QStringLiteral("التعرف"), FancyButton::Kind::Nav, sidebar);
     auto *databaseNav = new FancyButton(Icons::Name::Users, QStringLiteral("قاعدة البيانات"), FancyButton::Kind::Nav, sidebar);
-    m_navButtons = {recognitionNav, databaseNav};
+    auto *matchNav = new FancyButton(Icons::Name::Compare, QStringLiteral("المطابقة"), FancyButton::Kind::Nav, sidebar);
+    m_navButtons = {recognitionNav, databaseNav, matchNav};
     auto *group = new QButtonGroup(sidebar);
     m_navGroup = group;
     group->addButton(recognitionNav, 0);
     group->addButton(databaseNav, 1);
+    group->addButton(matchNav, 2);
     recognitionNav->setChecked(true);
     connect(group, &QButtonGroup::idClicked, this, [this](int id) { m_pages->slideTo(id); });
     layout->addWidget(recognitionNav);
     layout->addWidget(databaseNav);
+    layout->addWidget(matchNav);
     layout->addStretch();
 
     auto *stats = card(sidebar, QStringLiteral("statCard"));
@@ -555,6 +625,8 @@ void MainWindow::updateResponsiveLayout()
         subtitle->setVisible(mode == 0 && !shortScreen);
     if (m_photosHint)
         m_photosHint->setVisible(mode == 0);
+    if (m_matchPage)
+        m_matchPage->setCompact(mode >= 2 || shortScreen);
 }
 
 QWidget *MainWindow::createRecognitionPage()
@@ -632,6 +704,8 @@ QWidget *MainWindow::createRecognitionPage()
         m_thresholdWarning->setVisible(value < 30);
         m_videoWorker->setThreshold(threshold());
         refreshMatches();
+        if (m_matchPage)
+            m_matchPage->refresh();
     });
 
     m_thoroughSwitch = new ToggleSwitch(QStringLiteral("تحليل معمّق للصور"), settings);
@@ -958,31 +1032,72 @@ QWidget *MainWindow::createDatabasePage()
     m_personDetails->setAlignment(Qt::AlignTop);
     m_personDetails->setTextInteractionFlags(Qt::TextSelectableByMouse);
     profile->addWidget(m_personDetails, 1);
+    m_strengthMeter = new StrengthMeter(detailsCard);
+    profile->addWidget(m_strengthMeter, 0, Qt::AlignTop);
     detailsLayout->addLayout(profile);
+
+    // تنبيه احتمال التكرار: شخص آخر في القاعدة يشبهه بدرجة عالية
+    m_duplicateBanner = card(detailsCard, QStringLiteral("statCard"));
+    auto *duplicateLayout = new QHBoxLayout(m_duplicateBanner);
+    duplicateLayout->setContentsMargins(12, 8, 12, 8);
+    auto *duplicateIcon = new QLabel(m_duplicateBanner);
+    duplicateIcon->setPixmap(Icons::icon(Icons::Name::Copy, Theme::Accent2, 20).pixmap(20, 20));
+    duplicateLayout->addWidget(duplicateIcon);
+    m_duplicateText = new QLabel(m_duplicateBanner);
+    m_duplicateText->setWordWrap(true);
+    duplicateLayout->addWidget(m_duplicateText, 1);
+    auto *duplicateOpen = new FancyButton(Icons::Name::Users, QStringLiteral("فتح"), FancyButton::Kind::Secondary, m_duplicateBanner);
+    auto *duplicateMerge = new FancyButton(Icons::Name::Merge, QStringLiteral("دمج الملفين"), FancyButton::Kind::Primary, m_duplicateBanner);
+    duplicateMerge->setToolTip(QStringLiteral("ينقل صور الشخص الآخر وسجل ظهوره إلى هذا الملف ثم يحذفه"));
+    connect(duplicateOpen, &QAbstractButton::clicked, this, [this] { showPerson(m_duplicateId); });
+    connect(duplicateMerge, &QAbstractButton::clicked, this, &MainWindow::mergeDuplicate);
+    duplicateLayout->addWidget(duplicateOpen);
+    duplicateLayout->addWidget(duplicateMerge);
+    m_duplicateBanner->setVisible(false);
+    detailsLayout->addWidget(m_duplicateBanner);
 
     m_personActions = new QWidget(detailsCard);
     auto *actions = new FlowLayout(m_personActions, 10, 8);
     actions->setContentsMargins(0, 0, 0, 0);
     auto *editButton = new FancyButton(Icons::Name::Edit, QStringLiteral("تعديل البيانات"), FancyButton::Kind::Secondary, m_personActions);
     auto *addPhotosButton = new FancyButton(Icons::Name::PhotoAdd, QStringLiteral("إضافة صور"), FancyButton::Kind::Primary, m_personActions);
+    auto *harvestButton = new FancyButton(Icons::Name::Collect, QStringLiteral("جمع صور من فيديو"), FancyButton::Kind::Secondary, m_personActions);
+    harvestButton->setToolTip(QStringLiteral("يبحث عن الشخص في فيديو ويقترح أوضح لقطاته وأكثرها تنوعاً لإضافتها إلى صوره"));
+    auto *exportButton = new FancyButton(Icons::Name::Export, QStringLiteral("تصدير PDF"), FancyButton::Kind::Secondary, m_personActions);
     auto *removeButton = new FancyButton(Icons::Name::Trash, QStringLiteral("حذف الشخص"), FancyButton::Kind::Danger, m_personActions);
     connect(editButton, &QAbstractButton::clicked, this, &MainWindow::editPerson);
     connect(addPhotosButton, &QAbstractButton::clicked, this, &MainWindow::addPhotos);
+    connect(harvestButton, &QAbstractButton::clicked, this, [this] { harvestPhotos(selectedPersonId()); });
+    connect(exportButton, &QAbstractButton::clicked, this, &MainWindow::exportPerson);
     connect(removeButton, &QAbstractButton::clicked, this, &MainWindow::removePerson);
     actions->addWidget(addPhotosButton);
+    actions->addWidget(harvestButton);
     actions->addWidget(editButton);
+    actions->addWidget(exportButton);
     actions->addWidget(removeButton);
+    m_harvestButton = harvestButton;
     detailsLayout->addWidget(m_personActions);
 
     auto *photosHeader = new QHBoxLayout;
-    auto *photosTitle = label(QStringLiteral("صور الوجه المسجلة"), QStringLiteral("sectionTitle"), detailsCard);
-    photosHeader->addWidget(photosTitle);
+    m_photosTab = new FancyButton(Icons::Name::Image, QStringLiteral("صور الوجه"), FancyButton::Kind::Nav, detailsCard);
+    m_sightingsTab = new FancyButton(Icons::Name::History, QStringLiteral("سجل الظهور"), FancyButton::Kind::Nav, detailsCard);
+    for (FancyButton *tab : {m_photosTab, m_sightingsTab}) {
+        tab->setAutoExclusive(true);
+        tab->setFixedWidth(170);
+        photosHeader->addWidget(tab);
+    }
+    m_photosTab->setChecked(true);
     m_photosHint = label(QStringLiteral("كلما زادت الصور وتنوعت زادت دقة التعرف"), QStringLiteral("muted"), detailsCard);
     photosHeader->addWidget(m_photosHint, 1);
     photosHeader->addStretch();
+    m_coverButton = new FancyButton(Icons::Name::Star, QStringLiteral("صورة رئيسية"), FancyButton::Kind::Secondary, detailsCard);
+    m_coverButton->setToolTip(QStringLiteral("تعيين الصورة المحددة صورةً رئيسية تمثل الشخص في القوائم"));
+    connect(m_coverButton, &QAbstractButton::clicked, this, &MainWindow::setCoverPhoto);
+    photosHeader->addWidget(m_coverButton);
     m_removePhotoButton = new FancyButton(Icons::Name::Trash, QStringLiteral("حذف الصورة"), FancyButton::Kind::Danger, detailsCard);
     connect(m_removePhotoButton, &QAbstractButton::clicked, this, &MainWindow::removePhoto);
     photosHeader->addWidget(m_removePhotoButton);
+    m_headerButtons << m_coverButton << m_removePhotoButton;
     detailsLayout->addLayout(photosHeader);
 
     m_photoList = new QListWidget(detailsCard);
@@ -993,8 +1108,43 @@ QWidget *MainWindow::createDatabasePage()
     m_photoList->setResizeMode(QListView::Adjust);
     m_photoList->setMovement(QListView::Static);
     m_photoList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    connect(m_photoList, &QListWidget::currentRowChanged, this, [this] { m_removePhotoButton->setEnabled(m_photoList->currentItem()); });
-    detailsLayout->addWidget(m_photoList, 1);
+    connect(m_photoList, &QListWidget::currentRowChanged, this, [this] {
+        m_removePhotoButton->setEnabled(m_photoList->currentItem());
+        m_coverButton->setEnabled(m_photoList->currentItem());
+    });
+    connect(m_photoList, &QListWidget::itemDoubleClicked, this, &MainWindow::setCoverPhoto);
+
+    m_sightingList = new QListWidget(detailsCard);
+    m_sightingList->setItemDelegate(new FaceCardDelegate(m_sightingList));
+    m_sightingList->setUniformItemSizes(true);
+    m_sightingList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_sightingList->setMouseTracking(true);
+    m_sightingList->setToolTip(QStringLiteral("انقر نقراً مزدوجاً لفتح الصورة أو الفيديو الذي ظهر فيه"));
+    connect(m_sightingList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+        const QString source = item->data(CardRole::Id).toString();
+        if (!QFileInfo::exists(source)) {
+            Toast::show(this, QStringLiteral("الملف غير موجود: %1").arg(QDir::toNativeSeparators(source)), Toast::Kind::Warning);
+            return;
+        }
+        if (!m_ready || m_videoRunning || m_analyzing)
+            return;
+        m_navGroup->button(0)->click();
+        openFile(source);
+    });
+    m_profileStack = new QStackedWidget(detailsCard);
+    m_profileStack->addWidget(m_photoList);
+    m_profileStack->addWidget(m_sightingList);
+    connect(m_photosTab, &QAbstractButton::clicked, this, [this] {
+        m_profileStack->setCurrentIndex(0);
+        m_coverButton->setVisible(true);
+        m_removePhotoButton->setVisible(!selectedPersonId().isEmpty());
+    });
+    connect(m_sightingsTab, &QAbstractButton::clicked, this, [this] {
+        m_profileStack->setCurrentIndex(1);
+        m_coverButton->setVisible(false);
+        m_removePhotoButton->setVisible(false);
+    });
+    detailsLayout->addWidget(m_profileStack, 1);
 
     auto *splitter = new QSplitter(Qt::Horizontal, page);
     splitter->setHandleWidth(14);
@@ -1119,6 +1269,7 @@ void MainWindow::onImageAnalyzed()
     m_faces = result.faces;
     m_view->setImage(result.image, false);
     refreshMatches();
+    recordSightings(m_currentImagePath);
     if (!m_faces.isEmpty())
         m_faceList->setCurrentRow(0);
 
@@ -1299,6 +1450,7 @@ void MainWindow::onVideoFinished(const QString &error)
     } else {
         if (m_faceSort->currentIndex() != 0)
             sortFaces();
+        recordSightings(m_videoSource);
         const QString summary = QStringLiteral("انتهى التحليل — أشخاص مختلفون: %1 · انقر نقراً مزدوجاً على وجه لعرض لقطاته")
                                     .arg(m_faces.size());
         statusBar()->showMessage(summary);
@@ -1410,6 +1562,9 @@ void MainWindow::showFaceContextMenu(const QPoint &pos)
             if (row >= 0)
                 addFaceToDatabase(m_faces.at(row));
         })->setEnabled(m_ready);
+        if (m_videoMode && !m_videoSource.startsWith(QStringLiteral("camera:")))
+            menu.addAction(Icons::icon(Icons::Name::Collect, Theme::Text, 18), QStringLiteral("تعزيز صور الشخص من الفيديو…"), this,
+                           [this, id] { harvestFromFace(id); });
         menu.addAction(Icons::icon(Icons::Name::Save, Theme::Text, 18), QStringLiteral("حفظ صورة الوجه…"), this, [this, id] {
             const int row = m_faceRows.value(id, -1);
             if (row < 0)
@@ -1779,8 +1934,30 @@ void MainWindow::showFaceDetails()
             html += row_(QStringLiteral("رقم الهوية"), person.nationalId);
         if (!person.phone.isEmpty())
             html += row_(QStringLiteral("الهاتف"), person.phone);
+        if (!person.tags.isEmpty())
+            html += row_(QStringLiteral("التصنيفات"), person.tags);
         if (!person.notes.isEmpty())
             html += row_(QStringLiteral("ملاحظات"), person.notes);
+    }
+    // أقرب المرشحين في القاعدة مع نسبهم، حتى يرى المستخدم البدائل حين يكون التطابق غير مؤكد
+    if (!face.embedding.empty() && m_database.personCount() > 0) {
+        GalleryPtr gallery = m_database.gallery();
+        const QList<MatchResult> candidates = FaceDatabase::candidates(*gallery, face.embedding, 3, threshold());
+        if (!candidates.isEmpty()) {
+            html += QStringLiteral("<br><br><span style='color:#8aa3c7'>أقرب المرشحين في القاعدة:</span>");
+            html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='2'>");
+            for (const MatchResult &candidate : candidates) {
+                const int percent = std::clamp(qRound(candidate.score * 100), 0, 100);
+                html += QStringLiteral("<tr><td style='color:%1'>%2</td><td width='70'>"
+                                       "<table width='100%' cellspacing='0' cellpadding='0'><tr>"
+                                       "<td width='%3%' style='background:%1' height='5'></td><td style='background:#1c3560'></td>"
+                                       "</tr></table></td><td align='left' width='36' style='color:#e6f0ff'>%4%</td></tr>")
+                            .arg(matchColor(candidate.status).name(), candidate.name.toHtmlEscaped())
+                            .arg(std::max(1, percent))
+                            .arg(percent);
+            }
+            html += QStringLiteral("</table>");
+        }
     }
     if (face.quality < 0.35f)
         html += QStringLiteral("<br><span style='color:#93c5fd'>جودة الوجه منخفضة: النتيجة أقل موثوقية</span>");
@@ -1832,24 +2009,29 @@ void MainWindow::addSelectedFaceToDatabase()
     addFaceToDatabase(m_faces.at(row));
 }
 
-void MainWindow::addFaceToDatabase(const FaceItem &face)
+// يختار شخصاً من القاعدة أو ينشئ شخصاً جديداً؛ فارغ عند الإلغاء
+QString MainWindow::choosePerson(const QString &suggestedId)
 {
-    PersonPickerDialog picker(&m_database, face.match.personId, this);
+    PersonPickerDialog picker(&m_database, suggestedId, this);
     if (picker.exec() != QDialog::Accepted)
-        return;
-
+        return {};
     QString personId = picker.personId();
     if (personId.isEmpty()) {
         PersonDialog dialog(Person(), this);
         if (dialog.exec() != QDialog::Accepted)
-            return;
+            return {};
         personId = m_database.addPerson(dialog.person());
-        if (personId.isEmpty()) {
+        if (personId.isEmpty())
             Toast::show(this, QStringLiteral("تعذر حفظ الشخص"), Toast::Kind::Warning);
-            return;
-        }
     }
+    return personId;
+}
 
+void MainWindow::addFaceToDatabase(const FaceItem &face)
+{
+    const QString personId = choosePerson(face.match.personId);
+    if (personId.isEmpty())
+        return;
     if (enrollFace(personId, face))
         Toast::show(this, QStringLiteral("أُضيف الوجه إلى %1").arg(m_database.person(personId).name));
     else
@@ -1867,6 +2049,93 @@ bool MainWindow::enrollFace(const QString &personId, const FaceItem &face)
     const bool ok = m_database.addPhoto(personId, ImageIO::faceCrop(face), embeddings, face.quality);
     QApplication::restoreOverrideCursor();
     return ok;
+}
+
+int MainWindow::enrollFaces(const QString &personId, const QList<FaceItem> &faces)
+{
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const FaceEngine *engine = &m_engine;
+    int added = 0;
+    m_database.beginBatch();
+    for (const FaceItem &face : faces) {
+        const cv::Mat aligned = ImageIO::faceAligned(face);
+        if (aligned.empty())
+            continue;
+        const auto embeddings = runResponsive([engine, aligned] { return engine->enrollmentEmbeddings(aligned); });
+        added += m_database.addPhoto(personId, ImageIO::faceCrop(face), embeddings, face.quality) ? 1 : 0;
+    }
+    m_database.endBatch();
+    QApplication::restoreOverrideCursor();
+    return added;
+}
+
+// جمع صور شخص من القاعدة بالبحث عنه في فيديو يختاره المستخدم
+void MainWindow::harvestPhotos(const QString &personId)
+{
+    if (personId.isEmpty() || !m_ready)
+        return;
+    const std::vector<float> target = m_database.personEmbedding(personId);
+    if (target.empty()) {
+        Toast::show(this, QStringLiteral("أضف صورة واحدة للشخص على الأقل حتى يُبحث عنه في الفيديو"), Toast::Kind::Warning);
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("اختر فيديو يظهر فيه الشخص"), m_lastDirectory, VideoFilter);
+    if (path.isEmpty())
+        return;
+    m_lastDirectory = QFileInfo(path).absolutePath();
+    const Person person = m_database.person(personId);
+    HarvestDialog dialog(&m_engine, path, target, {}, threshold(), person.name, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const int added = enrollFaces(personId, dialog.selectedFaces());
+    Toast::show(this, QStringLiteral("أضيفت %1 صور إلى ملف %2").arg(added).arg(person.name),
+                added > 0 ? Toast::Kind::Success : Toast::Kind::Warning);
+}
+
+// تعزيز صور وجه ظهر في الفيديو الحالي: يجمع أوضح لقطاته من فترات ظهوره
+void MainWindow::harvestFromFace(int faceId)
+{
+    const int row = m_faceRows.value(faceId, -1);
+    if (row < 0 || row >= m_faces.size() || m_videoSource.isEmpty() || m_videoSource.startsWith(QStringLiteral("camera:")))
+        return;
+    const FaceItem face = m_faces.at(row);
+    const QString personId = face.match.status == MatchStatus::Confirmed ? face.match.personId : choosePerson(face.match.personId);
+    if (personId.isEmpty())
+        return;
+    const Person person = m_database.person(personId);
+    QList<QPair<qint64, qint64>> ranges = face.appearances;
+    if (ranges.isEmpty() && face.firstSeenMs >= 0)
+        ranges << qMakePair(face.firstSeenMs, face.lastSeenMs);
+    HarvestDialog dialog(&m_engine, m_videoSource, face.embedding, ranges, threshold(), person.name, this);
+    if (dialog.exec() != QDialog::Accepted)
+        return;
+    const int added = enrollFaces(personId, dialog.selectedFaces());
+    Toast::show(this, QStringLiteral("أضيفت %1 صور إلى ملف %2").arg(added).arg(person.name),
+                added > 0 ? Toast::Kind::Success : Toast::Kind::Warning);
+}
+
+// يسجل في ملف كل شخص مؤكد أنه ظهر في هذا الملف (مرة لكل شخص بأعلى تشابه)
+void MainWindow::recordSightings(const QString &source)
+{
+    if (source.isEmpty() || source.startsWith(QStringLiteral("camera:")))
+        return;
+    QHash<QString, int> best;
+    for (int i = 0; i < m_faces.size(); ++i) {
+        const FaceItem &face = m_faces.at(i);
+        if (face.match.status != MatchStatus::Confirmed || face.match.personId.isEmpty())
+            continue;
+        const auto it = best.constFind(face.match.personId);
+        if (it == best.constEnd() || m_faces.at(*it).match.score < face.match.score)
+            best.insert(face.match.personId, i);
+    }
+    if (best.isEmpty())
+        return;
+    m_database.beginBatch();
+    for (auto it = best.cbegin(); it != best.cend(); ++it) {
+        const FaceItem &face = m_faces.at(it.value());
+        m_database.addSighting(it.key(), source, m_videoMode ? face.bestMs : -1, face.match.score, ImageIO::faceCrop(face));
+    }
+    m_database.endBatch();
 }
 
 // ───────────── قاعدة البيانات ─────────────
@@ -1914,6 +2183,24 @@ void MainWindow::refreshPersons()
     showPersonDetails();
 }
 
+// يفتح ملف شخص في صفحة قاعدة البيانات
+void MainWindow::showPerson(const QString &personId)
+{
+    const Person person = m_database.person(personId);
+    if (person.id.isEmpty())
+        return;
+    m_navGroup->button(1)->click();
+    int row = m_personModel->rowOf(personId);
+    if (row < 0) {
+        m_personFilter->setText(person.name);
+        m_filterTimer->stop();
+        applyPersonFilter();
+        row = m_personModel->rowOf(personId);
+    }
+    if (row >= 0)
+        m_personList->setCurrentIndex(m_personModel->index(row));
+}
+
 void MainWindow::applyPersonFilter()
 {
     {
@@ -1928,15 +2215,27 @@ void MainWindow::showPersonDetails()
 {
     const QString id = selectedPersonId();
     m_photoList->clear();
+    m_sightingList->clear();
     m_removePhotoButton->setEnabled(false);
+    m_coverButton->setEnabled(false);
     m_personActions->setVisible(!id.isEmpty());
-    m_removePhotoButton->setVisible(!id.isEmpty());
+    const bool photosShown = m_profileStack->currentIndex() == 0;
+    m_removePhotoButton->setVisible(!id.isEmpty() && photosShown);
+    m_coverButton->setVisible(!id.isEmpty() && photosShown);
+    m_strengthMeter->setVisible(!id.isEmpty());
+    m_photosTab->setVisible(!id.isEmpty());
+    m_sightingsTab->setVisible(!id.isEmpty());
+    m_profileStack->setVisible(!id.isEmpty());
+    m_duplicateBanner->setVisible(false);
+    m_duplicateId.clear();
 
     if (id.isEmpty()) {
         m_personAvatar->setPixmap(QPixmap());
         m_personDetails->setText(QStringLiteral("<div style='font-size:15pt; font-weight:600'>اختر شخصاً</div>"
                                                 "<div style='color:#8aa3c7'>اختر شخصاً من القائمة لعرض بياناته وصوره، "
                                                 "أو اضغط \"شخص جديد\" لإضافة شخص.</div>"));
+        m_photosTab->setText(QStringLiteral("صور الوجه"));
+        m_sightingsTab->setText(QStringLiteral("سجل الظهور"));
         return;
     }
 
@@ -1946,26 +2245,161 @@ void MainWindow::showPersonDetails()
                                   : circularPixmap(m_database.photo(person.coverPhoto, 192), 96));
 
     auto chip = [](const QString &key, const QString &value) {
-        return QStringLiteral("<span style='color:#8aa3c7'>%1</span> <span style='color:#e6f0ff'>%2</span>&nbsp;&nbsp;&nbsp;")
+        return QStringLiteral("<span style='color:#8aa3c7'>%1</span> <span style='color:#e6f0ff'>%2</span>&nbsp;&nbsp;&nbsp; ")
             .arg(key, value.toHtmlEscaped());
     };
-    QString html = QStringLiteral("<div style='font-size:18pt; font-weight:700'>%1</div><div>").arg(person.name.toHtmlEscaped());
+    QString html = QStringLiteral("<div style='font-size:18pt; font-weight:700'>%1</div>").arg(person.name.toHtmlEscaped());
+    if (!person.tags.isEmpty()) {
+        html += QStringLiteral("<div style='margin:2px 0 4px 0'>");
+        for (const QString &tag : person.tags.split(QStringLiteral("، "), Qt::SkipEmptyParts))
+            html += QStringLiteral("<span style='background:#13284a; color:#38bdf8; font-weight:600'>&nbsp;%1&nbsp;</span>&nbsp; ")
+                        .arg(tag.toHtmlEscaped());
+        html += QStringLiteral("</div>");
+    }
+    html += QStringLiteral("<div>");
     if (!person.nationalId.isEmpty())
         html += chip(QStringLiteral("رقم الهوية:"), person.nationalId);
+    if (!person.gender.isEmpty())
+        html += chip(QStringLiteral("الجنس:"), person.gender);
+    if (person.birthDate.isValid())
+        html += chip(QStringLiteral("العمر:"), QStringLiteral("%1 سنة").arg(person.birthDate.daysTo(QDate::currentDate()) / 365));
     if (!person.phone.isEmpty())
         html += chip(QStringLiteral("الهاتف:"), person.phone);
-    html += chip(QStringLiteral("أُضيف:"), person.created.toString(QStringLiteral("yyyy/MM/dd  hh:mm")));
+    if (!person.email.isEmpty())
+        html += chip(QStringLiteral("البريد:"), person.email);
+    if (!person.address.isEmpty())
+        html += chip(QStringLiteral("العنوان:"), person.address);
+    html += chip(QStringLiteral("أُضيف:"), person.created.toString(QStringLiteral("yyyy/MM/dd")));
+    if (person.lastSeen.isValid())
+        html += chip(QStringLiteral("آخر ظهور:"), QStringLiteral("%1 (%2 مرة)")
+                                                       .arg(person.lastSeen.toString(QStringLiteral("yyyy/MM/dd hh:mm")))
+                                                       .arg(person.seenCount));
     html += QStringLiteral("</div>");
     if (!person.notes.isEmpty())
         html += QStringLiteral("<div style='color:#8aa3c7; margin-top:6px'>%1</div>")
                     .arg(person.notes.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
+
+    // قوة الملف والصور المشكوك فيها
+    const QHash<qint64, float> consistency = m_database.photoConsistency(id);
+    const ProfileStrength strength = profileStrength(person, consistency);
+    m_strengthMeter->setStrength(strength);
+    if (!strength.tips.isEmpty())
+        html += QStringLiteral("<div style='color:#93c5fd; margin-top:6px'>💡 %1</div>").arg(strength.tips.first().toHtmlEscaped());
     m_personDetails->setText(html);
 
     for (const FacePhoto &photo : person.photos) {
         auto *item = new QListWidgetItem(m_photoList);
-        item->setIcon(QIcon(QPixmap::fromImage(m_database.photo(photo.id, m_photoList->iconSize().width()))));
-        item->setText(QStringLiteral("جودة %1%").arg(qRound(photo.quality * 100)));
+        const bool cover = photo.id == person.coverPhoto;
+        const bool suspect = strength.suspects.contains(photo.id);
+        item->setIcon(QIcon(decoratedPhoto(m_database.photo(photo.id, m_photoList->iconSize().width()), m_photoList->iconSize().width(), cover, suspect)));
+        item->setText(suspect ? QStringLiteral("مشكوك فيها") : QStringLiteral("جودة %1%").arg(qRound(photo.quality * 100)));
+        if (suspect)
+            item->setForeground(QColor(0xfb, 0x71, 0x85));
+        QString tip = QStringLiteral("جودة الوجه: %1%").arg(qRound(photo.quality * 100));
+        if (consistency.contains(photo.id))
+            tip += QStringLiteral("\nالتشابه مع بقية صوره: %1%").arg(qRound(consistency.value(photo.id) * 100));
+        if (photo.added.isValid())
+            tip += QStringLiteral("\nأُضيفت: %1").arg(photo.added.toString(QStringLiteral("yyyy/MM/dd hh:mm")));
+        if (cover)
+            tip += QStringLiteral("\n★ الصورة الرئيسية");
+        if (suspect)
+            tip += QStringLiteral("\nقد تكون لشخص آخر — راجعها");
+        tip += QStringLiteral("\nانقر نقراً مزدوجاً لجعلها الصورة الرئيسية");
+        item->setToolTip(tip);
         item->setData(Qt::UserRole, photo.id);
+    }
+    m_photosTab->setText(QStringLiteral("صور الوجه (%1)").arg(person.photos.size()));
+
+    const QList<Sighting> sightings = m_database.sightings(id, 200);
+    for (const Sighting &sighting : sightings) {
+        auto *item = new QListWidgetItem(m_sightingList);
+        item->setData(CardRole::Id, sighting.source);
+        item->setData(CardRole::Title, sighting.seen.toString(QStringLiteral("yyyy/MM/dd  hh:mm")));
+        QString where = QFileInfo(sighting.source).fileName();
+        if (sighting.positionMs >= 0)
+            where += QStringLiteral(" · عند %1").arg(ImageIO::formatTime(sighting.positionMs));
+        item->setData(CardRole::Subtitle, where);
+        item->setData(CardRole::Status, int(MatchStatus::Confirmed));
+        item->setData(CardRole::StatusText, sighting.positionMs >= 0 ? QStringLiteral("فيديو") : QStringLiteral("صورة"));
+        item->setData(CardRole::Score, sighting.score);
+        item->setData(CardRole::Avatar, circularPixmap(sighting.thumbnail, 54));
+        item->setToolTip(QDir::toNativeSeparators(sighting.source));
+    }
+    m_sightingsTab->setText(QStringLiteral("سجل الظهور (%1)").arg(person.seenCount));
+
+    // هل في القاعدة شخص آخر يشبهه كثيراً؟ ربما أُضيف الشخص نفسه مرتين
+    const std::vector<float> embedding = m_database.personEmbedding(id);
+    if (!embedding.empty()) {
+        GalleryPtr gallery = m_database.gallery();
+        const QList<MatchResult> similar = FaceDatabase::candidates(*gallery, embedding, 1, threshold(), id);
+        if (!similar.isEmpty() && similar.first().score >= std::max(0.45f, threshold() + 0.1f)) {
+            m_duplicateId = similar.first().personId;
+            m_duplicateText->setText(QStringLiteral("قد يكون هذا الشخص مسجلاً مرتين: يشبه <b>%1</b> بنسبة %2%")
+                                         .arg(similar.first().name.toHtmlEscaped())
+                                         .arg(qRound(similar.first().score * 100)));
+            m_duplicateBanner->setVisible(true);
+        }
+    }
+}
+
+void MainWindow::setCoverPhoto()
+{
+    const QString id = selectedPersonId();
+    const QListWidgetItem *item = m_photoList->currentItem();
+    if (id.isEmpty() || !item)
+        return;
+    if (m_database.setCoverPhoto(id, item->data(Qt::UserRole).toLongLong()))
+        Toast::show(this, QStringLiteral("تم تعيين الصورة الرئيسية"));
+}
+
+void MainWindow::mergeDuplicate()
+{
+    const QString id = selectedPersonId();
+    if (id.isEmpty() || m_duplicateId.isEmpty())
+        return;
+    const Person keep = m_database.person(id);
+    const Person other = m_database.person(m_duplicateId);
+    const auto answer = QMessageBox::question(
+        this, QStringLiteral("دمج الملفين"),
+        QStringLiteral("سيُنقل كل ما في ملف \"%1\" (%2 صور وسجل ظهوره) إلى ملف \"%3\" ثم يُحذف ملفه.\n"
+                       "البيانات الفارغة هنا تُكمَّل من الملف الآخر. هل تريد المتابعة؟")
+            .arg(other.name)
+            .arg(other.photoCount)
+            .arg(keep.name));
+    if (answer != QMessageBox::Yes)
+        return;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = m_database.mergePersons(id, m_duplicateId);
+    QApplication::restoreOverrideCursor();
+    if (!ok) {
+        Toast::show(this, QStringLiteral("تعذر دمج الملفين"), Toast::Kind::Warning);
+        return;
+    }
+    Toast::show(this, QStringLiteral("تم دمج \"%1\" في \"%2\"").arg(other.name, keep.name));
+    showPerson(id);
+}
+
+void MainWindow::exportPerson()
+{
+    const QString id = selectedPersonId();
+    if (id.isEmpty())
+        return;
+    const Person person = m_database.person(id);
+    QString path = QFileDialog::getSaveFileName(this, QStringLiteral("تصدير ملف الشخص"),
+                                                QDir(m_lastDirectory).filePath(safeFileName(person.name) + QStringLiteral(".pdf")),
+                                                QStringLiteral("PDF (*.pdf)"));
+    if (path.isEmpty())
+        return;
+    if (!path.endsWith(QStringLiteral(".pdf"), Qt::CaseInsensitive))
+        path += QStringLiteral(".pdf");
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = exportPersonPdf(m_database, id, path);
+    QApplication::restoreOverrideCursor();
+    if (ok) {
+        Toast::show(this, QStringLiteral("تم تصدير ملف %1").arg(person.name));
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    } else {
+        Toast::show(this, QStringLiteral("تعذر إنشاء ملف PDF"), Toast::Kind::Warning);
     }
 }
 

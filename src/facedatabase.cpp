@@ -639,11 +639,15 @@ void FaceDatabase::close()
 bool FaceDatabase::exec(const QString &sql, const QVariantList &values) const
 {
     QSqlQuery query(m_db);
-    if (!query.prepare(sql))
-        return false;
-    for (const QVariant &value : values)
-        query.addBindValue(value);
-    return query.exec();
+    bool ok = query.prepare(sql);
+    if (ok) {
+        for (const QVariant &value : values)
+            query.addBindValue(value);
+        ok = query.exec();
+    }
+    if (!ok)
+        qWarning("SQL error: %s", qPrintable(query.lastError().text()));
+    return ok;
 }
 
 bool FaceDatabase::open(const QString &directory, QString *error)
@@ -1085,9 +1089,11 @@ bool FaceDatabase::removePhoto(const QString &personId, qint64 photoId)
         return false;
     beginBatch();
     const bool ok = exec(QStringLiteral("DELETE FROM photos WHERE id = ? AND person_id = ?"), {photoId, id})
-        && exec(QStringLiteral("UPDATE persons SET photo_count = (SELECT COUNT(*) FROM photos WHERE person_id = ?1),"
-                               " cover_photo = COALESCE((SELECT MIN(id) FROM photos WHERE person_id = ?1), 0) WHERE id = ?1"),
-                {id})
+        // الصورة الرئيسية تبقى كما اختارها المستخدم ما لم تكن هي المحذوفة
+        && exec(QStringLiteral("UPDATE persons SET photo_count = (SELECT COUNT(*) FROM photos WHERE person_id = ?),"
+                               " cover_photo = CASE WHEN cover_photo IN (SELECT id FROM photos WHERE person_id = ?) THEN cover_photo"
+                               " ELSE COALESCE((SELECT MIN(id) FROM photos WHERE person_id = ?), 0) END WHERE id = ?"),
+                {id, id, id, id})
         && refreshPerson(id);
     if (!ok) {
         m_db.rollback();
@@ -1140,27 +1146,41 @@ bool FaceDatabase::mergePersons(const QString &keepId, const QString &removedId)
         return false;
     beginBatch();
     // البيانات الناقصة في الشخص الباقي تُكمَّل من المحذوف
-    bool ok = exec(QStringLiteral("UPDATE persons SET"
-                                  " national_id = COALESCE(NULLIF(national_id, ''), (SELECT national_id FROM persons WHERE id = ?2)),"
-                                  " phone = COALESCE(NULLIF(phone, ''), (SELECT phone FROM persons WHERE id = ?2)),"
-                                  " notes = TRIM(COALESCE(notes, '') || CASE WHEN COALESCE((SELECT notes FROM persons WHERE id = ?2), '') = ''"
-                                  "   THEN '' ELSE char(10) || (SELECT notes FROM persons WHERE id = ?2) END),"
-                                  " gender = COALESCE(NULLIF(gender, ''), (SELECT gender FROM persons WHERE id = ?2)),"
-                                  " birth_date = COALESCE(NULLIF(birth_date, ''), (SELECT birth_date FROM persons WHERE id = ?2)),"
-                                  " address = COALESCE(NULLIF(address, ''), (SELECT address FROM persons WHERE id = ?2)),"
-                                  " email = COALESCE(NULLIF(email, ''), (SELECT email FROM persons WHERE id = ?2)),"
-                                  " tags = COALESCE(NULLIF(tags, ''), (SELECT tags FROM persons WHERE id = ?2)),"
-                                  " seen_count = seen_count + (SELECT seen_count FROM persons WHERE id = ?2),"
-                                  " last_seen = MAX(last_seen, (SELECT last_seen FROM persons WHERE id = ?2))"
-                                  " WHERE id = ?1"),
-                   {keep, removed})
+    auto named = [this](const QString &sql, qint64 keepValue, qint64 removedValue) {
+        QSqlQuery query(m_db);
+        if (!query.prepare(sql))
+            return false;
+        if (sql.contains(QLatin1String(":keep")))
+            query.bindValue(QStringLiteral(":keep"), keepValue);
+        if (sql.contains(QLatin1String(":removed")))
+            query.bindValue(QStringLiteral(":removed"), removedValue);
+        if (!query.exec()) {
+            qWarning("SQL error: %s", qPrintable(query.lastError().text()));
+            return false;
+        }
+        return true;
+    };
+    bool ok = named(QStringLiteral("UPDATE persons SET"
+                                  " national_id = COALESCE(NULLIF(national_id, ''), (SELECT national_id FROM persons WHERE id = :removed)),"
+                                  " phone = COALESCE(NULLIF(phone, ''), (SELECT phone FROM persons WHERE id = :removed)),"
+                                  " notes = TRIM(COALESCE(notes, '') || CASE WHEN COALESCE((SELECT notes FROM persons WHERE id = :removed), '') = ''"
+                                  "   THEN '' ELSE char(10) || (SELECT notes FROM persons WHERE id = :removed) END),"
+                                  " gender = COALESCE(NULLIF(gender, ''), (SELECT gender FROM persons WHERE id = :removed)),"
+                                  " birth_date = COALESCE(NULLIF(birth_date, ''), (SELECT birth_date FROM persons WHERE id = :removed)),"
+                                  " address = COALESCE(NULLIF(address, ''), (SELECT address FROM persons WHERE id = :removed)),"
+                                  " email = COALESCE(NULLIF(email, ''), (SELECT email FROM persons WHERE id = :removed)),"
+                                  " tags = COALESCE(NULLIF(tags, ''), (SELECT tags FROM persons WHERE id = :removed)),"
+                                  " seen_count = seen_count + (SELECT seen_count FROM persons WHERE id = :removed),"
+                                  " last_seen = MAX(last_seen, (SELECT last_seen FROM persons WHERE id = :removed))"
+                                  " WHERE id = :keep"),
+                   keep, removed)
         && exec(QStringLiteral("UPDATE photos SET person_id = ? WHERE person_id = ?"), {keep, removed})
         && exec(QStringLiteral("UPDATE sightings SET person_id = ? WHERE person_id = ?"), {keep, removed})
         && exec(QStringLiteral("DELETE FROM persons WHERE id = ?"), {removed})
-        && exec(QStringLiteral("UPDATE persons SET photo_count = (SELECT COUNT(*) FROM photos WHERE person_id = ?1),"
-                               " cover_photo = CASE WHEN cover_photo = 0 THEN COALESCE((SELECT MIN(id) FROM photos WHERE person_id = ?1), 0)"
-                               " ELSE cover_photo END WHERE id = ?1"),
-                {keep});
+        && named(QStringLiteral("UPDATE persons SET photo_count = (SELECT COUNT(*) FROM photos WHERE person_id = :keep),"
+                               " cover_photo = CASE WHEN cover_photo = 0 THEN COALESCE((SELECT MIN(id) FROM photos WHERE person_id = :keep), 0)"
+                               " ELSE cover_photo END WHERE id = :keep"),
+                 keep, removed);
     if (ok) {
         m_gallery->remove(removed);
         ok = refreshPerson(keep);
@@ -1243,10 +1263,29 @@ bool FaceDatabase::addSighting(const QString &personId, const QString &source, q
         face.scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation).save(&buffer, "JPG", 85);
     }
     const qint64 now = QDateTime::currentSecsSinceEpoch();
+    // إعادة تحليل الملف نفسه لا تكرر السجل: يُحدَّث الظهور السابق في الموضع نفسه تقريباً
+    QSqlQuery existing(m_db);
+    existing.prepare(QStringLiteral("SELECT id, score FROM sightings WHERE person_id = ? AND source = ?"
+                                    " AND ((? < 0 AND position_ms < 0) OR ABS(position_ms - ?) < 5000) LIMIT 1"));
+    existing.addBindValue(id);
+    existing.addBindValue(source);
+    existing.addBindValue(positionMs);
+    existing.addBindValue(positionMs);
     beginBatch();
-    const bool ok = exec(QStringLiteral("INSERT INTO sightings(person_id, seen, source, position_ms, score, thumb) VALUES(?, ?, ?, ?, ?, ?)"),
-                         {id, now, source, positionMs, double(score), thumb})
-        && exec(QStringLiteral("UPDATE persons SET last_seen = ?, seen_count = seen_count + 1 WHERE id = ?"), {now, id});
+    bool ok = false;
+    if (existing.exec() && existing.next()) {
+        const qint64 sightingId = existing.value(0).toLongLong();
+        if (score > existing.value(1).toFloat())
+            ok = exec(QStringLiteral("UPDATE sightings SET seen = ?, position_ms = ?, score = ?, thumb = ? WHERE id = ?"),
+                      {now, positionMs, double(score), thumb, sightingId});
+        else
+            ok = exec(QStringLiteral("UPDATE sightings SET seen = ? WHERE id = ?"), {now, sightingId});
+        ok = ok && exec(QStringLiteral("UPDATE persons SET last_seen = ? WHERE id = ?"), {now, id});
+    } else {
+        ok = exec(QStringLiteral("INSERT INTO sightings(person_id, seen, source, position_ms, score, thumb) VALUES(?, ?, ?, ?, ?, ?)"),
+                  {id, now, source, positionMs, double(score), thumb})
+            && exec(QStringLiteral("UPDATE persons SET last_seen = ?, seen_count = seen_count + 1 WHERE id = ?"), {now, id});
+    }
     if (ok)
         notify(personId, false);
     return endBatch() && ok;

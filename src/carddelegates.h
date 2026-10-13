@@ -11,6 +11,7 @@ enum {
     Status, // MatchStatus، أو -1 لبطاقة شخص
     Score,
     Avatar,
+    StatusText, // نص بديل لشارة الحالة (اختياري)
 };
 }
 
