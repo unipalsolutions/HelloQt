@@ -37,6 +37,15 @@ enum class Name {
     Next,     // الظهور التالي
     Previous,
     Sliders,  // الإعدادات
+    ZoomIn,
+    ZoomOut,
+    FitWidth,
+    Compare,  // وجهان متقابلان
+    Collect,  // جمع صور إلى الملف
+    Star,
+    Export,
+    History,
+    Copy,     // تكرار
 };
 
 void paint(QPainter &painter, Name name, const QRectF &rect, const QColor &color);

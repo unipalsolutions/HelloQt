@@ -6,6 +6,7 @@
 #include "imageview.h"
 #include "persondialog.h"
 #include "shotviewer.h"
+#include "timelineview.h"
 #include "personmodel.h"
 #include "theme.h"
 #include "videoworker.h"
@@ -276,11 +277,21 @@ MainWindow::MainWindow(QWidget *parent)
     m_videoWorker->setGallery(m_database.gallery());
     m_videoWorker->setThreshold(threshold());
     connect(m_videoThread, &QThread::finished, m_videoWorker, &QObject::deleteLater);
-    connect(m_videoWorker, &VideoWorker::started, this, [this](int step, double, qint64 durationMs) {
+    connect(m_videoWorker, &VideoWorker::started, this, [this](int step, double fps, qint64 durationMs) {
         m_videoClock.start();
         m_videoStep = step;
         m_videoDurationMs = durationMs;
+        m_videoFps = fps > 1.0 ? fps : 25.0;
+        const bool camera = m_videoSource.startsWith(QStringLiteral("camera:"));
+        m_timeline->clear();
+        m_laneAvatars.clear();
+        m_timeline->setFps(m_videoFps);
+        m_timeline->setDuration(camera ? 0 : durationMs);
+        m_timeline->setRange(m_videoStartMs, m_videoEndMs);
+        m_timeline->setAnalyzedUntil(m_videoStartMs);
+        m_timelineCard->setVisible(!camera && durationMs > 0);
     });
+    connect(&m_frameWatcher, &QFutureWatcher<ShotFrame>::finished, this, &MainWindow::onVideoFrameLoaded);
     connect(m_videoWorker, &VideoWorker::frameReady, this, &MainWindow::onFrameReady);
     connect(m_videoWorker, &VideoWorker::trackUpdated, this, &MainWindow::onTrackUpdated);
     connect(m_videoWorker, &VideoWorker::finished, this, &MainWindow::onVideoFinished);
@@ -447,6 +458,7 @@ MainWindow::~MainWindow()
     m_videoThread->quit();
     m_videoThread->wait();
     m_imageWatcher.waitForFinished();
+    m_frameWatcher.waitForFinished();
 }
 
 QWidget *MainWindow::createSidebar()
@@ -818,10 +830,54 @@ QWidget *MainWindow::createRecognitionPage()
     faceActions->addWidget(m_viewShotButton, 1);
     sideLayout->addLayout(faceActions);
 
+    // الخط الزمني أسفل الفيديو بأسلوب برامج المونتاج
+    m_timelineCard = card(page);
+    auto *timelineLayout = new QVBoxLayout(m_timelineCard);
+    timelineLayout->setContentsMargins(10, 6, 10, 8);
+    timelineLayout->setSpacing(4);
+    auto *timelineHeader = new QHBoxLayout;
+    timelineHeader->setSpacing(6);
+    timelineHeader->addWidget(label(QStringLiteral("الخط الزمني"), QStringLiteral("sectionTitle"), m_timelineCard));
+    auto *timelineHint = label(QStringLiteral("انقر لعرض أي لحظة · نقر مزدوج على مقطع لعرض لقطاته · Ctrl+العجلة للتكبير"),
+                               QStringLiteral("muted"), m_timelineCard);
+    timelineHint->setMinimumWidth(10);
+    timelineHeader->addWidget(timelineHint, 1);
+    m_timeline = new TimelineView(m_timelineCard);
+    auto timelineButton = [this](Icons::Name icon, const QString &tip, auto slot) {
+        auto *button = new FancyButton(icon, tip, FancyButton::Kind::Secondary, m_timelineCard);
+        button->setCompact(true);
+        button->setToolTip(tip);
+        button->setFixedSize(34, 30);
+        connect(button, &QAbstractButton::clicked, m_timeline, slot);
+        return button;
+    };
+    timelineHeader->addWidget(timelineButton(Icons::Name::ZoomIn, QStringLiteral("تكبير (Ctrl+العجلة)"), &TimelineView::zoomIn));
+    timelineHeader->addWidget(timelineButton(Icons::Name::ZoomOut, QStringLiteral("تصغير"), &TimelineView::zoomOut));
+    timelineHeader->addWidget(timelineButton(Icons::Name::FitWidth, QStringLiteral("عرض الفيديو كله"), &TimelineView::fit));
+    timelineLayout->addLayout(timelineHeader);
+    timelineLayout->addWidget(m_timeline, 1);
+    m_timelineCard->setVisible(false);
+    connect(m_timeline, &TimelineView::seekRequested, this, &MainWindow::loadVideoFrame);
+    connect(m_timeline, &TimelineView::laneClicked, this, [this](int id, qint64) { selectFace(id); });
+    connect(m_timeline, &TimelineView::laneActivated, this, [this](int id, qint64 ms) { openShotViewer(id, ms); });
+    m_laneTimer = new QTimer(this);
+    m_laneTimer->setSingleShot(true);
+    m_laneTimer->setInterval(400);
+    connect(m_laneTimer, &QTimer::timeout, this, &MainWindow::rebuildTimelineLanes);
+
+    auto *mediaSplitter = new QSplitter(Qt::Vertical, page);
+    mediaSplitter->setHandleWidth(10);
+    mediaSplitter->setChildrenCollapsible(false);
+    mediaSplitter->addWidget(viewCard);
+    mediaSplitter->addWidget(m_timelineCard);
+    mediaSplitter->setStretchFactor(0, 4);
+    mediaSplitter->setStretchFactor(1, 1);
+    mediaSplitter->setSizes({460, 230});
+
     auto *splitter = new QSplitter(Qt::Horizontal, page);
     splitter->setHandleWidth(12);
     splitter->setChildrenCollapsible(false);
-    splitter->addWidget(viewCard);
+    splitter->addWidget(mediaSplitter);
     splitter->addWidget(side);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 1);
@@ -1007,6 +1063,7 @@ void MainWindow::openImage()
 void MainWindow::analyzeImage(const QString &path)
 {
     m_videoMode = false;
+    m_timelineCard->setVisible(false);
     m_currentImagePath = path;
     m_faces.clear();
     refreshFaceList();
@@ -1164,6 +1221,12 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     m_view->setImage(frame);
     m_view->setFaces(faces);
     m_videoPositionMs = positionMs;
+    if (m_timelineCard->isVisible()) {
+        m_timeline->setPosition(positionMs);
+        m_timeline->setAnalyzedUntil(positionMs);
+        if (m_timeline->wantsThumbnail(positionMs))
+            m_timeline->addThumbnail(positionMs, frame);
+    }
     if (progress >= 0.0) {
         m_progress->setRange(0, 1000);
         m_progress->setValue(int(progress * 1000.0));
@@ -1198,6 +1261,8 @@ void MainWindow::onTrackUpdated(const FaceItem &track)
         m_faces[i] = track;
         updateFaceListItem(m_faceList->item(i), track);
         m_faceList->setRowHidden(i, !faceMatchesFilter(track));
+        if (!m_laneTimer->isActive())
+            m_laneTimer->start();
         if (m_faceList->currentRow() == i)
             showFaceDetails();
         return;
@@ -1206,6 +1271,8 @@ void MainWindow::onTrackUpdated(const FaceItem &track)
     m_faces.append(track);
     updateFaceListItem(new QListWidgetItem(m_faceList), track);
     m_faceList->setRowHidden(m_faceList->count() - 1, !faceMatchesFilter(track));
+    if (!m_laneTimer->isActive())
+        m_laneTimer->start();
     updateFaceCount();
     m_saveFacesButton->setEnabled(true);
 }
@@ -1222,6 +1289,8 @@ void MainWindow::onVideoFinished(const QString &error)
     }
     m_videoRunning = false;
     m_videoPaused = false;
+    m_timeline->setAnalyzedUntil(-1);
+    rebuildTimelineLanes();
     m_view->setBusy(false);
     m_progress->setVisible(false);
     if (!error.isEmpty()) {
@@ -1277,6 +1346,7 @@ void MainWindow::applyFaceFilter()
         m_faceList->setRowHidden(i, !visible);
         shown += visible ? 1 : 0;
     }
+    m_laneTimer->start();
     const bool filtered = !m_faceFilter->text().trimmed().isEmpty() || m_faceStatusFilter->currentIndex() != 0;
     m_faceCount->setText(filtered ? QStringLiteral("%1 / %2").arg(shown).arg(m_faces.size()) : QString::number(m_faces.size()));
 }
@@ -1446,7 +1516,7 @@ void MainWindow::removeFaces(const QList<int> &ids)
     setBusy(m_analyzing);
 }
 
-void MainWindow::openShotViewer(int id)
+void MainWindow::openShotViewer(int id, qint64 positionMs)
 {
     const int row = m_faceRows.value(id, -1);
     if (row < 0 || row >= m_faces.size() || m_videoSource.isEmpty() || m_videoSource.startsWith(QStringLiteral("camera:")))
@@ -1454,7 +1524,119 @@ void MainWindow::openShotViewer(int id)
     auto *viewer = new ShotViewer(&m_engine, &m_database, m_videoSource, m_faces.at(row), threshold(), m_enhanceSwitch->isChecked(), this);
     connect(viewer, &ShotViewer::addFaceRequested, this, &MainWindow::addFaceToDatabase);
     connect(viewer, &ShotViewer::analyzeFromRequested, this, &MainWindow::analyzeVideoFrom);
+    viewer->setThumbnails(m_timeline->thumbnails());
+    if (positionMs >= 0)
+        viewer->showAt(positionMs);
     viewer->show();
+}
+
+void MainWindow::rebuildTimelineLanes()
+{
+    if (!m_videoMode || !m_timelineCard->isVisible())
+        return;
+    QList<TimelineLane> lanes;
+    lanes.reserve(m_faces.size());
+    for (int i = 0; i < m_faces.size(); ++i) {
+        if (i < m_faceList->count() && m_faceList->isRowHidden(i))
+            continue;
+        const FaceItem &face = m_faces.at(i);
+        TimelineLane lane;
+        lane.id = face.id;
+        lane.name = matchLabel(face.match);
+        // المعروفون بلون حالتهم، وغيرهم بألوان مميزة ثابتة لكل شخص
+        lane.color = face.match.status == MatchStatus::Unknown
+            ? QColor::fromHsv((face.id * 47 + 190) % 360, 120, 235)
+            : matchColor(face.match.status);
+        auto cached = m_laneAvatars.constFind(face.id);
+        if (cached == m_laneAvatars.constEnd() || cached->first != face.quality) {
+            cached = m_laneAvatars.insert(face.id, {face.quality, circularPixmap(ImageIO::faceCrop(face), 40)});
+        }
+        lane.avatar = cached->second;
+        lane.segments = face.appearances;
+        if (lane.segments.isEmpty() && face.firstSeenMs >= 0)
+            lane.segments.append({face.firstSeenMs, std::max(face.firstSeenMs, face.lastSeenMs)});
+        lanes.append(lane);
+    }
+    m_timeline->setLanes(lanes);
+}
+
+void MainWindow::loadVideoFrame(qint64 positionMs)
+{
+    // أثناء التحليل يبقى المؤشر على موضع التحليل
+    if (m_videoRunning || m_videoSource.isEmpty() || m_videoSource.startsWith(QStringLiteral("camera:"))) {
+        if (m_videoRunning)
+            m_timeline->setPosition(m_videoPositionMs);
+        return;
+    }
+    if (!m_frameCapture || m_frameCapturePath != m_videoSource) {
+        m_frameWatcher.waitForFinished();
+        m_frameCapture = std::make_shared<cv::VideoCapture>();
+        m_frameCapturePath = m_videoSource;
+        if (!ImageIO::openVideo(*m_frameCapture, m_videoSource)) {
+            m_frameCapture.reset();
+            statusBar()->showMessage(QStringLiteral("تعذر فتح الفيديو"));
+            return;
+        }
+    }
+    m_frameRequestMs = positionMs;
+    if (m_frameWatcher.isRunning())
+        return; // يُحمَّل آخر موضع مطلوب عند انتهاء الحالي
+    const qint64 ms = std::exchange(m_frameRequestMs, -1);
+    std::shared_ptr<cv::VideoCapture> capture = m_frameCapture;
+    const FaceEngine *engine = &m_engine;
+    const GalleryPtr gallery = m_database.gallery();
+    const float threshold = this->threshold();
+    const bool enhance = m_enhanceSwitch->isChecked();
+    const double fps = m_videoFps;
+    statusBar()->showMessage(QStringLiteral("جارٍ عرض الإطار عند %1…").arg(ImageIO::formatTime(ms)));
+    m_frameWatcher.setFuture(QtConcurrent::run([=] { return readShotFrame(*capture, ms, fps, engine, gallery, threshold, enhance); }));
+}
+
+void MainWindow::onVideoFrameLoaded()
+{
+    ShotFrame frame = m_frameWatcher.result();
+    if (m_frameRequestMs >= 0) {
+        if (frame.error.isEmpty())
+            m_view->setImage(frame.image);
+        loadVideoFrame(m_frameRequestMs);
+        return;
+    }
+    if (!frame.error.isEmpty()) {
+        statusBar()->showMessage(frame.error);
+        return;
+    }
+    // ربط كل وجه في الإطار بالشخص المتتبَّع الأشبه به، فيحدده النقر عليه في القائمة
+    QHash<int, float> used;
+    int unknown = 0;
+    for (FaceItem &face : frame.faces) {
+        int bestId = 0;
+        float best = 0.35f;
+        for (const FaceItem &tracked : std::as_const(m_faces)) {
+            const float score = FaceEngine::cosine(face.embedding, tracked.embedding);
+            if (score > best) {
+                best = score;
+                bestId = tracked.id;
+            }
+        }
+        if (bestId != 0 && used.value(bestId, -1.0f) < best) {
+            used.insert(bestId, best);
+            face.id = bestId;
+        } else {
+            face.id = -(++unknown);
+        }
+    }
+    m_view->setBusy(false);
+    m_view->setImage(frame.image);
+    m_view->setFaces(frame.faces);
+    m_timeline->setPosition(frame.positionMs);
+    m_videoPositionMs = frame.positionMs;
+    const int row = m_faceList->currentRow();
+    if (row >= 0 && row < m_faces.size())
+        m_view->setSelectedFace(m_faces.at(row).id);
+    statusBar()->showMessage(QStringLiteral("الإطار عند %1 · وجوه فيه: %2 · انقر نقراً مزدوجاً على وجه لعرض لقطاته")
+                                 .arg(ImageIO::formatTime(frame.positionMs))
+                                 .arg(frame.faces.size()));
+    updateVideoOptions();
 }
 
 void MainWindow::analyzeVideoFrom(qint64 positionMs)
@@ -1504,6 +1686,8 @@ void MainWindow::refreshFaceList()
         }
     }
     rebuildFaceRows();
+    if (m_laneTimer)
+        m_laneTimer->start();
     const int newRow = m_faceRows.value(currentId, -1);
     if (newRow >= 0)
         m_faceList->setCurrentRow(newRow);
@@ -1564,6 +1748,7 @@ void MainWindow::showFaceDetails()
 
     const FaceItem &face = m_faces.at(row);
     m_view->setSelectedFace(face.id);
+    m_timeline->setSelectedLane(face.id);
     const QString color = matchColor(face.match.status).name();
     QString html = QStringLiteral("<div style='font-size:13pt; font-weight:600; color:%1'>%2</div>"
                                   "<div style='color:%3'>%4</div>")

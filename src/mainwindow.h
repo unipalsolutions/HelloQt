@@ -3,6 +3,7 @@
 #include "facedatabase.h"
 #include "faceengine.h"
 #include "facetypes.h"
+#include "shotviewer.h"
 
 #include <QElapsedTimer>
 #include <QFutureWatcher>
@@ -29,6 +30,7 @@ class QSlider;
 class QSpinBox;
 class QThread;
 class ToggleSwitch;
+class TimelineView;
 class VideoWorker;
 
 struct ImageAnalysis
@@ -85,7 +87,10 @@ private:
     QList<int> selectedFaceIds() const;
     void mergeFaces(const QList<int> &ids);
     void removeFaces(const QList<int> &ids);
-    void openShotViewer(int id);
+    void openShotViewer(int id, qint64 positionMs = -1);
+    void rebuildTimelineLanes();
+    void loadVideoFrame(qint64 positionMs);
+    void onVideoFrameLoaded();
     void analyzeVideoFrom(qint64 positionMs);
     void reanalyzeVideo();
     void sortFaces();
@@ -145,6 +150,16 @@ private:
     QString m_videoSource;   // آخر فيديو أو كاميرا حُلِّل، لإعادة التحليل والرجوع للقطات
     qint64 m_restartFromMs = -1; // إعادة التحليل من موضع بعد توقف التحليل الجاري
     QSet<int> m_hiddenFaces;     // وجوه حذفها المستخدم أثناء التحليل فلا تعود للظهور
+    double m_videoFps = 25.0;
+    // قراءة إطار من الفيديو عند النقر على الخط الزمني بعد انتهاء التحليل
+    std::shared_ptr<cv::VideoCapture> m_frameCapture;
+    QString m_frameCapturePath;
+    QFutureWatcher<ShotFrame> m_frameWatcher;
+    qint64 m_frameRequestMs = -1;
+    TimelineView *m_timeline = nullptr;
+    QWidget *m_timelineCard = nullptr;
+    QTimer *m_laneTimer = nullptr;
+    QHash<int, QPair<float, QPixmap>> m_laneAvatars; // صورة كل مسار مع جودة الوجه الذي صُنعت منه
     bool m_videoPaused = false;
     QElapsedTimer m_pauseClock;
     qint64 m_pausedMs = 0;

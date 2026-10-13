@@ -46,6 +46,8 @@ qt_add_executable(Malamih
     src/videoworker.cpp
     src/shotviewer.h
     src/shotviewer.cpp
+    src/timelineview.h
+    src/timelineview.cpp
 )
 
 # أيقونة التطبيق: داخل الملف التنفيذي على Windows وللنافذة عبر موارد Qt
@@ -54,7 +56,7 @@ if(WIN32)
 endif()
 qt_add_resources(Malamih app_resources
     PREFIX "/"
-    FILES resources/app-256.png
+    FILES resources/app-256.png resources/app-512.png
 )
 
 target_link_libraries(Malamih PRIVATE

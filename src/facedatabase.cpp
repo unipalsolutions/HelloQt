@@ -14,6 +14,7 @@
 #include <QMutex>
 #include <QReadWriteLock>
 #include <QSqlError>
+#include <QSet>
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QThread>
@@ -363,6 +364,14 @@ public:
         return qint64(m_alive);
     }
 
+    struct Ranked
+    {
+        qint64 personId;
+        float score;
+        QString name;
+    };
+    // أقرب count أشخاص مرتبين تنازلياً بأعلى تشابه مع أي من بصماتهم أو مع متوسطها
+    std::vector<Ranked> rank(const std::vector<float> &embedding, size_t count);
     MatchResult search(const std::vector<float> &embedding, float threshold);
     quint64 revision() const { return m_revision; }
 
@@ -467,11 +476,11 @@ private:
     std::atomic<quint64> m_revision{1};
 };
 
-MatchResult Gallery::search(const std::vector<float> &embedding, float threshold)
+std::vector<Gallery::Ranked> Gallery::rank(const std::vector<float> &embedding, size_t count)
 {
-    MatchResult result;
+    std::vector<Ranked> ranked;
     if (embedding.size() != Dimension)
-        return result;
+        return ranked;
 
     struct Candidate
     {
@@ -484,7 +493,7 @@ MatchResult Gallery::search(const std::vector<float> &embedding, float threshold
         QReadLocker locker(&m_lock);
         const size_t slotCount = m_ids.size();
         if (m_alive == 0)
-            return result;
+            return ranked;
 
         // 1) تصفية سريعة بمسافة هامنج بين البصمات الثنائية
         std::vector<quint64> chosen;
@@ -552,7 +561,7 @@ MatchResult Gallery::search(const std::vector<float> &embedding, float threshold
         }
     }
 
-    const size_t keep = std::min(TemplateCandidates, candidates.size());
+    const size_t keep = std::min(std::max(TemplateCandidates, count), candidates.size());
     std::partial_sort(candidates.begin(), candidates.begin() + qsizetype(keep), candidates.end(),
                       [](const Candidate &a, const Candidate &b) { return a.score > b.score; });
     candidates.resize(keep);
@@ -562,10 +571,6 @@ MatchResult Gallery::search(const std::vector<float> &embedding, float threshold
     for (const Candidate &candidate : candidates)
         ids.push_back(candidate.personId);
     const QHash<qint64, Entry> entries = loadEntries(ids);
-    float best = -1.0f;
-    float second = -1.0f;
-    qint64 bestId = 0;
-    QString bestName;
     for (const Candidate &candidate : candidates) {
         const auto found = entries.constFind(candidate.personId);
         if (found == entries.constEnd())
@@ -574,18 +579,22 @@ MatchResult Gallery::search(const std::vector<float> &embedding, float threshold
         float score = candidate.score;
         for (size_t offset = 0; offset + Dimension <= entry.templates.size(); offset += Dimension)
             score = std::max(score, FaceEngine::dot(entry.templates.data() + offset, embedding.data(), Dimension));
-        if (score > best) {
-            second = best;
-            best = score;
-            bestId = candidate.personId;
-            bestName = entry.name;
-        } else if (score > second) {
-            second = score;
-        }
+        ranked.push_back({candidate.personId, score, entry.name});
     }
-    if (bestId == 0)
-        return result;
+    std::sort(ranked.begin(), ranked.end(), [](const Ranked &a, const Ranked &b) { return a.score > b.score; });
+    if (ranked.size() > count)
+        ranked.resize(count);
+    return ranked;
+}
 
+MatchResult Gallery::search(const std::vector<float> &embedding, float threshold)
+{
+    MatchResult result;
+    const std::vector<Ranked> ranked = rank(embedding, 2);
+    if (ranked.empty())
+        return result;
+    const float best = ranked[0].score;
+    const float second = ranked.size() > 1 ? ranked[1].score : -1.0f;
     result.score = std::max(0.0f, best);
     // مطابقة قريبة جداً من شخص آخر تُعد غير محسومة
     const bool clearWinner = best - second >= 0.05f;
@@ -594,8 +603,8 @@ MatchResult Gallery::search(const std::vector<float> &embedding, float threshold
     else if (best >= threshold - 0.1f)
         result.status = MatchStatus::Possible;
     if (result.status != MatchStatus::Unknown) {
-        result.personId = QString::number(bestId);
-        result.name = bestName;
+        result.personId = QString::number(ranked[0].personId);
+        result.name = ranked[0].name;
     }
     return result;
 }
@@ -673,6 +682,9 @@ bool FaceDatabase::open(const QString &directory, QString *error)
         QStringLiteral("CREATE TABLE IF NOT EXISTS photos(id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER NOT NULL,"
                        " quality REAL, added INTEGER, image BLOB, templates BLOB)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS photos_person ON photos(person_id)"),
+        QStringLiteral("CREATE TABLE IF NOT EXISTS sightings(id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER NOT NULL,"
+                       " seen INTEGER, source TEXT, position_ms INTEGER, score REAL, thumb BLOB)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS sightings_person ON sightings(person_id, id)"),
         QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES('model', 'insightface-buffalo_l')"),
         QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES('generation', '1')"),
     };
@@ -680,6 +692,9 @@ bool FaceDatabase::open(const QString &directory, QString *error)
         if (!exec(sql))
             return fail(QStringLiteral("تعذر تهيئة قاعدة البيانات: %1").arg(m_db.lastError().text()));
     }
+
+    if (!upgradeSchema())
+        return fail(QStringLiteral("تعذر تحديث قاعدة البيانات: %1").arg(m_db.lastError().text()));
 
     if (fresh && QFile::exists(QDir(directory).filePath(QString::fromLatin1(LegacyFile))) && !migrateLegacy(error)) {
         close();
@@ -739,6 +754,32 @@ QString FaceDatabase::directory() const
     return m_directory;
 }
 
+// أعمدة ملف الشخص التي أضيفت بعد الإصدار الأول من القاعدة
+bool FaceDatabase::upgradeSchema()
+{
+    QSet<QString> columns;
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("PRAGMA table_info(persons)")))
+        return false;
+    while (query.next())
+        columns.insert(query.value(1).toString());
+    query.finish();
+    const QList<QPair<QString, QString>> added{
+        {QStringLiteral("gender"), QStringLiteral("TEXT")},
+        {QStringLiteral("birth_date"), QStringLiteral("TEXT")},
+        {QStringLiteral("address"), QStringLiteral("TEXT")},
+        {QStringLiteral("email"), QStringLiteral("TEXT")},
+        {QStringLiteral("tags"), QStringLiteral("TEXT")},
+        {QStringLiteral("last_seen"), QStringLiteral("INTEGER NOT NULL DEFAULT 0")},
+        {QStringLiteral("seen_count"), QStringLiteral("INTEGER NOT NULL DEFAULT 0")},
+    };
+    for (const auto &[name, type] : added) {
+        if (!columns.contains(name) && !exec(QStringLiteral("ALTER TABLE persons ADD COLUMN %1 %2").arg(name, type)))
+            return false;
+    }
+    return true;
+}
+
 namespace {
 
 Person personFromQuery(const QSqlQuery &query)
@@ -752,10 +793,19 @@ Person personFromQuery(const QSqlQuery &query)
     person.created = QDateTime::fromSecsSinceEpoch(query.value(5).toLongLong());
     person.photoCount = query.value(6).toInt();
     person.coverPhoto = query.value(7).toLongLong();
+    person.gender = query.value(8).toString();
+    person.birthDate = QDate::fromString(query.value(9).toString(), Qt::ISODate);
+    person.address = query.value(10).toString();
+    person.email = query.value(11).toString();
+    person.tags = query.value(12).toString();
+    const qint64 lastSeen = query.value(13).toLongLong();
+    person.lastSeen = lastSeen > 0 ? QDateTime::fromSecsSinceEpoch(lastSeen) : QDateTime();
+    person.seenCount = query.value(14).toInt();
     return person;
 }
 
-const QString PersonColumns = QStringLiteral("id, name, national_id, phone, notes, created, photo_count, cover_photo");
+const QString PersonColumns = QStringLiteral("id, name, national_id, phone, notes, created, photo_count, cover_photo,"
+                                             " gender, birth_date, address, email, tags, last_seen, seen_count");
 
 } // namespace
 
@@ -770,11 +820,12 @@ Person FaceDatabase::person(const QString &id) const
     if (!query.exec() || !query.next())
         return person;
     person = personFromQuery(query);
-    query.prepare(QStringLiteral("SELECT id, quality FROM photos WHERE person_id = ? ORDER BY id"));
+    query.prepare(QStringLiteral("SELECT id, quality, added FROM photos WHERE person_id = ? ORDER BY id"));
     query.addBindValue(id.toLongLong());
     if (query.exec()) {
         while (query.next())
-            person.photos.append(FacePhoto{query.value(0).toLongLong(), query.value(1).toFloat()});
+            person.photos.append(FacePhoto{query.value(0).toLongLong(), query.value(1).toFloat(),
+                                           QDateTime::fromSecsSinceEpoch(query.value(2).toLongLong())});
     }
     return person;
 }
@@ -795,8 +846,8 @@ QString filterCondition(const QString &text, QVariantList &values)
         values << text << upper << text << upper;
         return QStringLiteral("((national_id >= ? AND national_id < ?) OR (phone >= ? AND phone < ?))");
     }
-    values << likePattern(text);
-    return QStringLiteral("name LIKE ? ESCAPE '\\'");
+    values << likePattern(text) << likePattern(text);
+    return QStringLiteral("(name LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')");
 }
 
 } // namespace
@@ -888,12 +939,18 @@ QString FaceDatabase::addPerson(Person person)
         return {};
     beginBatch();
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral("INSERT INTO persons(name, national_id, phone, notes, created) VALUES(?, ?, ?, ?, ?)"));
+    query.prepare(QStringLiteral("INSERT INTO persons(name, national_id, phone, notes, created, gender, birth_date, address, email, tags)"
+                                 " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
     query.addBindValue(person.name);
     query.addBindValue(person.nationalId);
     query.addBindValue(person.phone);
     query.addBindValue(person.notes);
     query.addBindValue(QDateTime::currentSecsSinceEpoch());
+    query.addBindValue(person.gender);
+    query.addBindValue(person.birthDate.isValid() ? person.birthDate.toString(Qt::ISODate) : QString());
+    query.addBindValue(person.address);
+    query.addBindValue(person.email);
+    query.addBindValue(person.tags);
     const bool ok = query.exec();
     const QString id = ok ? query.lastInsertId().toString() : QString();
     if (ok) {
@@ -910,8 +967,11 @@ bool FaceDatabase::updatePerson(const Person &person)
     if (!m_db.isOpen() || id <= 0)
         return false;
     beginBatch();
-    const bool ok = exec(QStringLiteral("UPDATE persons SET name = ?, national_id = ?, phone = ?, notes = ? WHERE id = ?"),
-                         {person.name, person.nationalId, person.phone, person.notes, id});
+    const bool ok = exec(QStringLiteral("UPDATE persons SET name = ?, national_id = ?, phone = ?, notes = ?, gender = ?, birth_date = ?,"
+                                        " address = ?, email = ?, tags = ? WHERE id = ?"),
+                         {person.name, person.nationalId, person.phone, person.notes, person.gender,
+                          person.birthDate.isValid() ? person.birthDate.toString(Qt::ISODate) : QString(), person.address,
+                          person.email, person.tags, id});
     if (ok) {
         m_gallery->forget(id); // الاسم المخزن مؤقتاً للمطابقة
         notify(person.id, false);
@@ -931,6 +991,7 @@ bool FaceDatabase::removePerson(const QString &personId)
     const qint64 photos = query.exec() && query.next() ? query.value(0).toLongLong() : 0;
     query.finish();
     const bool ok = exec(QStringLiteral("DELETE FROM photos WHERE person_id = ?"), {id})
+        && exec(QStringLiteral("DELETE FROM sightings WHERE person_id = ?"), {id})
         && exec(QStringLiteral("DELETE FROM persons WHERE id = ?"), {id});
     if (ok) {
         m_gallery->remove(id);
@@ -1057,6 +1118,165 @@ QImage FaceDatabase::photo(qint64 photoId, int maxSize) const
     return reader.read();
 }
 
+bool FaceDatabase::setCoverPhoto(const QString &personId, qint64 photoId)
+{
+    const qint64 id = personId.toLongLong();
+    if (!m_db.isOpen() || id <= 0)
+        return false;
+    beginBatch();
+    const bool ok = exec(QStringLiteral("UPDATE persons SET cover_photo = ? WHERE id = ? AND EXISTS"
+                                        " (SELECT 1 FROM photos WHERE id = ? AND person_id = ?)"),
+                         {photoId, id, photoId, id});
+    if (ok)
+        notify(personId, false);
+    return endBatch() && ok;
+}
+
+bool FaceDatabase::mergePersons(const QString &keepId, const QString &removedId)
+{
+    const qint64 keep = keepId.toLongLong();
+    const qint64 removed = removedId.toLongLong();
+    if (!m_db.isOpen() || keep <= 0 || removed <= 0 || keep == removed)
+        return false;
+    beginBatch();
+    // البيانات الناقصة في الشخص الباقي تُكمَّل من المحذوف
+    bool ok = exec(QStringLiteral("UPDATE persons SET"
+                                  " national_id = COALESCE(NULLIF(national_id, ''), (SELECT national_id FROM persons WHERE id = ?2)),"
+                                  " phone = COALESCE(NULLIF(phone, ''), (SELECT phone FROM persons WHERE id = ?2)),"
+                                  " notes = TRIM(COALESCE(notes, '') || CASE WHEN COALESCE((SELECT notes FROM persons WHERE id = ?2), '') = ''"
+                                  "   THEN '' ELSE char(10) || (SELECT notes FROM persons WHERE id = ?2) END),"
+                                  " gender = COALESCE(NULLIF(gender, ''), (SELECT gender FROM persons WHERE id = ?2)),"
+                                  " birth_date = COALESCE(NULLIF(birth_date, ''), (SELECT birth_date FROM persons WHERE id = ?2)),"
+                                  " address = COALESCE(NULLIF(address, ''), (SELECT address FROM persons WHERE id = ?2)),"
+                                  " email = COALESCE(NULLIF(email, ''), (SELECT email FROM persons WHERE id = ?2)),"
+                                  " tags = COALESCE(NULLIF(tags, ''), (SELECT tags FROM persons WHERE id = ?2)),"
+                                  " seen_count = seen_count + (SELECT seen_count FROM persons WHERE id = ?2),"
+                                  " last_seen = MAX(last_seen, (SELECT last_seen FROM persons WHERE id = ?2))"
+                                  " WHERE id = ?1"),
+                   {keep, removed})
+        && exec(QStringLiteral("UPDATE photos SET person_id = ? WHERE person_id = ?"), {keep, removed})
+        && exec(QStringLiteral("UPDATE sightings SET person_id = ? WHERE person_id = ?"), {keep, removed})
+        && exec(QStringLiteral("DELETE FROM persons WHERE id = ?"), {removed})
+        && exec(QStringLiteral("UPDATE persons SET photo_count = (SELECT COUNT(*) FROM photos WHERE person_id = ?1),"
+                               " cover_photo = CASE WHEN cover_photo = 0 THEN COALESCE((SELECT MIN(id) FROM photos WHERE person_id = ?1), 0)"
+                               " ELSE cover_photo END WHERE id = ?1"),
+                {keep});
+    if (ok) {
+        m_gallery->remove(removed);
+        ok = refreshPerson(keep);
+    }
+    if (!ok) {
+        m_db.rollback();
+        m_batchDepth = 0;
+        refreshPerson(keep);
+        refreshPerson(removed);
+        return false;
+    }
+    --m_personCount;
+    notify(keepId, true);
+    return endBatch();
+}
+
+std::vector<float> FaceDatabase::personEmbedding(const QString &personId) const
+{
+    if (!m_db.isOpen())
+        return {};
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT templates FROM photos WHERE person_id = ?"));
+    query.addBindValue(personId.toLongLong());
+    std::vector<float> templates;
+    if (query.exec()) {
+        while (query.next())
+            unpackTemplates(query.value(0).toByteArray(), templates);
+    }
+    return meanOf(templates);
+}
+
+QHash<qint64, float> FaceDatabase::photoConsistency(const QString &personId) const
+{
+    QHash<qint64, float> result;
+    if (!m_db.isOpen())
+        return result;
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT id, templates FROM photos WHERE person_id = ?"));
+    query.addBindValue(personId.toLongLong());
+    if (!query.exec())
+        return result;
+    // متوسط بصمات كل صورة، ثم تشابهها مع متوسط بقية الصور
+    std::vector<qint64> ids;
+    std::vector<std::vector<float>> means;
+    while (query.next()) {
+        std::vector<float> templates;
+        unpackTemplates(query.value(1).toByteArray(), templates);
+        std::vector<float> mean = meanOf(templates);
+        if (mean.empty())
+            continue;
+        ids.push_back(query.value(0).toLongLong());
+        means.push_back(std::move(mean));
+    }
+    if (means.size() < 2)
+        return result;
+    std::vector<float> total(Dimension, 0.0f);
+    for (const std::vector<float> &mean : means) {
+        for (size_t i = 0; i < Dimension; ++i)
+            total[i] += mean[i];
+    }
+    for (size_t k = 0; k < means.size(); ++k) {
+        std::vector<float> others(Dimension);
+        for (size_t i = 0; i < Dimension; ++i)
+            others[i] = total[i] - means[k][i];
+        FaceEngine::normalize(others);
+        result.insert(ids[k], std::max(0.0f, FaceEngine::dot(others.data(), means[k].data(), Dimension)));
+    }
+    return result;
+}
+
+bool FaceDatabase::addSighting(const QString &personId, const QString &source, qint64 positionMs, float score, const QImage &face)
+{
+    const qint64 id = personId.toLongLong();
+    if (!m_db.isOpen() || id <= 0)
+        return false;
+    QByteArray thumb;
+    if (!face.isNull()) {
+        QBuffer buffer(&thumb);
+        buffer.open(QIODevice::WriteOnly);
+        face.scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation).save(&buffer, "JPG", 85);
+    }
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    beginBatch();
+    const bool ok = exec(QStringLiteral("INSERT INTO sightings(person_id, seen, source, position_ms, score, thumb) VALUES(?, ?, ?, ?, ?, ?)"),
+                         {id, now, source, positionMs, double(score), thumb})
+        && exec(QStringLiteral("UPDATE persons SET last_seen = ?, seen_count = seen_count + 1 WHERE id = ?"), {now, id});
+    if (ok)
+        notify(personId, false);
+    return endBatch() && ok;
+}
+
+QList<Sighting> FaceDatabase::sightings(const QString &personId, int limit) const
+{
+    QList<Sighting> list;
+    if (!m_db.isOpen())
+        return list;
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT id, seen, source, position_ms, score, thumb FROM sightings WHERE person_id = ?"
+                                 " ORDER BY id DESC LIMIT ?"));
+    query.addBindValue(personId.toLongLong());
+    query.addBindValue(limit);
+    if (!query.exec())
+        return list;
+    while (query.next()) {
+        Sighting sighting;
+        sighting.id = query.value(0).toLongLong();
+        sighting.seen = QDateTime::fromSecsSinceEpoch(query.value(1).toLongLong());
+        sighting.source = query.value(2).toString();
+        sighting.positionMs = query.value(3).toLongLong();
+        sighting.score = query.value(4).toFloat();
+        sighting.thumbnail.loadFromData(query.value(5).toByteArray(), "JPG");
+        list.append(sighting);
+    }
+    return list;
+}
+
 quint64 FaceDatabase::revision(const Gallery &gallery)
 {
     return gallery.revision();
@@ -1070,6 +1290,28 @@ GalleryPtr FaceDatabase::gallery() const
 MatchResult FaceDatabase::identify(Gallery &gallery, const std::vector<float> &embedding, float threshold)
 {
     return gallery.search(embedding, threshold);
+}
+
+QList<MatchResult> FaceDatabase::candidates(Gallery &gallery, const std::vector<float> &embedding, int count, float threshold,
+                                            const QString &excludeId)
+{
+    QList<MatchResult> list;
+    const qint64 excluded = excludeId.toLongLong();
+    const std::vector<Gallery::Ranked> ranked = gallery.rank(embedding, size_t(std::max(1, count)) + (excluded > 0 ? 1 : 0));
+    for (const Gallery::Ranked &r : ranked) {
+        if (r.personId == excluded)
+            continue;
+        if (list.size() >= count)
+            break;
+        MatchResult match;
+        match.personId = QString::number(r.personId);
+        match.name = r.name;
+        match.score = std::max(0.0f, r.score);
+        match.status = r.score >= threshold ? MatchStatus::Confirmed
+                                            : (r.score >= threshold - 0.1f ? MatchStatus::Possible : MatchStatus::Unknown);
+        list.append(match);
+    }
+    return list;
 }
 
 // ───────────── ترحيل القواعد القديمة (persons.json) ─────────────

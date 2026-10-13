@@ -5,6 +5,7 @@
 #include "imageio.h"
 #include "imageview.h"
 #include "theme.h"
+#include "timelineview.h"
 #include "widgets.h"
 
 #include <QFileDialog>
@@ -17,7 +18,6 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QShortcut>
-#include <QSlider>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QtConcurrent>
@@ -29,8 +29,6 @@
 
 namespace {
 
-constexpr int TimelineUnitMs = 100; // دقة شريط الزمن
-
 double overlap(const QRectF &a, const QRectF &b)
 {
     const QRectF i = a.intersected(b);
@@ -40,6 +38,40 @@ double overlap(const QRectF &a, const QRectF &b)
 }
 
 } // namespace
+
+ShotFrame readShotFrame(cv::VideoCapture &capture, qint64 positionMs, double fps, const FaceEngine *engine,
+                        const GalleryPtr &gallery, float threshold, bool enhance)
+{
+    ShotFrame result;
+    result.positionMs = positionMs;
+    // البحث بالإطار أدق من البحث بالزمن في أغلب الصيغ
+    capture.set(cv::CAP_PROP_POS_FRAMES, std::floor(positionMs * fps / 1000.0 + 0.5));
+    cv::Mat frame;
+    if (!capture.read(frame) || frame.empty()) {
+        capture.set(cv::CAP_PROP_POS_MSEC, double(positionMs));
+        if (!capture.read(frame) || frame.empty()) {
+            result.error = QStringLiteral("تعذر قراءة الإطار عند %1").arg(ImageIO::formatTime(positionMs));
+            return result;
+        }
+    }
+    cv::Mat image = frame;
+    std::vector<AnalyzedFace> faces;
+    if (enhance) {
+        image = ImageIO::enhance(frame);
+        faces = engine->analyzeEnhanced(frame, image, true);
+    } else {
+        faces = engine->analyze(frame, true);
+    }
+    result.scale = frame.cols > 0 ? double(image.cols) / frame.cols : 1.0;
+    result.image = ImageIO::toQImage(image);
+    for (size_t i = 0; i < faces.size(); ++i) {
+        FaceItem item = ImageIO::makeFaceItem(image, faces[i], int(i) + 1);
+        if (gallery)
+            item.match = FaceDatabase::identify(*gallery, item.embedding, threshold);
+        result.faces.append(item);
+    }
+    return result;
+}
 
 ShotViewer::ShotViewer(const FaceEngine *engine, const FaceDatabase *database, const QString &videoPath, const FaceItem &face,
                        float threshold, bool enhance, QWidget *parent)
@@ -80,9 +112,23 @@ ShotViewer::ShotViewer(const FaceEngine *engine, const FaceDatabase *database, c
     nextFrame->setToolTip(QStringLiteral("الإطار التالي (→)"));
     nextAppearance->setToolTip(QStringLiteral("الظهور التالي لهذا الوجه (Ctrl+→)"));
 
-    m_timeline = new QSlider(Qt::Horizontal, this);
-    m_timeline->setRange(0, int(m_durationMs / TimelineUnitMs));
-    m_timeline->setToolTip(QStringLiteral("اسحب للتنقل في الفيديو"));
+    m_timeline = new TimelineView(this);
+    m_timeline->setFps(m_fps);
+    m_timeline->setDuration(m_durationMs);
+    m_timeline->setLabelWidth(110);
+    m_timeline->setMinimumHeight(m_timeline->minimumSizeHint().height() + 2);
+    {
+        TimelineLane lane;
+        lane.id = face.id;
+        lane.name = matchLabel(face.match);
+        lane.color = matchColor(face.match.status);
+        lane.avatar = circularPixmap(ImageIO::faceCrop(face), 40);
+        lane.segments = face.appearances;
+        if (lane.segments.isEmpty() && face.firstSeenMs >= 0)
+            lane.segments.append({face.firstSeenMs, std::max(face.firstSeenMs, face.lastSeenMs)});
+        m_timeline->setLanes({lane});
+        m_timeline->setSelectedLane(face.id);
+    }
     m_timeLabel = new QLabel(this);
     m_timeLabel->setObjectName(QStringLiteral("muted"));
     m_timeLabel->setMinimumWidth(130);
@@ -94,12 +140,13 @@ ShotViewer::ShotViewer(const FaceEngine *engine, const FaceDatabase *database, c
     auto *timelineLayout = new QHBoxLayout(timelineRow);
     timelineLayout->setContentsMargins(0, 0, 0, 0);
     timelineLayout->setSpacing(6);
+    timelineLayout->addStretch();
     timelineLayout->addWidget(previousAppearance);
     timelineLayout->addWidget(previousFrame);
-    timelineLayout->addWidget(m_timeline, 1);
+    timelineLayout->addWidget(m_timeLabel);
     timelineLayout->addWidget(nextFrame);
     timelineLayout->addWidget(nextAppearance);
-    timelineLayout->addWidget(m_timeLabel);
+    timelineLayout->addStretch();
 
     auto *viewCard = new QFrame(this);
     viewCard->setObjectName(QStringLiteral("card"));
@@ -108,6 +155,7 @@ ShotViewer::ShotViewer(const FaceEngine *engine, const FaceDatabase *database, c
     viewLayout->setSpacing(10);
     viewLayout->addWidget(m_view, 1);
     viewLayout->addWidget(timelineRow);
+    viewLayout->addWidget(m_timeline);
 
     // ── اللوحة الجانبية ──
     auto *avatar = new QLabel(this);
@@ -205,8 +253,12 @@ ShotViewer::ShotViewer(const FaceEngine *engine, const FaceDatabase *database, c
     m_scrubTimer = new QTimer(this);
     m_scrubTimer->setSingleShot(true);
     m_scrubTimer->setInterval(90);
-    connect(m_scrubTimer, &QTimer::timeout, this, [this] { seek(qint64(m_timeline->value()) * TimelineUnitMs); });
-    connect(m_timeline, &QSlider::valueChanged, this, [this] { m_scrubTimer->start(); });
+    connect(m_scrubTimer, &QTimer::timeout, this, [this] { seek(m_timeline->position()); });
+    connect(m_timeline, &TimelineView::seekRequested, this, [this] { m_scrubTimer->start(); });
+    connect(m_timeline, &TimelineView::laneActivated, this, [this](int, qint64 ms) {
+        if (ms >= 0)
+            seek(ms, true);
+    });
 
     connect(&m_watcher, &QFutureWatcher<ShotFrame>::finished, this, &ShotViewer::onLoaded);
     connect(previousFrame, &QAbstractButton::clicked, this, [this] { stepFrames(-1); });
@@ -255,6 +307,11 @@ ShotViewer::ShotViewer(const FaceEngine *engine, const FaceDatabase *database, c
     seek(face.bestMs >= 0 ? face.bestMs : std::max<qint64>(0, face.firstSeenMs), true);
 }
 
+void ShotViewer::setThumbnails(const QMap<qint64, QImage> &thumbnails)
+{
+    m_timeline->setThumbnails(thumbnails);
+}
+
 ShotViewer::~ShotViewer()
 {
     m_watcher.waitForFinished();
@@ -285,35 +342,7 @@ void ShotViewer::startLoading()
     const double fps = m_fps;
     std::shared_ptr<cv::VideoCapture> capture = m_capture; // لا يقرؤه إلا خيط واحد في كل مرة
     m_watcher.setFuture(QtConcurrent::run([=] {
-        ShotFrame result;
-        result.positionMs = positionMs;
-        // البحث بالإطار أدق من البحث بالزمن في أغلب الصيغ
-        capture->set(cv::CAP_PROP_POS_FRAMES, std::floor(positionMs * fps / 1000.0 + 0.5));
-        cv::Mat frame;
-        if (!capture->read(frame) || frame.empty()) {
-            capture->set(cv::CAP_PROP_POS_MSEC, double(positionMs));
-            if (!capture->read(frame) || frame.empty()) {
-                result.error = QStringLiteral("تعذر قراءة الإطار عند %1").arg(ImageIO::formatTime(positionMs));
-                return result;
-            }
-        }
-        cv::Mat image = frame;
-        std::vector<AnalyzedFace> faces;
-        if (enhance) {
-            image = ImageIO::enhance(frame);
-            faces = engine->analyzeEnhanced(frame, image, true);
-        } else {
-            faces = engine->analyze(frame, true);
-        }
-        result.scale = frame.cols > 0 ? double(image.cols) / frame.cols : 1.0;
-        result.image = ImageIO::toQImage(image);
-        for (size_t i = 0; i < faces.size(); ++i) {
-            FaceItem item = ImageIO::makeFaceItem(image, faces[i], int(i) + 1);
-            if (gallery)
-                item.match = FaceDatabase::identify(*gallery, item.embedding, threshold);
-            result.faces.append(item);
-        }
-        return result;
+        return readShotFrame(*capture, positionMs, fps, engine, gallery, threshold, enhance);
     }));
 }
 
@@ -358,10 +387,7 @@ void ShotViewer::onLoaded()
     m_selectedId = -1;
     selectFace(best);
 
-    {
-        const QSignalBlocker blocker(m_timeline);
-        m_timeline->setValue(int(m_frame.positionMs / TimelineUnitMs));
-    }
+    m_timeline->setPosition(m_frame.positionMs);
     m_timeLabel->setText(QStringLiteral("%1 / %2").arg(ImageIO::formatTime(m_frame.positionMs), ImageIO::formatTime(m_durationMs)));
 
     // إبراز مرة الظهور الحالية في القائمة

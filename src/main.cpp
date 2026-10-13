@@ -33,7 +33,10 @@ int main(int argc, char *argv[])
     QApplication::setApplicationName(QStringLiteral("Malamih"));
     QApplication::setApplicationDisplayName(QStringLiteral("ملامح"));
     QApplication::setApplicationVersion(QStringLiteral("3.0.0"));
-    QApplication::setWindowIcon(QIcon(QStringLiteral(":/resources/app-256.png")));
+    QIcon appIcon;
+    appIcon.addFile(QStringLiteral(":/resources/app-256.png"));
+    appIcon.addFile(QStringLiteral(":/resources/app-512.png"));
+    QApplication::setWindowIcon(appIcon);
     migrateLegacyData();
     QApplication::setLayoutDirection(Qt::RightToLeft);
     Theme::apply(app);

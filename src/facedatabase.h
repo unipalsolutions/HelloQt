@@ -2,7 +2,9 @@
 
 #include "facetypes.h"
 
+#include <QDate>
 #include <QDateTime>
+#include <QHash>
 #include <QImage>
 #include <QList>
 #include <QObject>
@@ -16,6 +18,18 @@ struct FacePhoto
 {
     qint64 id = 0;
     float quality = 0.0f;
+    QDateTime added;
+};
+
+// مرة تعرَّف فيها البرنامج على الشخص في صورة أو فيديو
+struct Sighting
+{
+    qint64 id = 0;
+    QDateTime seen;
+    QString source;       // مسار الصورة أو الفيديو
+    qint64 positionMs = -1; // موضعه في الفيديو
+    float score = 0.0f;
+    QImage thumbnail;
 };
 
 struct Person
@@ -25,7 +39,14 @@ struct Person
     QString nationalId;
     QString phone;
     QString notes;
+    QString gender;   // "ذكر" أو "أنثى" أو فارغ
+    QDate birthDate;
+    QString address;
+    QString email;
+    QString tags;     // تصنيفات مفصولة بفواصل، مثل: موظف، زائر، مطلوب
     QDateTime created;
+    QDateTime lastSeen; // آخر مرة تعرَّف عليه البرنامج
+    int seenCount = 0;
     int photoCount = 0;
     qint64 coverPhoto = 0;   // صورة الوجه التي تمثل الشخص في القوائم
     QList<FacePhoto> photos; // تُملأ في person() فقط، لا في نتائج البحث
@@ -72,6 +93,17 @@ public:
                   const std::vector<std::vector<float>> &embeddings, float quality);
     bool removePhoto(const QString &personId, qint64 photoId);
     QImage photo(qint64 photoId, int maxSize = 0) const;
+    bool setCoverPhoto(const QString &personId, qint64 photoId);
+    // ينقل صور removedId وسجل ظهوره إلى keepId ثم يحذفه
+    bool mergePersons(const QString &keepId, const QString &removedId);
+    // متوسط بصمات الشخص (فارغ إن لم تكن له صور)
+    std::vector<float> personEmbedding(const QString &personId) const;
+    // تشابه كل صورة مع بقية صور الشخص (0..1)؛ القيمة المنخفضة تعني صورة قد تكون لشخص آخر
+    QHash<qint64, float> photoConsistency(const QString &personId) const;
+
+    // سجل الظهور
+    bool addSighting(const QString &personId, const QString &source, qint64 positionMs, float score, const QImage &face);
+    QList<Sighting> sightings(const QString &personId, int limit = 50) const;
 
     // يجمع عمليات كثيرة في معاملة واحدة (للاستيراد الكبير)، والإشعارات تُرسل مرة واحدة في النهاية
     void beginBatch();
@@ -81,6 +113,9 @@ public:
 
     // يعيد أفضل شخص مطابق؛ threshold هو حد التأكيد، وما دونه بـ 0.1 "محتمل"
     static MatchResult identify(Gallery &gallery, const std::vector<float> &embedding, float threshold);
+    // أقرب count أشخاص مرتبين بالتشابه (لعرض المرشحين ونسبهم)؛ excludeId يُستبعد من النتائج
+    static QList<MatchResult> candidates(Gallery &gallery, const std::vector<float> &embedding, int count, float threshold,
+                                         const QString &excludeId = QString());
     // يزيد مع كل تغيير في الأشخاص أو بصماتهم، فيعرف من يخزّن نتائج المطابقة متى يعيد حسابها
     static quint64 revision(const Gallery &gallery);
 
@@ -93,6 +128,7 @@ private:
     bool exec(const QString &sql, const QVariantList &values = {}) const;
     bool refreshPerson(qint64 personId);
     bool migrateLegacy(QString *error);
+    bool upgradeSchema();
     void notify(const QString &personId, bool reset);
 
     QString m_directory;

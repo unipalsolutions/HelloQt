@@ -7,6 +7,7 @@
 #include <QFutureWatcher>
 #include <QImage>
 #include <QList>
+#include <QMap>
 
 #include <memory>
 
@@ -15,7 +16,7 @@ class FancyButton;
 class ImageView;
 class QLabel;
 class QListWidget;
-class QSlider;
+class TimelineView;
 class QTimer;
 class ToggleSwitch;
 
@@ -32,6 +33,10 @@ struct ShotFrame
     QString error;
 };
 
+// يقرأ الإطار عند الموضع المطلوب ويكشف وجوهه ويطابقها مع القاعدة (يُستدعى من خيط خلفي)
+ShotFrame readShotFrame(cv::VideoCapture &capture, qint64 positionMs, double fps, const FaceEngine *engine,
+                        const GalleryPtr &gallery, float threshold, bool enhance);
+
 // يعرض الإطار الذي ظهر فيه وجه من الفيديو ويتنقل بين مرات ظهوره، مع تحسين الإطار وكشف
 // الوجوه فيه ومطابقتها، وحفظ الإطار أو الوجه أو إضافته إلى قاعدة البيانات
 class ShotViewer : public QDialog
@@ -42,6 +47,11 @@ public:
     ShotViewer(const FaceEngine *engine, const FaceDatabase *database, const QString &videoPath, const FaceItem &face,
                float threshold, bool enhance, QWidget *parent = nullptr);
     ~ShotViewer() override;
+
+    // مصغرات الإطارات من التحليل لعرضها في الخط الزمني
+    void setThumbnails(const QMap<qint64, QImage> &thumbnails);
+    // عرض لحظة محددة بدل أوضح لقطة
+    void showAt(qint64 positionMs) { seek(positionMs, true); }
 
 signals:
     void addFaceRequested(const FaceItem &face);
@@ -76,7 +86,7 @@ private:
     int m_selectedId = -1;
 
     ImageView *m_view = nullptr;
-    QSlider *m_timeline = nullptr;
+    TimelineView *m_timeline = nullptr;
     QLabel *m_timeLabel = nullptr;
     QLabel *m_details = nullptr;
     QListWidget *m_appearances = nullptr;

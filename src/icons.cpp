@@ -229,6 +229,90 @@ QPainterPath outline(Name name)
         p.addEllipse(QPointF(9, 7), 2.2, 2.2);
         p.addEllipse(QPointF(15, 17), 2.2, 2.2);
         break;
+    case Name::ZoomIn:
+        p.addEllipse(QPointF(10.5, 10.5), 6.5, 6.5);
+        line(15.5, 15.5, 21, 21);
+        line(7.5, 10.5, 13.5, 10.5);
+        line(10.5, 7.5, 10.5, 13.5);
+        break;
+    case Name::ZoomOut:
+        p.addEllipse(QPointF(10.5, 10.5), 6.5, 6.5);
+        line(15.5, 15.5, 21, 21);
+        line(7.5, 10.5, 13.5, 10.5);
+        break;
+    case Name::FitWidth:
+        line(3, 5, 3, 19);
+        line(21, 5, 21, 19);
+        line(7, 12, 17, 12);
+        line(7, 12, 10, 9);
+        line(7, 12, 10, 15);
+        line(17, 12, 14, 9);
+        line(17, 12, 14, 15);
+        break;
+    case Name::Compare:
+        p.addEllipse(QPointF(7, 9), 3.2, 3.2);
+        p.moveTo(2, 20);
+        p.cubicTo(2, 15, 12, 15, 12, 20);
+        p.addEllipse(QPointF(17, 9), 3.2, 3.2);
+        p.moveTo(12, 20);
+        p.cubicTo(12, 15, 22, 15, 22, 20);
+        break;
+    case Name::Collect:
+        p.addRoundedRect(QRectF(3, 4, 13, 11), 2, 2);
+        line(3, 12, 7, 9);
+        line(7, 9, 11, 13);
+        line(18, 10, 18, 20);
+        line(18, 20, 15, 17);
+        line(18, 20, 21, 17);
+        break;
+    case Name::Star:
+        p.moveTo(12, 3);
+        p.lineTo(14.6, 8.6);
+        p.lineTo(20.6, 9.2);
+        p.lineTo(16, 13.2);
+        p.lineTo(17.4, 19.2);
+        p.lineTo(12, 16);
+        p.lineTo(6.6, 19.2);
+        p.lineTo(8, 13.2);
+        p.lineTo(3.4, 9.2);
+        p.lineTo(9.4, 8.6);
+        p.closeSubpath();
+        break;
+    case Name::Export:
+        p.moveTo(14, 3);
+        p.lineTo(6, 3);
+        p.quadTo(4, 3, 4, 5);
+        p.lineTo(4, 19);
+        p.quadTo(4, 21, 6, 21);
+        p.lineTo(18, 21);
+        p.quadTo(20, 21, 20, 19);
+        p.lineTo(20, 9);
+        p.lineTo(14, 3);
+        p.lineTo(14, 9);
+        p.lineTo(20, 9);
+        line(12, 12, 12, 18);
+        line(12, 18, 9.5, 15.5);
+        line(12, 18, 14.5, 15.5);
+        break;
+    case Name::History:
+        p.moveTo(4, 12);
+        p.arcTo(QRectF(4, 3, 18, 18), 180, -300);
+        line(4, 12, 2, 9.5);
+        line(4, 12, 6.5, 10);
+        line(13, 8, 13, 12);
+        line(13, 12, 16, 14);
+        break;
+    case Name::Copy:
+        p.addRoundedRect(QRectF(8, 8, 12, 12), 2, 2);
+        p.moveTo(16, 8);
+        p.lineTo(16, 5);
+        p.quadTo(16, 4, 15, 4);
+        p.lineTo(5, 4);
+        p.quadTo(4, 4, 4, 5);
+        p.lineTo(4, 15);
+        p.quadTo(4, 16, 5, 16);
+        p.lineTo(8, 16);
+        break;
     }
     return p;
 }
