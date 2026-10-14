@@ -56,21 +56,18 @@ namespace {
 
 cv::Mat geometry(const cv::Mat &input, const Settings &s)
 {
+    // كل خطوة تكتب في مصفوفة جديدة؛ الكتابة في image تعدّل الصورة الأصلية لأنها تشاركها البيانات
     cv::Mat image = input;
-    if (s.mirror)
-        cv::flip(image, image, 1);
-    switch (((s.quarterTurns % 4) + 4) % 4) {
-    case 1:
-        cv::rotate(image, image, cv::ROTATE_90_COUNTERCLOCKWISE);
-        break;
-    case 2:
-        cv::rotate(image, image, cv::ROTATE_180);
-        break;
-    case 3:
-        cv::rotate(image, image, cv::ROTATE_90_CLOCKWISE);
-        break;
-    default:
-        break;
+    if (s.mirror) {
+        cv::Mat mirrored;
+        cv::flip(image, mirrored, 1);
+        image = mirrored;
+    }
+    const int turns = ((s.quarterTurns % 4) + 4) % 4;
+    if (turns != 0) {
+        cv::Mat rotated;
+        cv::rotate(image, rotated, turns == 1 ? cv::ROTATE_90_COUNTERCLOCKWISE : turns == 2 ? cv::ROTATE_180 : cv::ROTATE_90_CLOCKWISE);
+        image = rotated;
     }
     const float w = float(image.cols), h = float(image.rows);
     if (s.keystoneH != 0 || s.keystoneV != 0) {

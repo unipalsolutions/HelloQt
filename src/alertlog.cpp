@@ -38,6 +38,9 @@ QString sourceName(const QString &source)
 
 QString csvField(QString text)
 {
+    // Excel ينفّذ الخلية التي تبدأ بهذه الرموز كمعادلة؛ اسم شخص أو ملف قد يبدأ بها
+    if (!text.isEmpty() && QStringLiteral("=+-@\t\r").contains(text.front()))
+        text.prepend(QLatin1Char('\''));
     if (text.contains(QLatin1Char(',')) || text.contains(QLatin1Char('"')) || text.contains(QLatin1Char('\n')))
         text = QLatin1Char('"') + text.replace(QLatin1Char('"'), QStringLiteral("\"\"")) + QLatin1Char('"');
     return text;
@@ -126,16 +129,20 @@ AlertLogDialog::AlertLogDialog(const FaceDatabase *database, QWidget *parent)
     reload();
 }
 
+QDateTime AlertLogDialog::since() const
+{
+    const int days = m_period->currentData().toInt();
+    if (days == 0)
+        return QDateTime(QDate::currentDate(), QTime(0, 0));
+    if (days > 0)
+        return QDateTime::currentDateTime().addDays(-days);
+    return {};
+}
+
 void AlertLogDialog::reload()
 {
     const bool watchedOnly = m_scope->currentData().toBool();
-    const int days = m_period->currentData().toInt();
-    QDateTime since;
-    if (days == 0)
-        since = QDateTime(QDate::currentDate(), QTime(0, 0));
-    else if (days > 0)
-        since = QDateTime::currentDateTime().addDays(-days);
-    m_entries = m_database->recentSightings(watchedOnly, since, MaxEntries);
+    m_entries = m_database->recentSightings(watchedOnly, since(), MaxEntries);
 
     m_list->clear();
     QSet<QString> persons;
@@ -216,13 +223,17 @@ void AlertLogDialog::exportCsv()
     const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("تصدير السجل"), initial, QStringLiteral("CSV (*.csv)"));
     if (path.isEmpty())
         return;
+    // القائمة تعرض أحدث MaxEntries فقط، والتصدير يشمل كل الفترة المختارة
+    const QList<SightingEntry> entries = m_entries.size() >= MaxEntries
+        ? m_database->recentSightings(m_scope->currentData().toBool(), since(), -1)
+        : m_entries;
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         Toast::show(this, QStringLiteral("تعذر حفظ الملف"), Toast::Kind::Warning);
         return;
     }
     QString csv = QStringLiteral("﻿التاريخ,الوقت,الاسم,التصنيفات,التشابه %,المصدر,الموضع في الفيديو\n");
-    for (const SightingEntry &entry : std::as_const(m_entries)) {
+    for (const SightingEntry &entry : entries) {
         const Sighting &s = entry.sighting;
         const QStringList row{
             s.seen.toString(QStringLiteral("yyyy-MM-dd")),
@@ -238,7 +249,12 @@ void AlertLogDialog::exportCsv()
             fields << csvField(field);
         csv += fields.join(QLatin1Char(',')) + QLatin1Char('\n');
     }
-    file.write(csv.toUtf8());
+    const QByteArray data = csv.toUtf8();
+    const bool written = file.write(data) == data.size() && file.flush();
     file.close();
-    Toast::show(this, QStringLiteral("حُفظ السجل: %1 مرة ظهور").arg(m_entries.size()), Toast::Kind::Success);
+    if (!written) {
+        Toast::show(this, QStringLiteral("تعذر حفظ الملف كاملاً؛ تحقق من المساحة الفارغة"), Toast::Kind::Warning);
+        return;
+    }
+    Toast::show(this, QStringLiteral("حُفظ السجل: %1 مرة ظهور").arg(entries.size()), Toast::Kind::Success);
 }

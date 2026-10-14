@@ -156,6 +156,8 @@ private:
     bool migrateLegacy(QString *error);
     bool upgradeSchema();
     void notify(const QString &personId, bool reset);
+    void beginStep();
+    void rollbackStep();
 
     QString m_directory;
     QString m_connection;

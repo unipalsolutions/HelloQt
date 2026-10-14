@@ -177,7 +177,9 @@ cv::Mat apply(const cv::Mat &bgr, const Settings &s)
     if (s.deinterlace && image.rows >= 4) {
         cv::Mat half;
         cv::resize(image, half, cv::Size(image.cols, image.rows / 2), 0, 0, cv::INTER_AREA);
-        cv::resize(half, image, bgr.size(), 0, 0, cv::INTER_LINEAR);
+        cv::Mat full; // لا يُكتب في image لأنها تشارك الإطار الأصلي بياناته
+        cv::resize(half, full, bgr.size(), 0, 0, cv::INTER_LINEAR);
+        image = full;
     }
     const int turns = s.quarterTurns % 4;
     if (turns != 0) {

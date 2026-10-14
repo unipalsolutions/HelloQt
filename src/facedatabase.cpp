@@ -815,62 +815,71 @@ bool FaceDatabase::restore(const QString &source, QString *error)
             *error = message;
         return false;
     };
+    if (!m_db.isOpen())
+        return fail(QStringLiteral("قاعدة البيانات غير مفتوحة"));
     if (inspectBackup(source).first < 0)
         return fail(QStringLiteral("الملف ليس نسخة احتياطية صالحة من ملامح"));
     const QString directory = m_directory;
-    const QDir dir(directory);
-    const QString path = dir.filePath(QString::fromLatin1(DatabaseFile));
+    const QString path = QDir(directory).filePath(QString::fromLatin1(DatabaseFile));
     const QString incoming = path + QStringLiteral(".restoring");
     QFile::remove(incoming);
     if (!QFile::copy(source, incoming))
         return fail(QStringLiteral("تعذر نسخ ملف النسخة الاحتياطية"));
 
-    // إصدار جديد يجعل فهرس المطابقة الحالي غير مطابق فيُعاد بناؤه من النسخة المستعادة
-    {
-        const QString connection = QStringLiteral("malamih-restore-%1").arg(QUuid::createUuid().toString(QUuid::Id128));
-        bool ok = false;
-        {
-            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
-            db.setDatabaseName(incoming);
-            if (db.open()) {
-                QSqlQuery query(db);
-                ok = query.exec(QStringLiteral("INSERT OR REPLACE INTO meta(key, value) VALUES('generation', '%1')")
-                                    .arg(QDateTime::currentMSecsSinceEpoch()));
-                query.finish();
-                db.close();
-            }
-        }
-        QSqlDatabase::removeDatabase(connection);
-        if (!ok) {
-            QFile::remove(incoming);
-            return fail(QStringLiteral("تعذر تجهيز النسخة الاحتياطية"));
-        }
+    // القاعدة الحالية كما هي قبل الاسترجاع، للرجوع إليها يدوياً عند الحاجة
+    const QString previous = path + QStringLiteral(".before-restore");
+    QString backupError;
+    if (!backup(previous, &backupError)) {
+        QFile::remove(incoming);
+        return fail(QStringLiteral("تعذر حفظ نسخة من القاعدة الحالية: %1").arg(backupError));
     }
 
-    close();
-    const QString previous = path + QStringLiteral(".before-restore");
-    QFile::remove(previous);
-    // بعد الإغلاق يُدمج سجل WAL في الملف الرئيسي، فيكفي نقل faces.db
-    if (QFile::exists(path) && !QFile::rename(path, previous)) {
+    // تُنسخ البيانات داخل القاعدة المفتوحة بدل استبدال ملفها: ملف مفتوح لا يُستبدل على Windows،
+    // واتصالات القراءة في الخيوط الأخرى ترى البيانات الجديدة مباشرة
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("ATTACH DATABASE '%1' AS src").arg(QString(incoming).replace(QLatin1Char('\''), QStringLiteral("''"))))) {
+        const QString message = query.lastError().text();
         QFile::remove(incoming);
-        open(directory);
-        return fail(QStringLiteral("تعذر نقل القاعدة الحالية؛ أغلق أي برنامج يستخدمها ثم حاول مرة أخرى"));
+        return fail(QStringLiteral("تعذر قراءة النسخة الاحتياطية: %1").arg(message));
     }
-    QFile::remove(path + QStringLiteral("-wal"));
-    QFile::remove(path + QStringLiteral("-shm"));
-    if (!QFile::rename(incoming, path)) {
-        QFile::rename(previous, path);
-        open(directory);
-        return fail(QStringLiteral("تعذر وضع النسخة المستعادة"));
+    auto columns = [this](const QString &schema, const QString &table) {
+        QStringList names;
+        QSqlQuery info(m_db);
+        if (info.exec(QStringLiteral("PRAGMA %1.table_info(%2)").arg(schema, table)))
+            while (info.next())
+                names << info.value(1).toString();
+        return names;
+    };
+    bool ok = m_db.transaction();
+    for (const QString &table : {QStringLiteral("meta"), QStringLiteral("persons"), QStringLiteral("photos"), QStringLiteral("sightings")}) {
+        if (!ok)
+            break;
+        ok = exec(QStringLiteral("DELETE FROM main.%1").arg(table));
+        // النسخ القديمة قد تنقصها أعمدة أو جداول أضيفت بعدها، فتأخذ قيمها الافتراضية
+        QStringList shared;
+        const QStringList incomingColumns = columns(QStringLiteral("src"), table);
+        for (const QString &column : columns(QStringLiteral("main"), table))
+            if (incomingColumns.contains(column))
+                shared << column;
+        if (ok && !shared.isEmpty()) {
+            const QString list = shared.join(QStringLiteral(", "));
+            ok = exec(QStringLiteral("INSERT INTO main.%1(%2) SELECT %2 FROM src.%1").arg(table, list));
+        }
     }
+    // إصدار جديد يجعل فهرس المطابقة الحالي غير مطابق فيُعاد بناؤه من البيانات المستعادة
+    ok = ok && exec(QStringLiteral("INSERT OR REPLACE INTO meta(key, value) VALUES('generation', ?)"),
+                    {QString::number(QDateTime::currentMSecsSinceEpoch())});
+    ok = ok ? m_db.commit() : (m_db.rollback(), false);
+    query.exec(QStringLiteral("DETACH DATABASE src"));
+    query.finish();
+    QFile::remove(incoming);
+    if (!ok)
+        return fail(QStringLiteral("تعذر استرجاع البيانات؛ القاعدة الحالية لم تتغير"));
+
     QString openError;
-    if (!open(directory, &openError)) {
-        // العودة إلى القاعدة السابقة كما كانت
-        QFile::remove(path);
-        QFile::rename(previous, path);
-        open(directory);
+    // إعادة الفتح تبني فهرس المطابقة والعدادات وتُبلغ الصفحات المفتوحة
+    if (!open(directory, &openError))
         return fail(openError);
-    }
     return true;
 }
 
@@ -1094,6 +1103,18 @@ bool FaceDatabase::endBatch()
     return ok;
 }
 
+// كل عملية من عدة أوامر تبدأ نقطة حفظ: فشلها يتراجع عنها وحدها دون ما سبقها في الدفعة
+void FaceDatabase::beginStep()
+{
+    exec(QStringLiteral("SAVEPOINT step"));
+}
+
+void FaceDatabase::rollbackStep()
+{
+    exec(QStringLiteral("ROLLBACK TO step"));
+    exec(QStringLiteral("RELEASE step"));
+}
+
 // كل عملية كتابة معاملة مستقلة إلا داخل beginBatch/endBatch
 void FaceDatabase::notify(const QString &personId, bool reset)
 {
@@ -1182,6 +1203,7 @@ bool FaceDatabase::removePerson(const QString &personId)
     if (!m_db.isOpen() || id <= 0)
         return false;
     beginBatch();
+    beginStep();
     QSqlQuery query(m_db);
     query.prepare(QStringLiteral("SELECT COUNT(*) FROM photos WHERE person_id = ?"));
     query.addBindValue(id);
@@ -1196,10 +1218,11 @@ bool FaceDatabase::removePerson(const QString &personId)
         m_photoCount -= photos;
         notify(personId, true);
     } else {
-        m_db.rollback();
-        m_batchDepth = 0;
+        rollbackStep();
+        endBatch();
         return false;
     }
+    exec(QStringLiteral("RELEASE step"));
     return endBatch();
 }
 
@@ -1250,6 +1273,7 @@ bool FaceDatabase::addPhoto(const QString &personId, const QImage &crop,
     }
 
     beginBatch();
+    beginStep();
     QSqlQuery query(m_db);
     query.prepare(QStringLiteral("INSERT INTO photos(person_id, quality, added, image, templates) VALUES(?, ?, ?, ?, ?)"));
     query.addBindValue(id);
@@ -1265,13 +1289,14 @@ bool FaceDatabase::addPhoto(const QString &personId, const QImage &crop,
                 {photoId, id})
         && refreshPerson(id);
     if (!ok) {
-        m_db.rollback();
-        m_batchDepth = 0;
+        rollbackStep();
         refreshPerson(id);
+        endBatch();
         return false;
     }
     ++m_photoCount;
     notify(personId, false);
+    exec(QStringLiteral("RELEASE step"));
     return endBatch();
 }
 
@@ -1281,6 +1306,7 @@ bool FaceDatabase::removePhoto(const QString &personId, qint64 photoId)
     if (!m_db.isOpen() || id <= 0)
         return false;
     beginBatch();
+    beginStep();
     const bool ok = exec(QStringLiteral("DELETE FROM photos WHERE id = ? AND person_id = ?"), {photoId, id})
         // الصورة الرئيسية تبقى كما اختارها المستخدم ما لم تكن هي المحذوفة
         && exec(QStringLiteral("UPDATE persons SET photo_count = (SELECT COUNT(*) FROM photos WHERE person_id = ?),"
@@ -1289,13 +1315,14 @@ bool FaceDatabase::removePhoto(const QString &personId, qint64 photoId)
                 {id, id, id, id})
         && refreshPerson(id);
     if (!ok) {
-        m_db.rollback();
-        m_batchDepth = 0;
+        rollbackStep();
         refreshPerson(id);
+        endBatch();
         return false;
     }
     --m_photoCount;
     notify(personId, false);
+    exec(QStringLiteral("RELEASE step"));
     return endBatch();
 }
 
@@ -1338,6 +1365,7 @@ bool FaceDatabase::mergePersons(const QString &keepId, const QString &removedId)
     if (!m_db.isOpen() || keep <= 0 || removed <= 0 || keep == removed)
         return false;
     beginBatch();
+    beginStep();
     // البيانات الناقصة في الشخص الباقي تُكمَّل من المحذوف
     auto named = [this](const QString &sql, qint64 keepValue, qint64 removedValue) {
         QSqlQuery query(m_db);
@@ -1379,14 +1407,15 @@ bool FaceDatabase::mergePersons(const QString &keepId, const QString &removedId)
         ok = refreshPerson(keep);
     }
     if (!ok) {
-        m_db.rollback();
-        m_batchDepth = 0;
+        rollbackStep();
         refreshPerson(keep);
         refreshPerson(removed);
+        endBatch();
         return false;
     }
     --m_personCount;
     notify(keepId, true);
+    exec(QStringLiteral("RELEASE step"));
     return endBatch();
 }
 

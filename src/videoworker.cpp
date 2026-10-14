@@ -302,7 +302,6 @@ cv::Mat VideoWorker::lastCameraFrame()
 
 void VideoWorker::process(const QString &source)
 {
-    m_stop = false;
     m_paused = false;
     m_pendingFrames = 0;
     {
@@ -516,7 +515,11 @@ void VideoWorker::process(const QString &source)
             continue;
         }
         if (camera) {
-            if (!live->read(frame)) {
+            // الانتظار على دفعات قصيرة حتى يستجيب «إيقاف» فوراً ولا ينتظر مهلة الكاميرا كاملة
+            bool got = false;
+            for (int waited = 0; waited < 12000 && !m_stop && !got; waited += 250)
+                got = live->read(frame, 250);
+            if (!got) {
                 if (m_stop)
                     break;
                 // انقطعت الكاميرا: تُعاد المحاولة حتى تعود (كاميرا الشبكة بلا حد، والموصولة نحو نصف دقيقة)

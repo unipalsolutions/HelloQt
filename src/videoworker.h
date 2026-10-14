@@ -37,6 +37,8 @@ public:
     // دمج هويتين يدوياً أثناء التحليل
     void mergeIdentities(int keepId, int removedId);
     void requestStop();
+    // يُستدعى من الواجهة قبل process، فلا يضيع طلب إيقاف يصل قبل أن يبدأ التحليل
+    void prepareStart() { m_stop = false; }
     void setPaused(bool paused); // إيقاف مؤقت دون فقدان التقدم أو الأشخاص المكتشفين
     bool isPaused() const { return m_paused; }
     void frameShown();

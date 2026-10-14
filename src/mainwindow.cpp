@@ -297,6 +297,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_studio = new EnhanceDialog(cv::Mat(), &m_engine, QStringLiteral("تحسين الصور"), QStringLiteral("التعرف على الوجوه فيها"), m_pages);
     m_studio->setEmbedded(true);
     m_studio->onUse = [this](const cv::Mat &image) {
+        if (m_analyzing || m_videoRunning) {
+            Toast::show(this, QStringLiteral("أوقف التحليل الجاري أولاً"), Toast::Kind::Warning);
+            return;
+        }
         const QString path = MatchPage::enhancedPath(QStringLiteral("صورة"));
         if (ImageIO::toQImage(image).save(path)) {
             m_navGroup->button(0)->click();
@@ -305,7 +309,7 @@ MainWindow::MainWindow(QWidget *parent)
     };
     m_pages->addWidget(m_studio);
     connect(m_matchPage, &MatchPage::openPersonRequested, this, &MainWindow::showPerson);
-    connect(m_matchPage, &MatchPage::enrollRequested, this, [this](const QString &personId, const FaceItem &face) {
+    connect(m_matchPage, &MatchPage::enrollRequested, this, [this](const QString &personId, FaceItem face) {
         if (enrollFace(personId, face))
             Toast::show(this, QStringLiteral("أضيفت الصورة إلى ملف %1").arg(m_database.person(personId).name));
         else
@@ -353,6 +357,8 @@ MainWindow::MainWindow(QWidget *parent)
     m_videoWorker = new VideoWorker(&m_engine);
     m_videoWorker->moveToThread(m_videoThread);
     m_videoWorker->setGallery(m_database.gallery());
+    // الاسترجاع يفتح القاعدة من جديد بمعرض جديد؛ بدونه يبقى التحليل الحي على أشخاص النسخة القديمة
+    connect(&m_database, &FaceDatabase::personsReset, this, [this] { m_videoWorker->setGallery(m_database.gallery()); });
     m_videoWorker->setThreshold(threshold());
     connect(m_videoThread, &QThread::finished, m_videoWorker, &QObject::deleteLater);
     connect(m_videoWorker, &VideoWorker::started, this, [this](int step, double fps, qint64 durationMs) {
@@ -615,6 +621,12 @@ MainWindow::~MainWindow()
     m_videoThread->wait();
     m_imageWatcher.waitForFinished();
     m_frameWatcher.waitForFinished();
+    // الصفحات والحوارات تنتظر أعمالها الخلفية في هدمها، وتلك الأعمال تستخدم m_engine و m_database؛
+    // تُهدم هنا قبل الأعضاء وإلا هدمها QWidget بعد زوالهما
+    const QList<QWidget *> children = findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QWidget *child : children)
+        child->disconnect(this);
+    qDeleteAll(children);
 }
 
 QWidget *MainWindow::createSidebar()
@@ -1674,6 +1686,7 @@ void MainWindow::startVideo(const QString &source)
     m_pausedMs = 0;
     m_pauseButton->setIconName(Icons::Name::Pause);
     m_pauseButton->setText(QStringLiteral("إيقاف مؤقت"));
+    m_videoWorker->prepareStart();
     QMetaObject::invokeMethod(m_videoWorker, "process", Qt::QueuedConnection, Q_ARG(QString, source));
 }
 
@@ -1710,7 +1723,7 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     m_view->setImage(frame);
     m_view->setFaces(faces);
     m_videoPositionMs = positionMs;
-    if (m_timelineCard->isVisible()) {
+    if (!m_timelineCard->isHidden()) {
         m_timeline->setPosition(positionMs);
         m_timeline->setAnalyzedUntil(positionMs);
         if (m_timeline->wantsThumbnail(positionMs))
@@ -2025,7 +2038,17 @@ void MainWindow::openShotViewer(int id, qint64 positionMs)
         return;
     auto *viewer = new ShotViewer(&m_engine, &m_database, m_videoSource, m_faces.at(row), threshold(), m_enhanceSwitch->isChecked(), this);
     connect(viewer, &ShotViewer::addFaceRequested, this, &MainWindow::addFaceToDatabase);
-    connect(viewer, &ShotViewer::analyzeFromRequested, this, &MainWindow::analyzeVideoFrom);
+    // العارض يبقى مفتوحاً وقد يُفتح فيديو آخر بعده، فيُحلَّل فيديو العارض لا الفيديو الحالي
+    connect(viewer, &ShotViewer::analyzeFromRequested, this, [this, source = m_videoSource](qint64 positionMs) {
+        if (source != m_videoSource) {
+            if (m_analyzing || m_videoRunning) {
+                Toast::show(this, QStringLiteral("أوقف التحليل الجاري أولاً"), Toast::Kind::Warning);
+                return;
+            }
+            m_videoSource = source;
+        }
+        analyzeVideoFrom(positionMs);
+    });
     viewer->setThumbnails(m_timeline->thumbnails());
     if (positionMs >= 0)
         viewer->showAt(positionMs);
@@ -2034,7 +2057,7 @@ void MainWindow::openShotViewer(int id, qint64 positionMs)
 
 void MainWindow::rebuildTimelineLanes()
 {
-    if (!m_videoMode || !m_timelineCard->isVisible())
+    if (!m_videoMode || !!m_timelineCard->isHidden())
         return;
     QList<TimelineLane> lanes;
     lanes.reserve(m_faces.size());
@@ -2638,6 +2661,9 @@ void MainWindow::saveFaces()
         csv << QStringLiteral("الرقم,الاسم,الحالة,التشابه %,جودة الوجه %,عدد الإطارات,أول ظهور,آخر ظهور,الصورة,مدة الظهور (ث),مرات الظهور\n");
     }
     auto field = [](QString text) {
+        // Excel ينفّذ الخلية التي تبدأ بهذه الرموز كمعادلة؛ اسم شخص أو ملف قد يبدأ بها
+        if (!text.isEmpty() && QStringLiteral("=+-@\t\r").contains(text.front()))
+            text.prepend(QLatin1Char('\''));
         text.replace(QLatin1Char('"'), QStringLiteral("\"\""));
         return QLatin1Char('"') + text + QLatin1Char('"');
     };
@@ -2664,8 +2690,18 @@ void MainWindow::saveFaces()
     source.durationMs = m_videoDurationMs;
     const QString htmlPath = QDir(folder).filePath(QStringLiteral("تقرير.html"));
     const bool html = Report::writeHtml(htmlPath, m_faces, source);
-    Toast::show(this, html ? QStringLiteral("تم حفظ %1 وجه مع تقرير مرئي وتقرير CSV").arg(saved)
-                           : QStringLiteral("تم حفظ %1 وجه مع تقرير CSV").arg(saved));
+    bool csvSaved = false;
+    if (hasReport) {
+        csv.flush();
+        csvSaved = csv.status() == QTextStream::Ok && report.error() == QFileDevice::NoError;
+        report.close();
+    }
+    const QString reports = html && csvSaved ? QStringLiteral(" مع تقرير مرئي وتقرير CSV")
+                            : html           ? QStringLiteral(" مع تقرير مرئي (تعذر حفظ تقرير CSV)")
+                            : csvSaved       ? QStringLiteral(" مع تقرير CSV")
+                                             : QStringLiteral(" (تعذر حفظ التقارير)");
+    Toast::show(this, QStringLiteral("تم حفظ %1 وجه").arg(saved) + reports,
+                html && csvSaved ? Toast::Kind::Success : Toast::Kind::Warning);
     if (html)
         QDesktopServices::openUrl(QUrl::fromLocalFile(htmlPath));
 }
@@ -2696,7 +2732,7 @@ QString MainWindow::choosePerson(const QString &suggestedId)
     return personId;
 }
 
-void MainWindow::addFaceToDatabase(const FaceItem &face)
+void MainWindow::addFaceToDatabase(FaceItem face)
 {
     const QString personId = choosePerson(face.match.personId);
     if (personId.isEmpty())

@@ -102,7 +102,7 @@ private:
     void addRecentFile(const QString &path);
     void showRecentMenu();
     void addSelectedFaceToDatabase();
-    void addFaceToDatabase(const FaceItem &face);
+    void addFaceToDatabase(FaceItem face); // نسخة لأن الحوار يعيد بناء m_faces أثناء انتظاره
     void onIdentitiesMerged(int keepId, int removedId);
     void showFaceContextMenu(const QPoint &pos);
     QList<int> selectedFaceIds() const;

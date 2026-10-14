@@ -74,14 +74,27 @@ QString exportSegments(const QString &source, QList<QPair<qint64, qint64>> segme
     }
     writer.release();
 
-    QFile::remove(target);
-    if (!QFile::rename(temp, target)) {
-        // نقل بين قرصين مختلفين: نسخ ثم حذف
-        const bool copied = QFile::copy(temp, target);
+    // الملف الموجود يُنحّى جانباً ولا يُحذف إلا بعد نجاح الحفظ، فيعود كما كان إن فشل
+    const QString backup = target + QStringLiteral(".old");
+    const bool replacing = QFile::exists(target);
+    QFile::remove(backup);
+    if (replacing && !QFile::rename(target, backup)) {
         QFile::remove(temp);
-        if (!copied)
-            return QStringLiteral("تعذر حفظ الملف في المكان المختار");
+        return QStringLiteral("تعذر استبدال الملف الموجود؛ قد يكون مفتوحاً في برنامج آخر");
     }
+    bool saved = QFile::rename(temp, target);
+    if (!saved) {
+        // نقل بين قرصين مختلفين: نسخ ثم حذف
+        saved = QFile::copy(temp, target);
+        QFile::remove(temp);
+    }
+    if (!saved) {
+        QFile::remove(target);
+        if (replacing)
+            QFile::rename(backup, target);
+        return QStringLiteral("تعذر حفظ الملف في المكان المختار");
+    }
+    QFile::remove(backup);
     return {};
 }
 

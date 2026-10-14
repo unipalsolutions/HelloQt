@@ -19,6 +19,8 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QSet>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QTextStream>
 #include <QThread>
 #include <QtConcurrent>
@@ -916,13 +918,32 @@ int backupTest(const QString &directory, QTextStream &out)
         database.addPerson(person);
     }
     const qint64 before = database.personCount();
-    const bool restored = database.restore(file, &error);
+    // اتصال قراءة مفتوح أثناء الاسترجاع (كما في خيوط البحث): على Windows يمنع استبدال الملف،
+    // ويجب أن يرى البيانات المستعادة بعده
+    const QString reader = QStringLiteral("malamih-test-reader");
+    qint64 readerCount = -1;
+    bool restored = false;
+    {
+        QSqlDatabase readDb = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), reader);
+        readDb.setDatabaseName(QDir(directory).filePath(QStringLiteral("faces.db")));
+        readDb.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
+        readDb.open();
+        QSqlQuery count(readDb);
+        count.exec(QStringLiteral("SELECT COUNT(*) FROM persons"));
+        count.finish();
+        restored = database.restore(file, &error);
+        if (count.exec(QStringLiteral("SELECT COUNT(*) FROM persons")) && count.next())
+            readerCount = count.value(0).toLongLong();
+        count.finish();
+        readDb.close();
+    }
+    QSqlDatabase::removeDatabase(reader);
     const qint64 after = database.personCount();
     const bool invalid = !database.restore(QDir(directory).filePath(QStringLiteral("index.codes")));
     out << "saved=" << saved << "\ninspected_persons=" << inspected.first << "\nbefore_restore=" << before
         << "\nrestored=" << restored << "\nafter_restore=" << after << "\nrejects_invalid=" << invalid
         << "\nkept_previous=" << QFile::exists(QDir(directory).filePath(QStringLiteral("faces.db.before-restore")))
-        << "\nstill_open=" << (database.personCount() == 3);
+        << "\nstill_open=" << (database.personCount() == 3) << "\nreader_sees_restored=" << readerCount;
     // قائمة المراقبة: التصنيف يُضاف ويُزال دون المساس ببقية التصنيفات
     const bool watchTags = FaceDatabase::isWatched(QStringLiteral("موظف، مطلوب")) && !FaceDatabase::isWatched(QStringLiteral("مراقبات"))
         && FaceDatabase::withWatchTag(QStringLiteral("موظف، مراقبة"), false) == QStringLiteral("موظف");
@@ -950,7 +971,7 @@ int backupTest(const QString &directory, QTextStream &out)
         && database.findPersonId(QStringLiteral("غير موجود"), QString()).isEmpty();
     out << "\nwatch_tags=" << watchTags << "\nwatched_after_restore=" << watched << "\nalert_log=" << alertLog
         << "\nimport_names=" << importNames << "\n" << error;
-    return saved && inspected.first == 3 && before == 5 && restored && after == 3 && invalid && watchTags && watched == 1
+    return saved && inspected.first == 3 && before == 5 && restored && after == 3 && readerCount == 3 && invalid && watchTags && watched == 1
                    && alertLog && importNames
                ? 0
                : 1;

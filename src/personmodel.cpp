@@ -39,15 +39,12 @@ void PersonListModel::refreshPerson(const QString &id)
     const int row = rowOf(id);
     if (row < 0)
         return;
-    const Person updated = m_database->person(id);
+    Person updated = m_database->person(id);
     if (updated.id.isEmpty())
         return;
-    Person &person = m_rows[row];
-    person.name = updated.name;
-    person.nationalId = updated.nationalId;
-    person.phone = updated.phone;
-    person.photoCount = updated.photoCount;
-    person.coverPhoto = updated.coverPhoto;
+    // كل الحقول (التصنيفات وآخر ظهور وغيرها تظهر في القائمة)، دون الصور لأن القائمة لا تحتاجها
+    updated.photos.clear();
+    m_rows[row] = updated;
     emit dataChanged(index(row), index(row));
 }
 

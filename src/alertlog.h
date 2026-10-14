@@ -24,6 +24,7 @@ signals:
     void showPersonRequested(const QString &personId);
 
 private:
+    QDateTime since() const;
     void reload();
     void updateButtons();
     void openCurrent();
