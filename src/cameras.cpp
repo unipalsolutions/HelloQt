@@ -926,6 +926,20 @@ bool open(cv::VideoCapture &capture, const Camera &camera, QString *error)
     return true;
 }
 
+bool cameraBlocked()
+{
+#ifdef Q_OS_WIN
+    // «Deny» في الإذن العام أو إذن برامج سطح المكتب يمنع فتح أي كاميرا مع أن ويندوز يعرضها
+    const QString store = QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\webcam");
+    const QString machine = QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\webcam");
+    for (const QString &key : {store, store + QStringLiteral("\\NonPackaged"), machine}) {
+        if (QSettings(key, QSettings::NativeFormat).value(QStringLiteral("Value")).toString().compare(QStringLiteral("Deny"), Qt::CaseInsensitive) == 0)
+            return true;
+    }
+#endif
+    return false;
+}
+
 QString probeLocal()
 {
     QStringList lines;
@@ -1000,6 +1014,9 @@ QString probeLocal()
 QString diagnose(const Camera &camera)
 {
     if (camera.kind == Kind::Local) {
+        if (cameraBlocked())
+            return QStringLiteral("ويندوز يمنع البرامج من استخدام الكاميرا. اضغط «أذونات الكاميرا» (أو افتح الإعدادات ← الخصوصية والأمان "
+                                  "← الكاميرا) وفعّل «الوصول إلى الكاميرا» و«السماح لتطبيقات سطح المكتب بالوصول إلى الكاميرا»، ثم أعد المحاولة.");
         const QList<LocalDevice> devices = localDevices();
         bool present = devices.isEmpty();
         for (const LocalDevice &d : devices)

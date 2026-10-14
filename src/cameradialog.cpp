@@ -7,6 +7,7 @@
 
 #include <QClipboard>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QFuture>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -21,6 +22,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QtConcurrent>
 
@@ -120,6 +122,12 @@ CameraDialog::CameraDialog(QWidget *parent, const QString &selectId)
     probe->setToolTip(QStringLiteral("يجرّب كل كاميرا موصولة بكل طريقة التقاط ويعرض النتيجة، لمعرفة سبب كاميرا لا تفتح"));
     deviceLayout->addWidget(probe);
     connect(probe, &QAbstractButton::clicked, this, &CameraDialog::probeCameras);
+#ifdef Q_OS_WIN
+    auto *privacy = new FancyButton(Icons::Name::Lock, QStringLiteral("أذونات الكاميرا"), FancyButton::Kind::Secondary, m_localBox);
+    privacy->setToolTip(QStringLiteral("صفحة ويندوز التي تسمح للبرامج باستخدام الكاميرا"));
+    deviceLayout->addWidget(privacy);
+    connect(privacy, &QAbstractButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QStringLiteral("ms-settings:privacy-webcam"))); });
+#endif
     local->addWidget(formRow(QStringLiteral("الجهاز"), deviceField, m_localBox));
     m_resolution = new QComboBox(m_localBox);
     for (const auto &[w, h] : resolutions())
