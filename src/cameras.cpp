@@ -37,11 +37,10 @@ namespace {
 constexpr int OpenTimeoutMs = 8000;
 
 #ifdef Q_OS_WIN
-// رقم الكاميرا في Media Foundation؛ ترتيبه يختلف عن DirectShow (والكاميرات الافتراضية مثل OBS
-// لا تظهر فيه)، فيُبحث بالاسم. -1 إن لم توجد فيه
-int mediaFoundationIndex(const QString &name)
+// أسماء الكاميرات بترتيب Media Foundation
+QStringList mediaFoundationNames()
 {
-    int found = -1;
+    QStringList names;
     const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE))) {
         IMFAttributes *attributes = nullptr;
@@ -53,11 +52,12 @@ int mediaFoundationIndex(const QString &name)
                 for (UINT32 i = 0; i < count; ++i) {
                     WCHAR *friendly = nullptr;
                     UINT32 length = 0;
-                    if (found < 0 && SUCCEEDED(devices[i]->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &friendly, &length))) {
-                        if (QString::fromWCharArray(friendly, int(length)) == name)
-                            found = int(i);
+                    QString name;
+                    if (SUCCEEDED(devices[i]->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &friendly, &length))) {
+                        name = QString::fromWCharArray(friendly, int(length));
                         CoTaskMemFree(friendly);
                     }
+                    names.append(name);
                     devices[i]->Release();
                 }
                 CoTaskMemFree(devices);
@@ -69,7 +69,14 @@ int mediaFoundationIndex(const QString &name)
     }
     if (SUCCEEDED(init))
         CoUninitialize();
-    return found;
+    return names;
+}
+
+// رقم الكاميرا في Media Foundation؛ ترتيبه يختلف عن DirectShow (والكاميرات الافتراضية مثل OBS
+// لا تظهر فيه)، فيُبحث بالاسم. -1 إن لم توجد فيه
+int mediaFoundationIndex(const QString &name)
+{
+    return int(mediaFoundationNames().indexOf(name));
 }
 #endif
 
@@ -917,6 +924,77 @@ bool open(cv::VideoCapture &capture, const Camera &camera, QString *error)
         return false;
     }
     return true;
+}
+
+QString probeLocal()
+{
+    QStringList lines;
+    lines << QStringLiteral("OpenCV %1").arg(QString::fromLatin1(CV_VERSION));
+    const QList<LocalDevice> devices = localDevices();
+    QStringList dshow;
+    for (const LocalDevice &d : devices)
+        dshow << QStringLiteral("%1=%2").arg(d.index).arg(d.name);
+    lines << QStringLiteral("DirectShow: ") + (dshow.isEmpty() ? QStringLiteral("—") : dshow.join(QStringLiteral(" | ")));
+    QList<int> indexes;
+    for (const LocalDevice &d : devices)
+        indexes << d.index;
+    if (indexes.isEmpty())
+        indexes = {0, 1, 2};
+#ifdef Q_OS_WIN
+    const QStringList mf = mediaFoundationNames();
+    lines << QStringLiteral("Media Foundation: ") + (mf.isEmpty() ? QStringLiteral("—") : mf.join(QStringLiteral(" | ")));
+    // إذن ويندوز للكاميرا: Deny في أي منهما يمنع برامج سطح المكتب من فتح أي كاميرا
+    const QString store = QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\webcam");
+    lines << QStringLiteral("الخصوصية: الكل=%1 سطح المكتب=%2")
+                 .arg(QSettings(store, QSettings::NativeFormat).value(QStringLiteral("Value")).toString(),
+                      QSettings(store + QStringLiteral("\\NonPackaged"), QSettings::NativeFormat).value(QStringLiteral("Value")).toString());
+    const QList<QPair<int, QString>> apis{{cv::CAP_DSHOW, QStringLiteral("DirectShow")}, {cv::CAP_MSMF, QStringLiteral("MediaFoundation")}};
+#else
+    const QList<QPair<int, QString>> apis{{cv::CAP_ANY, QStringLiteral("Auto")}};
+#endif
+    for (int index : std::as_const(indexes)) {
+        for (const auto &[api, apiName] : apis) {
+            int apiIndex = index;
+#ifdef Q_OS_WIN
+            if (api == cv::CAP_MSMF) {
+                apiIndex = devices.isEmpty() ? index : int(mf.indexOf(localName(index, devices)));
+                if (apiIndex < 0) {
+                    lines << QStringLiteral("%1 %2: غير موجودة فيها").arg(index).arg(apiName);
+                    continue;
+                }
+            }
+#endif
+            QElapsedTimer timer;
+            timer.start();
+            cv::VideoCapture capture;
+            bool opened = false;
+            QString exception;
+            try {
+                opened = capture.open(apiIndex, api);
+            } catch (const cv::Exception &e) {
+                exception = QString::fromLocal8Bit(e.what()).simplified().left(160);
+            }
+            const qint64 openMs = timer.elapsed();
+            int frames = 0;
+            cv::Mat frame;
+            if (opened) {
+                for (int i = 0; i < 10; ++i)
+                    if (capture.read(frame) && !frame.empty())
+                        ++frames;
+            }
+            lines << QStringLiteral("%1 %2 (#%3): %4 %5ms، إطارات %6/10%7%8")
+                         .arg(index)
+                         .arg(apiName)
+                         .arg(apiIndex)
+                         .arg(opened ? QStringLiteral("فُتحت") : QStringLiteral("لم تُفتح"))
+                         .arg(openMs)
+                         .arg(frames)
+                         .arg(frame.empty() ? QString() : QStringLiteral(" %1×%2").arg(frame.cols).arg(frame.rows))
+                         .arg(exception.isEmpty() ? QString() : QStringLiteral(" خطأ: ") + exception);
+            capture.release();
+        }
+    }
+    return lines.join(QLatin1Char('\n'));
 }
 
 QString diagnose(const Camera &camera)

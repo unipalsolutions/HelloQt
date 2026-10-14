@@ -31,6 +31,9 @@ void migrateLegacyData()
 
 int main(int argc, char *argv[])
 {
+    // تحويلات العتاد في Media Foundation تمنع بعض كاميرات USB من الفتح أو تبطئه كثيراً
+    if (!qEnvironmentVariableIsSet("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"))
+        qputenv("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0");
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Malamih"));
     // بلا اسم منظمة لا يحفظ سجل ويندوز أي إعداد، وملف INI يعمل كما على لينكس

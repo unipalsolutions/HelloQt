@@ -39,6 +39,7 @@ private:
     void updateUrl();
     void updateHelp();
     void testConnection();
+    void probeCameras();
     void findCameras();
     void detectCamera();
     void setBusy(bool busy);

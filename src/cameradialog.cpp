@@ -5,14 +5,17 @@
 #include "theme.h"
 #include "widgets.h"
 
+#include <QClipboard>
 #include <QComboBox>
 #include <QFuture>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
@@ -113,6 +116,10 @@ CameraDialog::CameraDialog(QWidget *parent, const QString &selectId)
     deviceLayout->setContentsMargins(0, 0, 0, 0);
     deviceLayout->addWidget(m_device, 1);
     deviceLayout->addWidget(refresh);
+    auto *probe = new FancyButton(Icons::Name::Check, QStringLiteral("تشخيص"), FancyButton::Kind::Secondary, m_localBox);
+    probe->setToolTip(QStringLiteral("يجرّب كل كاميرا موصولة بكل طريقة التقاط ويعرض النتيجة، لمعرفة سبب كاميرا لا تفتح"));
+    deviceLayout->addWidget(probe);
+    connect(probe, &QAbstractButton::clicked, this, &CameraDialog::probeCameras);
     local->addWidget(formRow(QStringLiteral("الجهاز"), deviceField, m_localBox));
     m_resolution = new QComboBox(m_localBox);
     for (const auto &[w, h] : resolutions())
@@ -593,6 +600,40 @@ void CameraDialog::setBusy(bool busy)
     m_detectButton->setEnabled(enabled);
     // الاختبار يُبقي الكاميرا الموصولة مفتوحة، فلا تُشغَّل قبل أن يتركها
     m_startButton->setEnabled(enabled);
+}
+
+void CameraDialog::probeCameras()
+{
+    storeForm();
+    const int token = ++m_testToken;
+    setBusy(true);
+    m_status->setStyleSheet(QString());
+    m_status->setText(QStringLiteral("جارٍ تجربة كل كاميرا بكل طريقة… (حتى دقيقة)"));
+    QtConcurrent::run([] { return Cameras::probeLocal(); }).then(this, [this, token](const QString &report) {
+        setBusy(false);
+        if (token != m_testToken)
+            return;
+        m_status->setText(QString());
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("تشخيص الكاميرات"));
+        dialog.resize(760, 420);
+        auto *layout = new QVBoxLayout(&dialog);
+        auto *hint = new QLabel(QStringLiteral("كل سطر محاولة لفتح كاميرا بطريقة التقاط. انسخ النتيجة وأرسلها للدعم إن لم تفتح الكاميرا."), &dialog);
+        hint->setWordWrap(true);
+        hint->setObjectName(QStringLiteral("muted"));
+        auto *text = new QPlainTextEdit(report, &dialog);
+        text->setReadOnly(true);
+        text->setLayoutDirection(Qt::LeftToRight);
+        auto *copy = new FancyButton(Icons::Name::Check, QStringLiteral("نسخ النتيجة"), FancyButton::Kind::Primary, &dialog);
+        connect(copy, &QAbstractButton::clicked, &dialog, [report, copy] {
+            QGuiApplication::clipboard()->setText(report);
+            copy->setText(QStringLiteral("نُسخت"));
+        });
+        layout->addWidget(hint);
+        layout->addWidget(text, 1);
+        layout->addWidget(copy, 0, Qt::AlignLeft);
+        dialog.exec();
+    });
 }
 
 void CameraDialog::findCameras()

@@ -1172,6 +1172,8 @@ int cameraTest(const QString &videoPath, QTextStream &out)
     const bool last = Cameras::lastSource() == found.source();
     out << "storage=" << storage << " last=" << last << "\n" << Qt::flush;
     out << "local_devices=" << Cameras::localDevices().size() << " addresses=" << Cameras::localAddresses().join(QLatin1Char(',')) << "\n" << Qt::flush;
+    // تشخيص الكاميرات الموصولة يعمل حتى بلا كاميرات (يكتب القوائم ومحاولات الفتح)
+    out << "probe:\n" << Cameras::probeLocal() << "\n" << Qt::flush;
 
     // مساعدات التوصيل: العنوان المقترح للابتوب، والشبكة، وخطوات كل طريقة
     bool guide = Cameras::suggestedAddress(QStringLiteral("192.168.1.64")) == QLatin1String("192.168.1.200")

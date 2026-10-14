@@ -131,6 +131,8 @@ QString unprotect(const QString &stored);
 bool open(cv::VideoCapture &capture, const Camera &camera, QString *error);
 // سبب الفشل بالعربية: لا يرد جهاز على العنوان، أم يرد ويرفض البث
 QString diagnose(const Camera &camera);
+// يجرّب كل كاميرا موصولة بكل طريقة التقاط ويصف النتيجة سطراً لكل محاولة (لتشخيص كاميرا لا تفتح)
+QString probeLocal();
 // صورة واحدة للاختبار؛ info مثل «1280×720 · 25 إطاراً/ث»
 cv::Mat snapshot(const Camera &camera, QString *error, QString *info = nullptr);
 
