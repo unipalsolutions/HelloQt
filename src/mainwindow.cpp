@@ -330,6 +330,8 @@ MainWindow::MainWindow(QWidget *parent)
         m_matchPage->refresh();
     });
     connect(&m_database, &FaceDatabase::personsReset, this, &MainWindow::refreshPersons);
+    connect(&m_database, &FaceDatabase::personsReset, this, &MainWindow::refreshWatched);
+    connect(&m_database, &FaceDatabase::personUpdated, this, &MainWindow::refreshWatched);
     connect(&m_database, &FaceDatabase::personUpdated, this, [this](const QString &id) {
         m_personModel->refreshPerson(id);
         if (id == selectedPersonId())
@@ -337,6 +339,7 @@ MainWindow::MainWindow(QWidget *parent)
     });
     refreshPersons();
     refreshStats();
+    refreshWatched();
 
     connect(&m_imageWatcher, &QFutureWatcher<ImageAnalysis>::finished, this, &MainWindow::onImageAnalyzed);
 
@@ -731,7 +734,11 @@ QWidget *MainWindow::createRecognitionPage()
     m_folderScanButton = new FancyButton(Icons::Name::Folder, QStringLiteral("مجلد صور"), FancyButton::Kind::Secondary, page);
     m_folderScanButton->setToolTip(QStringLiteral("البحث عن الأشخاص في كل صور مجلد (Ctrl+Shift+F)"));
     connect(m_folderScanButton, &QAbstractButton::clicked, this, &MainWindow::openFolderScan);
-    m_headerButtons = {m_openImageButton, m_openVideoButton, m_cameraButton, m_folderScanButton, m_pauseButton, m_stopButton, m_enhanceImageButton, m_saveFacesButton};
+    m_recentButton = new FancyButton(Icons::Name::Clock, QStringLiteral("الأخيرة"), FancyButton::Kind::Secondary, page);
+    m_recentButton->setToolTip(QStringLiteral("آخر الصور والفيديوهات التي فُتحت"));
+    connect(m_recentButton, &QAbstractButton::clicked, this, &MainWindow::showRecentMenu);
+    m_headerButtons = {m_openImageButton, m_openVideoButton, m_recentButton, m_cameraButton, m_folderScanButton,
+                       m_pauseButton, m_stopButton, m_enhanceImageButton, m_saveFacesButton};
 
     auto *header = new QHBoxLayout;
     auto *titles = new QVBoxLayout;
@@ -884,6 +891,56 @@ QWidget *MainWindow::createRecognitionPage()
     progressLayout->addWidget(m_progress);
     m_progress->setVisible(false);
     layout->addWidget(progressSlot);
+
+    // شريط تنبيه المراقبة: يظهر عندما يُتعرَّف على شخص من قائمة المراقبة
+    m_alertBar = new QFrame(page);
+    m_alertBar->setObjectName(QStringLiteral("alertBar"));
+    m_alertBar->setStyleSheet(QStringLiteral("#alertBar { background: #0f2a55; border: 2px solid %1; border-radius: 12px; }")
+                                  .arg(Theme::Accent.name()));
+    auto *alertLayout = new QHBoxLayout(m_alertBar);
+    alertLayout->setContentsMargins(14, 8, 14, 8);
+    alertLayout->setSpacing(12);
+    auto *alertIcon = new QLabel(m_alertBar);
+    alertIcon->setPixmap(Icons::icon(Icons::Name::Alert, Theme::Accent2, 26).pixmap(26, 26));
+    m_alertAvatar = new QLabel(m_alertBar);
+    m_alertAvatar->setFixedSize(44, 44);
+    m_alertText = new QLabel(m_alertBar);
+    m_alertText->setTextFormat(Qt::RichText);
+    m_alertText->setWordWrap(true);
+    auto *alertShow = new FancyButton(Icons::Name::Search, QStringLiteral("عرض"), FancyButton::Kind::Primary, m_alertBar);
+    alertShow->setToolTip(QStringLiteral("تحديد الوجه وعرضه"));
+    auto *alertClose = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, m_alertBar);
+    connect(alertShow, &QAbstractButton::clicked, this, [this] {
+        const int row = m_faceRows.value(m_alertFaceId, -1);
+        if (row < 0 || row >= m_faces.size())
+            return;
+        selectFace(m_alertFaceId);
+        if (!m_videoMode)
+            m_view->zoomToFace(m_alertFaceId);
+        else if (!m_videoRunning && m_faces.at(row).bestMs >= 0)
+            loadVideoFrame(m_faces.at(row).bestMs);
+    });
+    connect(alertClose, &QAbstractButton::clicked, m_alertBar, &QWidget::hide);
+    alertLayout->addWidget(alertIcon);
+    alertLayout->addWidget(m_alertAvatar);
+    alertLayout->addWidget(m_alertText, 1);
+    alertLayout->addWidget(alertShow);
+    alertLayout->addWidget(alertClose);
+    m_alertBar->setVisible(false);
+    layout->addWidget(m_alertBar);
+    // وميض الإطار بضع مرات لجذب الانتباه
+    m_alertPulse = new QTimer(this);
+    m_alertPulse->setInterval(350);
+    connect(m_alertPulse, &QTimer::timeout, this, [this] {
+        const int step = m_alertPulse->property("step").toInt() + 1;
+        m_alertPulse->setProperty("step", step);
+        const bool bright = step % 2 == 1;
+        m_alertBar->setStyleSheet(QStringLiteral("#alertBar { background: %1; border: 2px solid %2; border-radius: 12px; }")
+                                      .arg(bright ? QStringLiteral("#123a7a") : QStringLiteral("#0f2a55"),
+                                           bright ? Theme::Accent2.name() : Theme::Accent.name()));
+        if (step >= 8)
+            m_alertPulse->stop();
+    });
 
     // العرض والقائمة الجانبية
     auto *viewCard = card(page, QStringLiteral("viewCard"));
@@ -1208,6 +1265,10 @@ QWidget *MainWindow::createDatabasePage()
     harvestButton->setToolTip(QStringLiteral("يبحث عن الشخص في فيديو ويقترح أوضح لقطاته وأكثرها تنوعاً لإضافتها إلى صوره"));
     auto *exportButton = new FancyButton(Icons::Name::Export, QStringLiteral("تصدير PDF"), FancyButton::Kind::Secondary, m_personActions);
     auto *removeButton = new FancyButton(Icons::Name::Trash, QStringLiteral("حذف الشخص"), FancyButton::Kind::Danger, m_personActions);
+    m_watchButton = new FancyButton(Icons::Name::Alert, QStringLiteral("إضافة للمراقبة"), FancyButton::Kind::Secondary, m_personActions);
+    m_watchButton->setToolTip(QStringLiteral("قائمة المراقبة: ينبّهك البرنامج بصوت وشريط تنبيه فور ظهور الشخص في صورة أو فيديو أو الكاميرا.\n"
+                                             "يضيف الزر التصنيف «مراقبة» إلى بيانات الشخص (والتصنيف «مطلوب» يعمل بالمثل)."));
+    connect(m_watchButton, &QAbstractButton::clicked, this, &MainWindow::toggleWatch);
     connect(editButton, &QAbstractButton::clicked, this, &MainWindow::editPerson);
     connect(addPhotosButton, &QAbstractButton::clicked, this, &MainWindow::addPhotos);
     connect(harvestButton, &QAbstractButton::clicked, this, [this] { harvestPhotos(selectedPersonId()); });
@@ -1217,6 +1278,7 @@ QWidget *MainWindow::createDatabasePage()
     actions->addWidget(harvestButton);
     actions->addWidget(editButton);
     actions->addWidget(exportButton);
+    actions->addWidget(m_watchButton);
     actions->addWidget(removeButton);
     m_harvestButton = harvestButton;
     detailsLayout->addWidget(m_personActions);
@@ -1364,6 +1426,8 @@ void MainWindow::analyzeImage(const QString &path)
         m_view->resetZoom();
     m_currentImagePath = path;
     updateFolderNavigation();
+    clearWatchAlerts();
+    addRecentFile(path);
     m_faces.clear();
     refreshFaceList();
     m_view->setFaces({});
@@ -1419,6 +1483,8 @@ void MainWindow::onImageAnalyzed()
     m_faces = result.faces;
     m_view->setImage(result.image, false);
     refreshMatches();
+    for (const FaceItem &face : std::as_const(m_faces))
+        checkWatchAlert(face);
     recordSightings(m_currentImagePath);
     if (!m_faces.isEmpty())
         m_faceList->setCurrentRow(0);
@@ -1462,6 +1528,9 @@ void MainWindow::startVideo(const QString &source)
     m_folderIndex = -1;
     m_view->setNavigation(false, false, QString());
     setVideoSettingsVisible(true);
+    clearWatchAlerts();
+    if (!source.startsWith(QStringLiteral("camera:")))
+        addRecentFile(source);
     m_faces.clear();
     m_hiddenFaces.clear();
     refreshFaceList();
@@ -1562,6 +1631,7 @@ void MainWindow::onTrackUpdated(const FaceItem &track)
     if (m_faces.isEmpty())
         m_faceRows.clear();
     const int i = m_faceRows.value(track.id, -1);
+    checkWatchAlert(track);
     if (i >= 0 && i < m_faces.size() && m_faces.at(i).id == track.id) {
         m_faces[i] = track;
         updateFaceListItem(m_faceList->item(i), track);
@@ -1981,8 +2051,11 @@ void MainWindow::refreshMatches()
     for (FaceItem &face : m_faces)
         face.match = FaceDatabase::identify(*gallery, face.embedding, threshold());
     refreshFaceList();
-    if (!m_videoMode)
+    if (!m_videoMode) {
         m_view->setFaces(m_faces);
+        for (const FaceItem &face : std::as_const(m_faces))
+            checkWatchAlert(face);
+    }
 }
 
 void MainWindow::refreshFaceList()
@@ -2098,6 +2171,8 @@ void MainWindow::showFaceDetails()
     QString html = QStringLiteral("<div style='font-size:13pt; font-weight:600; color:%1'>%2</div>"
                                   "<div style='color:%3'>%4</div>")
                        .arg(Theme::Text.name(), matchLabel(face.match).toHtmlEscaped(), color, statusDescription(face.match.status));
+    if (face.match.status == MatchStatus::Confirmed && m_watched.contains(face.match.personId))
+        html += QStringLiteral("<div style='color:%1; font-weight:600'>⚠ هذا الشخص في قائمة المراقبة</div>").arg(Theme::Accent2.name());
     auto row_ = [](const QString &key, const QString &value) {
         return QStringLiteral("<br><span style='color:#8aa3c7'>%1:</span> <span style='color:#e6f0ff'>%2</span>").arg(key, value.toHtmlEscaped());
     };
@@ -2135,6 +2210,110 @@ void MainWindow::showFaceDetails()
             html += row_(QStringLiteral("ملاحظات"), person.notes);
     }
     m_faceDetails->setText(html);
+}
+
+void MainWindow::refreshWatched()
+{
+    m_watched = m_database.watchedIds();
+    m_view->setWatched(m_watched);
+    // إضافة شخص إلى المراقبة أثناء عرض صورة أو فيديو تنبّه عنه فوراً إن كان ظاهراً
+    for (const FaceItem &face : std::as_const(m_faces))
+        checkWatchAlert(face);
+    if (m_faceList->currentRow() >= 0)
+        showFaceDetails();
+}
+
+void MainWindow::clearWatchAlerts()
+{
+    m_alerted.clear();
+    m_alertCount = 0;
+    m_alertFaceId = -1;
+    m_alertBar->hide();
+}
+
+void MainWindow::checkWatchAlert(const FaceItem &face)
+{
+    if (face.match.status != MatchStatus::Confirmed || !m_watched.contains(face.match.personId)
+        || m_alerted.contains(face.match.personId))
+        return;
+    m_alerted.insert(face.match.personId);
+    ++m_alertCount;
+    m_alertFaceId = face.id;
+    m_alertAvatar->setPixmap(circularPixmap(ImageIO::faceCrop(face), 44));
+    QString where;
+    if (m_videoMode && face.firstSeenMs >= 0)
+        where = QStringLiteral(" عند \u2066%1\u2069").arg(ImageIO::formatTime(face.firstSeenMs));
+    const QString time = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
+    QString text = QStringLiteral("<span style='color:%1; font-weight:700; font-size:12pt'>تنبيه مراقبة: ظهر %2</span>"
+                                  "<br><span style='color:#cfe0ff'>التشابه %3%%4 · الساعة \u2066%5\u2069</span>")
+                       .arg(Theme::Accent2.name(), face.match.name.toHtmlEscaped())
+                       .arg(qRound(face.match.score * 100))
+                       .arg(where, time);
+    if (m_alertCount > 1)
+        text += QStringLiteral("<span style='color:#8aa3c7'> · %1 تنبيهات في هذا الملف</span>").arg(m_alertCount);
+    m_alertText->setText(text);
+    m_alertBar->show();
+    m_alertPulse->setProperty("step", 0);
+    m_alertPulse->start();
+    QApplication::beep();
+    statusBar()->showMessage(QStringLiteral("تنبيه مراقبة: ظهر %1").arg(face.match.name), 10000);
+}
+
+void MainWindow::toggleWatch()
+{
+    const QString id = selectedPersonId();
+    if (id.isEmpty())
+        return;
+    Person person = m_database.person(id);
+    const bool watch = !FaceDatabase::isWatched(person.tags);
+    person.tags = FaceDatabase::withWatchTag(person.tags, watch);
+    if (!m_database.updatePerson(person)) {
+        Toast::show(this, QStringLiteral("تعذر حفظ التغيير"), Toast::Kind::Warning);
+        return;
+    }
+    Toast::show(this, watch ? QStringLiteral("أُضيف %1 إلى قائمة المراقبة: ستُنبَّه فور ظهوره").arg(person.name)
+                            : QStringLiteral("أُزيل %1 من قائمة المراقبة").arg(person.name));
+}
+
+void MainWindow::addRecentFile(const QString &path)
+{
+    if (path.isEmpty() || QFileInfo(path).fileName() == QStringLiteral("malamih-clipboard.png"))
+        return;
+    QSettings settings;
+    QStringList files = settings.value(QStringLiteral("recentFiles")).toStringList();
+    const QString absolute = QFileInfo(path).absoluteFilePath();
+    files.removeAll(absolute);
+    files.prepend(absolute);
+    while (files.size() > 12)
+        files.removeLast();
+    settings.setValue(QStringLiteral("recentFiles"), files);
+}
+
+void MainWindow::showRecentMenu()
+{
+    QSettings settings;
+    const QStringList files = settings.value(QStringLiteral("recentFiles")).toStringList();
+    QMenu menu(this);
+    if (files.isEmpty())
+        menu.addAction(QStringLiteral("لم يُفتح أي ملف بعد"))->setEnabled(false);
+    for (const QString &file : files) {
+        const QFileInfo info(file);
+        const bool video = isVideoFile(file);
+        QAction *action = menu.addAction(Icons::icon(video ? Icons::Name::Video : Icons::Name::Image, Theme::Text, 18),
+                                         QStringLiteral("\u2068%1\u2069").arg(info.fileName()), this, [this, file] {
+                                             m_lastDirectory = QFileInfo(file).absolutePath();
+                                             openFile(file);
+                                         });
+        action->setToolTip(QDir::toNativeSeparators(file));
+        action->setEnabled(info.exists() && m_openImageButton->isEnabled());
+    }
+    if (!files.isEmpty()) {
+        menu.addSeparator();
+        menu.addAction(Icons::icon(Icons::Name::Trash, Theme::Text, 18), QStringLiteral("مسح القائمة"), this,
+                       [] { QSettings().remove(QStringLiteral("recentFiles")); });
+    }
+    menu.setToolTipsVisible(true);
+    menu.exec(m_recentButton->mapToGlobal(QPoint(0, m_recentButton->height())));
 }
 
 void MainWindow::setVideoSettingsVisible(bool visible)
@@ -2574,6 +2753,8 @@ void MainWindow::showPersonDetails()
     }
 
     const Person person = m_database.person(id);
+    const bool watched = FaceDatabase::isWatched(person.tags);
+    m_watchButton->setText(watched ? QStringLiteral("إلغاء المراقبة") : QStringLiteral("إضافة للمراقبة"));
     m_personAvatar->setPixmap(person.coverPhoto <= 0
                                   ? Icons::icon(Icons::Name::Users, Theme::Muted, 96).pixmap(96, 96)
                                   : circularPixmap(m_database.photo(person.coverPhoto, 192), 96));

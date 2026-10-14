@@ -90,6 +90,12 @@ private:
     void saveAnnotatedImage();
     void assignFace(int faceId, const QString &personId);
     void setVideoSettingsVisible(bool visible);
+    void refreshWatched();
+    void checkWatchAlert(const FaceItem &face);
+    void clearWatchAlerts();
+    void toggleWatch();
+    void addRecentFile(const QString &path);
+    void showRecentMenu();
     void addSelectedFaceToDatabase();
     void addFaceToDatabase(const FaceItem &face);
     void onIdentitiesMerged(int keepId, int removedId);
@@ -240,7 +246,18 @@ private:
     QComboBox *m_faceStatusFilter = nullptr;
     QComboBox *m_faceSort = nullptr;
     FancyButton *m_viewShotButton = nullptr;
-    QList<QWidget *> m_videoSettings; // إعدادات تخص الفيديو فقط فتختفي عند عرض صورة
+    QList<QWidget *> m_videoSettings;
+    // قائمة المراقبة: تنبيه فور ظهور شخص مراقَب
+    QSet<QString> m_watched;
+    QSet<QString> m_alerted; // من نُبِّه عنه في الصورة أو الفيديو الحالي
+    QFrame *m_alertBar = nullptr;
+    QLabel *m_alertAvatar = nullptr;
+    QLabel *m_alertText = nullptr;
+    int m_alertFaceId = -1;
+    int m_alertCount = 0;
+    QTimer *m_alertPulse = nullptr;
+    FancyButton *m_watchButton = nullptr;
+    FancyButton *m_recentButton = nullptr; // إعدادات تخص الفيديو فقط فتختفي عند عرض صورة
 
     QLabel *m_databaseSubtitle = nullptr;
     QLineEdit *m_personFilter = nullptr;

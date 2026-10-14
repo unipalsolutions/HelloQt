@@ -61,15 +61,27 @@ void ImageView::setImage(const QImage &image, bool animate)
     update();
 }
 
+void ImageView::setWatched(const QSet<QString> &personIds)
+{
+    if (personIds == m_watched)
+        return;
+    m_watched = personIds;
+    setFaces(m_faces);
+}
+
 void ImageView::setFaces(const QList<FaceItem> &faces)
 {
+    m_faces = faces;
     QList<Box> boxes;
     int newCount = 0;
     for (const FaceItem &face : faces) {
         QString label = matchLabel(face.match);
         if (face.match.status != MatchStatus::Unknown)
             label += QStringLiteral("  %1%").arg(qRound(face.match.score * 100));
-        Box box{face.id, face.box, face.box, label, matchColor(face.match.status), 0.0};
+        const bool watched = face.match.status == MatchStatus::Confirmed && m_watched.contains(face.match.personId);
+        if (watched)
+            label = QStringLiteral("⚠  ") + label;
+        Box box{face.id, face.box, face.box, label, watched ? Theme::Accent : matchColor(face.match.status), 0.0, watched};
         const auto existing = std::find_if(m_boxes.begin(), m_boxes.end(), [&](const Box &b) { return b.id == face.id; });
         if (existing != m_boxes.end()) {
             box.current = existing->current;
@@ -118,7 +130,8 @@ void ImageView::startTicking()
 
 void ImageView::tick()
 {
-    bool active = m_busy || m_image.isNull() || m_selected >= 0;
+    bool active = m_busy || m_image.isNull() || m_selected >= 0
+                  || std::any_of(m_boxes.cbegin(), m_boxes.cend(), [](const Box &b) { return b.watched; });
     if (m_fade < 1.0) {
         m_fade = std::min(1.0, m_fade + 0.06);
         active = true;
@@ -419,9 +432,11 @@ void ImageView::paintBox(QPainter &p, const Box &box, double t)
     const bool hovered = box.id == m_hovered;
 
     // توهج نابض للوجه المحدد
-    const double pulse = selected ? 0.5 + 0.5 * std::sin(t * 4.0) : 0.0;
+    const double pulse = selected || box.watched ? 0.5 + 0.5 * std::sin(t * (box.watched ? 6.0 : 4.0)) : 0.0;
     p.setBrush(withAlpha(box.color, int((hovered || selected ? 34 : 14) * alpha)));
-    p.setPen(QPen(withAlpha(box.color, int((selected ? 70 + 60 * pulse : 45) * alpha)), selected ? 7 + 3 * pulse : 5));
+    const bool glow = selected || box.watched;
+    p.setPen(QPen(withAlpha(box.watched ? Accent2 : box.color, int((glow ? 70 + 60 * pulse : 45) * alpha)),
+                  glow ? 7 + (box.watched ? 6 : 3) * pulse : 5));
     p.drawRoundedRect(r, 8, 8);
     p.setBrush(Qt::NoBrush);
     p.setPen(QPen(withAlpha(box.color, int(110 * alpha)), 1.2));
@@ -443,7 +458,7 @@ void ImageView::paintBox(QPainter &p, const Box &box, double t)
     corner(r.bottomRight(), -1, -1);
 
     // بطاقة الاسم: عند إخفاء الأسماء تظهر للوجه المحدد أو الذي تحت المؤشر فقط
-    if (!m_showLabels && !selected && !hovered)
+    if (!m_showLabels && !selected && !hovered && !box.watched)
         return;
     QFont font = this->font();
     font.setPointSizeF(10);

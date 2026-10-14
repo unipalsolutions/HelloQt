@@ -94,6 +94,11 @@ public:
     // عدد نتائج البحث حتى الحد cap (البحث في الملايين لا يحتاج عدداً دقيقاً)
     qint64 countPersons(const QString &filter, qint64 cap) const;
 
+    // قائمة المراقبة: الأشخاص الذين في تصنيفاتهم «مراقبة» أو «مطلوب» يُنبَّه المستخدم فور ظهورهم
+    static bool isWatched(const QString &tags);
+    static QString withWatchTag(const QString &tags, bool watched);
+    QSet<QString> watchedIds() const;
+
     QString addPerson(Person person);
     bool updatePerson(const Person &person);
     bool removePerson(const QString &id);

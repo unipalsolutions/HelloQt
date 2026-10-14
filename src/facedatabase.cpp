@@ -6,6 +6,7 @@
 #include <QCache>
 #include <QDir>
 #include <QDateTime>
+#include <QRegularExpression>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -968,6 +969,57 @@ QString filterCondition(const QString &text, QVariantList &values)
 }
 
 } // namespace
+
+namespace {
+const QString WatchTag = QStringLiteral("مراقبة");
+const QString WantedTag = QStringLiteral("مطلوب");
+
+QStringList splitTags(const QString &tags)
+{
+    QStringList parts;
+    for (const QString &part : tags.split(QRegularExpression(QStringLiteral("[,،;]")), Qt::SkipEmptyParts)) {
+        const QString tag = part.trimmed();
+        if (!tag.isEmpty())
+            parts << tag;
+    }
+    return parts;
+}
+} // namespace
+
+bool FaceDatabase::isWatched(const QString &tags)
+{
+    const QStringList parts = splitTags(tags);
+    return parts.contains(WatchTag) || parts.contains(WantedTag);
+}
+
+QString FaceDatabase::withWatchTag(const QString &tags, bool watched)
+{
+    QStringList parts = splitTags(tags);
+    parts.removeAll(WatchTag);
+    if (watched)
+        parts << WatchTag;
+    else
+        parts.removeAll(WantedTag);
+    return parts.join(QStringLiteral("، "));
+}
+
+QSet<QString> FaceDatabase::watchedIds() const
+{
+    QSet<QString> ids;
+    if (!m_db.isOpen())
+        return ids;
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT id, tags FROM persons WHERE tags LIKE ? OR tags LIKE ?"));
+    query.addBindValue(QStringLiteral("%") + WatchTag + QStringLiteral("%"));
+    query.addBindValue(QStringLiteral("%") + WantedTag + QStringLiteral("%"));
+    if (!query.exec())
+        return ids;
+    while (query.next()) {
+        if (isWatched(query.value(1).toString()))
+            ids.insert(query.value(0).toString());
+    }
+    return ids;
+}
 
 QList<Person> FaceDatabase::findPersons(const QString &filter, qint64 beforeId, int limit) const
 {

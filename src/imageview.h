@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QList>
+#include <QSet>
 #include <QTimer>
 #include <QWidget>
 
@@ -40,6 +41,8 @@ public:
 
     // إظهار أسماء الوجوه فوق المربعات أو إخفاؤها في الصور المزدحمة
     void setLabelsVisible(bool visible);
+    // أشخاص قائمة المراقبة: مربعاتهم تنبض وتحمل علامة تنبيه
+    void setWatched(const QSet<QString> &personIds);
     bool labelsVisible() const { return m_showLabels; }
 
     // التنقل بين صور المجلد: سهمان على جانبي الصورة وعنوان صغير بالموضع
@@ -73,7 +76,8 @@ private:
         QRectF current;
         QString label;
         QColor color;
-        double appear; // يبدأ سالباً لتأخير ظهور المربعات تباعاً
+        double appear;
+        bool watched = false; // يبدأ سالباً لتأخير ظهور المربعات تباعاً
     };
 
     void tick();
@@ -112,6 +116,8 @@ private:
     QPointF m_panStart;
     QPointF m_panOrigin;
     bool m_showLabels = true;
+    QSet<QString> m_watched;
+    QList<FaceItem> m_faces;
     bool m_canPrevious = false;
     bool m_canNext = false;
     QString m_caption;

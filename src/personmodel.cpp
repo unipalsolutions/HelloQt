@@ -105,6 +105,8 @@ QVariant PersonListModel::data(const QModelIndex &index, int role) const
         QString subtitle = QStringLiteral("%1 صورة").arg(person.photoCount);
         if (!person.nationalId.isEmpty())
             subtitle = QStringLiteral("رقم الهوية %1 · ").arg(person.nationalId) + subtitle;
+        if (FaceDatabase::isWatched(person.tags))
+            subtitle = QStringLiteral("⚠ مراقبة · ") + subtitle;
         return subtitle;
     }
     case CardRole::Status:

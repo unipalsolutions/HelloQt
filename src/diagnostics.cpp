@@ -893,6 +893,9 @@ int backupTest(const QString &directory, QTextStream &out)
     for (int i = 0; i < 3; ++i) {
         Person person;
         person.name = QStringLiteral("شخص %1").arg(i + 1);
+        // الشخص الأول في قائمة المراقبة، فيبقى فيها بعد النسخ والاستعادة
+        if (i == 0)
+            person.tags = FaceDatabase::withWatchTag(QStringLiteral("موظف"), true);
         database.addPerson(person);
     }
     const QString file = QDir(directory).filePath(QStringLiteral("backup.malamih"));
@@ -910,8 +913,13 @@ int backupTest(const QString &directory, QTextStream &out)
     out << "saved=" << saved << "\ninspected_persons=" << inspected.first << "\nbefore_restore=" << before
         << "\nrestored=" << restored << "\nafter_restore=" << after << "\nrejects_invalid=" << invalid
         << "\nkept_previous=" << QFile::exists(QDir(directory).filePath(QStringLiteral("faces.db.before-restore")))
-        << "\nstill_open=" << (database.personCount() == 3) << "\n" << error;
-    return saved && inspected.first == 3 && before == 5 && restored && after == 3 && invalid ? 0 : 1;
+        << "\nstill_open=" << (database.personCount() == 3);
+    // قائمة المراقبة: التصنيف يُضاف ويُزال دون المساس ببقية التصنيفات
+    const bool watchTags = FaceDatabase::isWatched(QStringLiteral("موظف، مطلوب")) && !FaceDatabase::isWatched(QStringLiteral("مراقبات"))
+        && FaceDatabase::withWatchTag(QStringLiteral("موظف، مراقبة"), false) == QStringLiteral("موظف");
+    const int watched = int(database.watchedIds().size());
+    out << "\nwatch_tags=" << watchTags << "\nwatched_after_restore=" << watched << "\n" << error;
+    return saved && inspected.first == 3 && before == 5 && restored && after == 3 && invalid && watchTags && watched == 1 ? 0 : 1;
 }
 
 } // namespace
