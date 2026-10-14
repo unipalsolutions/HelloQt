@@ -1128,11 +1128,22 @@ int cameraTest(const QString &videoPath, QTextStream &out)
     Cameras::saveFilters(hik.id, night);
     Cameras::Camera found, local, missing;
     const QList<Cameras::Camera> loaded = Cameras::load();
-    const bool storage = loaded.size() == 2 && Cameras::resolve(hik.id, &found) && found.password == hik.password
-        && found.url() == hikUrl && found.hasFilters && found.filters == night && found.source() == QLatin1String("camera:") + hik.id
-        && loaded.at(1).width == 720 && !loaded.at(1).hasFilters && Cameras::resolve(QStringLiteral("0"), &local)
-        && local.kind == Cameras::Kind::Local && local.index == 0 && !Cameras::resolve(QStringLiteral("c0000000000"), &missing)
-        && QSettings().value(QStringLiteral("cameras/list/1/password")).toString() != hik.password;
+    const bool resolved = Cameras::resolve(hik.id, &found);
+    const bool localOk = Cameras::resolve(QStringLiteral("0"), &local) && local.kind == Cameras::Kind::Local && local.index == 0;
+    const bool missingOk = !Cameras::resolve(QStringLiteral("c0000000000"), &missing);
+    const bool hidden = QSettings().value(QStringLiteral("cameras/list/1/password")).toString() != hik.password;
+    const QList<bool> checks = {loaded.size() == 2, resolved, found.password == hik.password, found.url() == hikUrl,
+        found.hasFilters, found.filters == night, found.source() == QLatin1String("camera:") + hik.id,
+        loaded.size() == 2 && loaded.at(1).width == 720, loaded.size() == 2 && !loaded.at(1).hasFilters, localOk, missingOk, hidden};
+    QString failed;
+    for (int i = 0; i < checks.size(); ++i) {
+        if (!checks.at(i))
+            failed += QString::number(i) + QLatin1Char(' ');
+    }
+    const bool storage = failed.isEmpty();
+    if (!storage)
+        out << "storage_failed=" << failed << "count=" << loaded.size() << " url=" << found.url(false)
+            << " filters=" << found.hasFilters << "/" << found.filters.quarterTurns << "\n";
     Cameras::setLastSource(found.source());
     const bool last = Cameras::lastSource() == found.source();
     out << "storage=" << storage << " last=" << last << "\n";

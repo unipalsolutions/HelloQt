@@ -73,7 +73,6 @@ void writeCamera(QSettings &store, const Camera &c)
     store.setValue(QStringLiteral("password"), protect(c.password));
     store.setValue(QStringLiteral("hasFilters"), c.hasFilters);
     store.beginGroup(QStringLiteral("filters"));
-    store.remove(QString());
     if (c.hasFilters)
         VideoFilters::write(store, c.filters);
     store.endGroup();
