@@ -54,6 +54,8 @@ qt_add_executable(Malamih
     src/personprofile.cpp
     src/harvestdialog.h
     src/harvestdialog.cpp
+    src/alertlog.h
+    src/alertlog.cpp
     src/performance.h
     src/performance.cpp
     src/videoexport.h

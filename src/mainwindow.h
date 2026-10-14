@@ -94,6 +94,7 @@ private:
     void checkWatchAlert(const FaceItem &face);
     void clearWatchAlerts();
     void toggleWatch();
+    void showAlertLog();
     void addRecentFile(const QString &path);
     void showRecentMenu();
     void addSelectedFaceToDatabase();

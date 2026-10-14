@@ -693,6 +693,7 @@ bool FaceDatabase::open(const QString &directory, QString *error)
         QStringLiteral("CREATE TABLE IF NOT EXISTS sightings(id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER NOT NULL,"
                        " seen INTEGER, source TEXT, position_ms INTEGER, score REAL, thumb BLOB)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS sightings_person ON sightings(person_id, id)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS sightings_seen ON sightings(seen)"),
         QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES('model', 'insightface-buffalo_l')"),
         QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES('generation', '1')"),
     };
@@ -1484,6 +1485,45 @@ QList<Sighting> FaceDatabase::sightings(const QString &personId, int limit) cons
         sighting.score = query.value(4).toFloat();
         sighting.thumbnail.loadFromData(query.value(5).toByteArray(), "JPG");
         list.append(sighting);
+    }
+    return list;
+}
+
+QList<SightingEntry> FaceDatabase::recentSightings(bool watchedOnly, const QDateTime &since, int limit) const
+{
+    QList<SightingEntry> list;
+    if (!m_db.isOpen())
+        return list;
+    QString sql = QStringLiteral("SELECT s.id, s.seen, s.source, s.position_ms, s.score, s.thumb, p.id, p.name, p.tags"
+                                 " FROM sightings s JOIN persons p ON p.id = s.person_id WHERE s.seen >= ?");
+    if (watchedOnly)
+        sql += QStringLiteral(" AND (p.tags LIKE ? OR p.tags LIKE ?)");
+    sql += QStringLiteral(" ORDER BY s.seen DESC, s.id DESC LIMIT ?");
+    QSqlQuery query(m_db);
+    query.setForwardOnly(true);
+    query.prepare(sql);
+    query.addBindValue(since.isValid() ? since.toSecsSinceEpoch() : qint64(0));
+    if (watchedOnly) {
+        query.addBindValue(QStringLiteral("%") + WatchTag + QStringLiteral("%"));
+        query.addBindValue(QStringLiteral("%") + WantedTag + QStringLiteral("%"));
+    }
+    query.addBindValue(limit);
+    if (!query.exec())
+        return list;
+    while (query.next()) {
+        SightingEntry entry;
+        entry.tags = query.value(8).toString();
+        if (watchedOnly && !isWatched(entry.tags))
+            continue;
+        entry.sighting.id = query.value(0).toLongLong();
+        entry.sighting.seen = QDateTime::fromSecsSinceEpoch(query.value(1).toLongLong());
+        entry.sighting.source = query.value(2).toString();
+        entry.sighting.positionMs = query.value(3).toLongLong();
+        entry.sighting.score = query.value(4).toFloat();
+        entry.sighting.thumbnail.loadFromData(query.value(5).toByteArray(), "JPG");
+        entry.personId = query.value(6).toString();
+        entry.name = query.value(7).toString();
+        list.append(entry);
     }
     return list;
 }

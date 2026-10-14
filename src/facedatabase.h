@@ -33,6 +33,15 @@ struct Sighting
     QImage thumbnail;
 };
 
+// ظهور مع صاحبه (لسجل التنبيهات الذي يجمع ظهور عدة أشخاص)
+struct SightingEntry
+{
+    Sighting sighting;
+    QString personId;
+    QString name;
+    QString tags;
+};
+
 struct Person
 {
     QString id;
@@ -117,6 +126,8 @@ public:
     // سجل الظهور
     bool addSighting(const QString &personId, const QString &source, qint64 positionMs, float score, const QImage &face);
     QList<Sighting> sightings(const QString &personId, int limit = 50) const;
+    // أحدث الظهور لكل الأشخاص منذ since (أو كله إن كان غير صالح)؛ watchedOnly لقائمة المراقبة فقط
+    QList<SightingEntry> recentSightings(bool watchedOnly, const QDateTime &since, int limit) const;
 
     // يجمع عمليات كثيرة في معاملة واحدة (للاستيراد الكبير)، والإشعارات تُرسل مرة واحدة في النهاية
     void beginBatch();

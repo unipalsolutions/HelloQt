@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 
+#include "alertlog.h"
 #include "harvestdialog.h"
 #include "matchpage.h"
 #include "personprofile.h"
@@ -920,11 +921,15 @@ QWidget *MainWindow::createRecognitionPage()
         else if (!m_videoRunning && m_faces.at(row).bestMs >= 0)
             loadVideoFrame(m_faces.at(row).bestMs);
     });
+    auto *alertLog = new FancyButton(Icons::Name::History, QStringLiteral("السجل"), FancyButton::Kind::Secondary, m_alertBar);
+    alertLog->setToolTip(QStringLiteral("كل مرات ظهور الأشخاص المراقَبين"));
+    connect(alertLog, &QAbstractButton::clicked, this, &MainWindow::showAlertLog);
     connect(alertClose, &QAbstractButton::clicked, m_alertBar, &QWidget::hide);
     alertLayout->addWidget(alertIcon);
     alertLayout->addWidget(m_alertAvatar);
     alertLayout->addWidget(m_alertText, 1);
     alertLayout->addWidget(alertShow);
+    alertLayout->addWidget(alertLog);
     alertLayout->addWidget(alertClose);
     m_alertBar->setVisible(false);
     layout->addWidget(m_alertBar);
@@ -1162,6 +1167,9 @@ QWidget *MainWindow::createDatabasePage()
     auto *openFolderButton = new FancyButton(Icons::Name::Folder, QStringLiteral("فتح المجلد"), FancyButton::Kind::Secondary, page);
     connect(addPersonButton, &QAbstractButton::clicked, this, &MainWindow::addPerson);
     connect(openFolderButton, &QAbstractButton::clicked, this, &MainWindow::openDatabaseFolder);
+    auto *alertLogButton = new FancyButton(Icons::Name::Alert, QStringLiteral("سجل التنبيهات"), FancyButton::Kind::Secondary, page);
+    alertLogButton->setToolTip(QStringLiteral("كل مرات ظهور الأشخاص المراقَبين في الصور والفيديوهات والكاميرا"));
+    connect(alertLogButton, &QAbstractButton::clicked, this, &MainWindow::showAlertLog);
     auto *backupButton = new FancyButton(Icons::Name::Save, QStringLiteral("نسخ احتياطي"), FancyButton::Kind::Secondary, page);
     backupButton->setToolTip(QStringLiteral("حفظ نسخة احتياطية من القاعدة كلها في ملف واحد، أو استعادتها"));
     connect(backupButton, &QAbstractButton::clicked, this, [this, backupButton] {
@@ -1182,6 +1190,7 @@ QWidget *MainWindow::createDatabasePage()
     m_subtitles << m_databaseSubtitle;
     header->addLayout(titles, 1);
     header->addWidget(addPersonButton);
+    header->addWidget(alertLogButton);
     header->addWidget(backupButton);
     header->addWidget(openFolderButton);
     m_headerButtons << addPersonButton << backupButton << openFolderButton;
@@ -2257,6 +2266,28 @@ void MainWindow::checkWatchAlert(const FaceItem &face)
     m_alertPulse->start();
     QApplication::beep();
     statusBar()->showMessage(QStringLiteral("تنبيه مراقبة: ظهر %1").arg(face.match.name), 10000);
+    // ظهور الكاميرا لا يُسجَّل عند انتهاء التحليل كالملفات، فيُسجَّل لحظة التنبيه ليبقى في سجل التنبيهات
+    if (m_videoSource.startsWith(QStringLiteral("camera:")))
+        m_database.addSighting(face.match.personId, m_videoSource, -1, face.match.score, ImageIO::faceCrop(face));
+}
+
+void MainWindow::showAlertLog()
+{
+    AlertLogDialog dialog(&m_database, this);
+    connect(&dialog, &AlertLogDialog::showPersonRequested, this, &MainWindow::showPerson);
+    connect(&dialog, &AlertLogDialog::openFileRequested, this, [this](const QString &path, qint64 positionMs) {
+        if (!m_ready || m_videoRunning || m_analyzing) {
+            Toast::show(this, QStringLiteral("انتظر حتى ينتهي التحليل الحالي"), Toast::Kind::Warning);
+            return;
+        }
+        m_navGroup->button(0)->click();
+        m_lastDirectory = QFileInfo(path).absolutePath();
+        openFile(path);
+        if (positionMs >= 0)
+            Toast::show(this, QStringLiteral("ظهر الشخص عند \u2066%1\u2069 من الفيديو").arg(ImageIO::formatTime(positionMs)),
+                        Toast::Kind::Info);
+    });
+    dialog.exec();
 }
 
 void MainWindow::toggleWatch()
