@@ -54,6 +54,14 @@ qt_add_executable(Malamih
     src/personprofile.cpp
     src/harvestdialog.h
     src/harvestdialog.cpp
+    src/performance.h
+    src/performance.cpp
+    src/videoexport.h
+    src/videoexport.cpp
+    src/imagelab.h
+    src/imagelab.cpp
+    src/enhancedialog.h
+    src/enhancedialog.cpp
 )
 
 # أيقونة التطبيق: داخل الملف التنفيذي على Windows وللنافذة عبر موارد Qt

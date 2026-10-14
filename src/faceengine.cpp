@@ -1,5 +1,7 @@
 #include "faceengine.h"
 
+#include "performance.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -288,7 +290,9 @@ bool FaceEngine::load(const QString &modelsDir, QString *error)
 
     try {
         Ort::SessionOptions options;
-        options.SetIntraOpNumThreads(std::max(1, QThread::idealThreadCount()));
+        // يُحترم مستوى استهلاك الموارد المختار حتى لا يتجمد الجهاز أثناء التحليل
+        options.SetIntraOpNumThreads(Performance::threads(Performance::saved()));
+        options.SetInterOpNumThreads(1);
         options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
         d->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(detectorPath).c_str(), options);
@@ -454,55 +458,6 @@ std::vector<std::vector<float>> FaceEngine::enrollmentEmbeddings(const cv::Mat &
     cv::filter2D(aligned, moving, -1, kernel, cv::Point(-1, -1), 0, cv::BORDER_REPLICATE);
     versions.push_back(moving);
     return embedMany(versions);
-}
-
-float FaceEngine::compare(const AnalyzedFace &a, const AnalyzedFace &b) const
-{
-    const float plain = cosine(a.embedding, b.embedding);
-    if (a.aligned.empty() || b.aligned.empty())
-        return plain;
-    const int mode = qEnvironmentVariableIntValue("MALAMIH_COMPARE_MODE");
-    auto degrade = [](const cv::Mat &aligned, int size) {
-        cv::Mat small, restored;
-        cv::resize(aligned, small, cv::Size(size, size), 0, 0, cv::INTER_AREA);
-        cv::resize(small, restored, aligned.size(), 0, 0, cv::INTER_CUBIC);
-        return restored;
-    };
-    if (mode == 1) {
-        float best = plain;
-        for (const auto &t : enrollmentEmbeddings(a.aligned))
-            best = std::max(best, cosine(t, b.embedding));
-        for (const auto &t : enrollmentEmbeddings(b.aligned))
-            best = std::max(best, cosine(a.embedding, t));
-        return best;
-    }
-    if (mode == 2 || mode == 3) {
-        // الوجه الأوضح يُخفَّض إلى دقة الوجه الأضعف قبل المقارنة
-        const float wa = a.detection.box.width, wb = b.detection.box.width;
-        const bool aSharper = wa >= wb;
-        const AnalyzedFace &sharp = aSharper ? a : b, &soft = aSharper ? b : a;
-        const int size = std::clamp(int(std::lround(std::min(wa, wb) * 0.9f)), 16, AlignedSize);
-        if (size >= AlignedSize - 8)
-            return plain;
-        const std::vector<float> matched = embed(degrade(sharp.aligned, size));
-        const float m = cosine(matched, soft.embedding);
-        return mode == 2 ? std::max(plain, m) : (plain + m) / 2.0f;
-    }
-    if (mode == 4) {
-        auto centroid = [&](const AnalyzedFace &f) {
-            std::vector<float> sum;
-            for (const auto &t : enrollmentEmbeddings(f.aligned)) {
-                if (sum.empty())
-                    sum.assign(t.size(), 0.0f);
-                for (size_t k = 0; k < t.size(); ++k)
-                    sum[k] += t[k];
-            }
-            normalize(sum);
-            return sum;
-        };
-        return cosine(centroid(a), centroid(b));
-    }
-    return plain;
 }
 
 float FaceEngine::quality(const DetectedFace &face, const cv::Mat &aligned) const

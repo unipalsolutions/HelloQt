@@ -316,6 +316,29 @@ void TimelineView::paintEvent(QPaintEvent *)
         p.fillRect(QRectF(left, RulerHeight, xOf(m_rangeStart) - left, height() - RulerHeight), dim);
     if (m_rangeEnd > 0)
         p.fillRect(QRectF(xOf(m_rangeEnd), RulerHeight, right - xOf(m_rangeEnd), height() - RulerHeight), dim);
+    // مقبضا الاقتطاع
+    if (m_duration > 0) {
+        const QColor trim(0xfa, 0xcc, 0x15);
+        const qint64 endMs = m_rangeEnd > 0 ? m_rangeEnd : m_duration;
+        const double sx = xOf(m_rangeStart), ex = xOf(endMs);
+        if (m_rangeStart > 0 || m_rangeEnd > 0) {
+            p.setPen(QPen(trim, 2));
+            p.drawLine(QPointF(sx, RulerHeight + 1), QPointF(ex, RulerHeight + 1));
+            p.drawLine(QPointF(sx, RulerHeight + FilmHeight - 1), QPointF(ex, RulerHeight + FilmHeight - 1));
+        }
+        for (const auto &[x, isStart] : {std::pair<double, bool>{sx, true}, std::pair<double, bool>{ex, false}}) {
+            if (x < left - 8 || x > right + 8)
+                continue;
+            const double w = 7.0;
+            const QRectF grip(isStart ? x : x - w, RulerHeight, w, FilmHeight);
+            QPainterPath path;
+            path.addRoundedRect(grip, 2, 2);
+            p.fillPath(path, (m_dragHandle == (isStart ? 1 : 2)) ? trim.lighter(120) : trim);
+            p.setPen(QPen(QColor(0, 0, 0, 140), 1));
+            const double cx = grip.center().x();
+            p.drawLine(QPointF(cx, grip.top() + 14), QPointF(cx, grip.bottom() - 14));
+        }
+    }
     if (m_analyzedUntil >= 0) {
         const double x = std::max(left, xOf(m_analyzedUntil));
         p.fillRect(QRectF(x, RulerHeight, right - x, FilmHeight), QColor(0, 0, 0, 90));
@@ -412,7 +435,19 @@ void TimelineView::mousePressEvent(QMouseEvent *event)
 {
     setFocus();
     const QPointF pos = event->position();
-    if (event->button() == Qt::RightButton || event->button() == Qt::MiddleButton) {
+    if (event->button() == Qt::RightButton) {
+        // نقرة يمنى = قائمة العمليات، وسحب بالزر الأيمن = تنقل
+        m_rightPressed = true;
+        m_panOrigin = pos;
+        m_panStart = m_viewStart;
+        return;
+    }
+    if (event->button() == Qt::LeftButton && (m_dragHandle = handleAt(pos)) != 0) {
+        setCursor(Qt::SizeHorCursor);
+        update();
+        return;
+    }
+    if (event->button() == Qt::MiddleButton) {
         m_panning = true;
         m_panOrigin = pos;
         m_panStart = m_viewStart;
@@ -449,6 +484,26 @@ void TimelineView::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF pos = event->position();
     m_hoverX = pos.x();
+    if (m_rightPressed && !m_panning && std::abs(pos.x() - m_panOrigin.x()) > 4) {
+        m_panning = true;
+        setCursor(Qt::ClosedHandCursor);
+    }
+    if (m_dragHandle != 0) {
+        const qint64 t = std::clamp<qint64>(timeAt(pos.x()), 0, m_duration);
+        const qint64 endMs = m_rangeEnd > 0 ? m_rangeEnd : m_duration;
+        const qint64 minimum = 500;
+        if (m_dragHandle == 1)
+            m_rangeStart = std::clamp<qint64>(t, 0, std::max<qint64>(0, endMs - minimum));
+        else
+            m_rangeEnd = std::clamp<qint64>(t, m_rangeStart + minimum, m_duration);
+        setPosition(m_dragHandle == 1 ? m_rangeStart : m_rangeEnd);
+        emit seekRequested(m_position);
+    } else if (event->buttons() == Qt::NoButton) {
+        if (handleAt(pos) != 0)
+            setCursor(Qt::SizeHorCursor);
+        else
+            unsetCursor();
+    }
     if (m_panning) {
         const double scale = m_msPerPixel > 0.0 ? m_msPerPixel : double(m_duration) / trackWidth();
         m_viewStart = m_panStart - (pos.x() - m_panOrigin.x()) * scale;
@@ -463,13 +518,48 @@ void TimelineView::mouseMoveEvent(QMouseEvent *event)
     update();
 }
 
-void TimelineView::mouseReleaseEvent(QMouseEvent *)
+void TimelineView::mouseReleaseEvent(QMouseEvent *event)
 {
     m_scrubbing = false;
+    if (m_dragHandle != 0) {
+        m_dragHandle = 0;
+        unsetCursor();
+        editRange(m_rangeStart, m_rangeEnd >= m_duration ? 0 : m_rangeEnd);
+        return;
+    }
+    if (event->button() == Qt::RightButton && m_rightPressed) {
+        m_rightPressed = false;
+        if (!m_panning && m_duration > 0) {
+            const QPointF pos = event->position();
+            const int lane = laneAt(pos.y());
+            const qint64 t = pos.x() >= trackLeft() ? std::clamp<qint64>(timeAt(pos.x()), 0, m_duration - 1) : m_position;
+            emit contextMenuRequested(event->globalPosition().toPoint(), t, lane >= 0 ? m_lanes.at(lane).id : -1);
+        }
+    }
     if (m_panning) {
         m_panning = false;
         unsetCursor();
     }
+}
+
+int TimelineView::handleAt(const QPointF &pos) const
+{
+    if (m_duration <= 0 || pos.y() < RulerHeight || pos.y() > RulerHeight + FilmHeight)
+        return 0;
+    const double sx = xOf(m_rangeStart);
+    const double ex = xOf(m_rangeEnd > 0 ? m_rangeEnd : m_duration);
+    const double ds = std::abs(pos.x() - sx), de = std::abs(pos.x() - ex);
+    if (std::min(ds, de) > 8.0)
+        return 0;
+    return ds <= de ? 1 : 2;
+}
+
+void TimelineView::editRange(qint64 startMs, qint64 endMs)
+{
+    m_rangeStart = std::max<qint64>(0, startMs);
+    m_rangeEnd = endMs > 0 && endMs < m_duration ? endMs : 0;
+    update();
+    emit rangeEdited(m_rangeStart, m_rangeEnd);
 }
 
 void TimelineView::mouseDoubleClickEvent(QMouseEvent *event)
@@ -532,6 +622,17 @@ void TimelineView::keyPressEvent(QKeyEvent *event)
     case Qt::Key_Minus:
         zoomOut();
         return;
+    case Qt::Key_I:
+        if (m_rangeEnd > 0 && m_position >= m_rangeEnd)
+            return;
+        editRange(m_position, m_rangeEnd);
+        return;
+    case Qt::Key_O:
+        if (m_position <= m_rangeStart)
+            return;
+        editRange(m_rangeStart, m_position);
+        return;
+
     default:
         return QWidget::keyPressEvent(event);
     }

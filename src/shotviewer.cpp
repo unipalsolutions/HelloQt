@@ -1,5 +1,8 @@
 #include "shotviewer.h"
 
+#include "enhancedialog.h"
+#include "videoexport.h"
+
 #include "carddelegates.h"
 #include "faceengine.h"
 #include "imageio.h"
@@ -207,6 +210,15 @@ ShotViewer::ShotViewer(const FaceEngine *engine, const FaceDatabase *database, c
     }
 
     auto *saveFrame = new FancyButton(Icons::Name::Image, QStringLiteral("حفظ الإطار"), FancyButton::Kind::Secondary, this);
+    auto *advanced = new FancyButton(Icons::Name::Sparkle, QStringLiteral("تحسين متقدم…"), FancyButton::Kind::Secondary, this);
+    advanced->setToolTip(QStringLiteral("إزالة التشويش والضبابية، الحدة، تكبير الدقة، الإضاءة، التدوير وتصحيح المنظور، مع معاينة قبل وبعد"));
+    connect(advanced, &QAbstractButton::clicked, this, [this] {
+        const cv::Mat frame = VideoExport::frameAt(m_videoPath, m_frame.positionMs);
+        if (frame.empty())
+            return;
+        EnhanceDialog dialog(frame, m_engine, QStringLiteral("تحسين الإطار عند %1").arg(ImageIO::formatTime(m_frame.positionMs)), {}, this);
+        dialog.exec();
+    });
     m_saveFaceButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ الوجه المحدد"), FancyButton::Kind::Secondary, this);
     m_addButton = new FancyButton(Icons::Name::UserPlus, QStringLiteral("إضافة إلى القاعدة"), FancyButton::Kind::Secondary, this);
     m_addButton->setToolTip(QStringLiteral("إضافة الوجه المحدد في هذا الإطار إلى قاعدة البيانات"));
@@ -223,6 +235,7 @@ ShotViewer::ShotViewer(const FaceEngine *engine, const FaceDatabase *database, c
     sideLayout->addWidget(m_details);
     sideLayout->addWidget(appearancesTitle);
     sideLayout->addWidget(m_appearances, 1);
+    sideLayout->addWidget(advanced);
     sideLayout->addWidget(saveFrame);
     sideLayout->addWidget(m_saveFaceButton);
     sideLayout->addWidget(m_addButton);

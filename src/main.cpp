@@ -1,5 +1,6 @@
 #include "diagnostics.h"
 #include "mainwindow.h"
+#include "performance.h"
 #include "theme.h"
 
 #include <QApplication>
@@ -44,6 +45,9 @@ int main(int argc, char *argv[])
     qRegisterMetaType<QList<FaceItem>>();
 
     const QStringList args = app.arguments();
+    if (args.size() > 1 && args.at(1).startsWith(QLatin1String("--")))
+        Performance::force(Performance::Level::Max);
+    Performance::apply(Performance::saved());
     const int diagnostics = Diagnostics::run(args);
     if (diagnostics >= 0)
         return diagnostics;

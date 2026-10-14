@@ -51,8 +51,6 @@ public:
     // من النسختين المحسّنة والأصلية حتى لا يغيّر التحسين ملامح الوجه التي يعتمد عليها التعرف
     // أقصى ما يمكن لصورة واحدة في أسوأ الظروف (يُستخدم للصور الثابتة)
     std::vector<AnalyzedFace> analyzeRobust(const cv::Mat &bgr) const;
-    // تشابه وجهين في المقارنة المباشرة، مع مراعاة اختلاف دقتهما (صورة واضحة مقابل لقطة فيديو)
-    float compare(const AnalyzedFace &a, const AnalyzedFace &b) const;
     std::vector<AnalyzedFace> analyzeEnhanced(const cv::Mat &original, const cv::Mat &enhanced, bool thorough) const;
 
     static float dot(const float *a, const float *b, size_t size);

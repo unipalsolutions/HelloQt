@@ -20,7 +20,8 @@ struct TimelineLane
 };
 
 // خط زمني بأسلوب برامج المونتاج: مسطرة الزمن، شريط مصغرات الإطارات، مؤشر الموضع،
-// ومسار لكل شخص تظهر عليه فترات ظهوره. Ctrl+العجلة للتكبير، Shift+العجلة أو السحب للتنقل.
+// ومسار لكل شخص تظهر عليه فترات ظهوره. Ctrl+العجلة للتكبير، Shift+العجلة أو السحب بالزر الأوسط للتنقل.
+// مقبضا الاقتطاع (الأصفران) يُسحبان لتحديد الجزء المطلوب، أو I و O عند المؤشر، والزر الأيمن يفتح قائمة العمليات.
 class TimelineView : public QWidget
 {
     Q_OBJECT
@@ -57,6 +58,8 @@ signals:
     void seekRequested(qint64 ms);
     void laneClicked(int id, qint64 ms);   // ms سالب عند النقر على اسم المسار
     void laneActivated(int id, qint64 ms); // نقر مزدوج
+    void rangeEdited(qint64 startMs, qint64 endMs); // اقتطاع بالسحب أو بالمفاتيح (0 = بلا حد)
+    void contextMenuRequested(const QPoint &globalPos, qint64 ms, int laneId); // laneId سالب خارج المسارات
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -80,6 +83,8 @@ private:
     void setZoom(double msPerPixel, double anchorX);
     void clampView();
     void ensurePlayheadVisible();
+    int handleAt(const QPointF &pos) const; // 1 = بداية الاقتطاع، 2 = نهايته، 0 = لا شيء
+    void editRange(qint64 startMs, qint64 endMs);
 
     qint64 m_duration = 0;
     double m_fps = 25.0;
@@ -98,6 +103,8 @@ private:
 
     bool m_scrubbing = false;
     bool m_panning = false;
+    bool m_rightPressed = false;
+    int m_dragHandle = 0;
     QPointF m_panOrigin;
     double m_panStart = 0.0;
     double m_hoverX = -1.0;

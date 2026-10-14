@@ -44,6 +44,10 @@ public:
     // يفتح صورة في أول خانة فارغة من القسم الظاهر (للصق والسحب على النافذة)
     void openFile(const QString &path);
     void setCompact(bool compact);
+    // يبحث في القاعدة عن الوجوه في صورة (مثل إطار فيديو محسّن)
+    void searchImage(const QString &path);
+    // مسار مؤقت لحفظ نسخة محسّنة من صورة
+    static QString enhancedPath(const QString &source);
 
 signals:
     void openPersonRequested(const QString &personId);
@@ -53,6 +57,7 @@ private:
     enum Slot { First, Second, Query, SlotCount };
 
     void browse(int slot);
+    void enhance(int slot);
     void load(int slot, const QString &path);
     void onLoaded(int slot);
     void selectFace(int slot, int index);

@@ -5,6 +5,7 @@
 #include "personprofile.h"
 
 #include "carddelegates.h"
+#include "enhancedialog.h"
 #include "icons.h"
 #include "imageio.h"
 #include "imageview.h"
@@ -12,7 +13,9 @@
 #include "shotviewer.h"
 #include "timelineview.h"
 #include "personmodel.h"
+#include "performance.h"
 #include "theme.h"
+#include "videoexport.h"
 #include "videoworker.h"
 #include "widgets.h"
 
@@ -45,6 +48,7 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QProgressBar>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QSettings>
 #include <QShortcut>
@@ -408,6 +412,10 @@ void MainWindow::setupShortcuts()
             analyzeImage(m_currentImagePath);
     });
     add(QKeySequence(Qt::CTRL | Qt::Key_E), [this] { m_enhanceSwitch->toggle(); });
+    add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E), [this] {
+        if (m_enhanceImageButton->isEnabled())
+            openEnhancer();
+    });
     add(QKeySequence::Find, [this] {
         m_navGroup->button(1)->click();
         m_personFilter->setFocus();
@@ -655,7 +663,11 @@ QWidget *MainWindow::createRecognitionPage()
     connect(m_pauseButton, &QAbstractButton::clicked, this, &MainWindow::togglePause);
     connect(m_stopButton, &QAbstractButton::clicked, this, &MainWindow::stopVideo);
     connect(m_saveFacesButton, &QAbstractButton::clicked, this, &MainWindow::saveFaces);
-    m_headerButtons = {m_openImageButton, m_openVideoButton, m_cameraButton, m_pauseButton, m_stopButton, m_saveFacesButton};
+    m_enhanceImageButton = new FancyButton(Icons::Name::Sparkle, QStringLiteral("تحسين الصورة"), FancyButton::Kind::Secondary, page);
+    m_enhanceImageButton->setToolTip(QStringLiteral("تحسين الصورة الحالية أو إطار الفيديو الحالي يدوياً:\n"
+                                                    "إزالة التشويش والضبابية، الحدة، تكبير الدقة، الإضاءة، التدوير وتصحيح المنظور (Ctrl+Shift+E)"));
+    connect(m_enhanceImageButton, &QAbstractButton::clicked, this, &MainWindow::openEnhancer);
+    m_headerButtons = {m_openImageButton, m_openVideoButton, m_cameraButton, m_pauseButton, m_stopButton, m_enhanceImageButton, m_saveFacesButton};
 
     auto *header = new QHBoxLayout;
     auto *titles = new QVBoxLayout;
@@ -731,6 +743,26 @@ QWidget *MainWindow::createRecognitionPage()
                                                "1 = تحليل كل إطار (الأبطأ). قيمة أكبر = أسرع."));
     connect(m_frameStepSpin, &QSpinBox::valueChanged, this, [this](int value) { m_videoWorker->setFrameStep(value); });
 
+    m_performanceCombo = new QComboBox(settings);
+    m_performanceCombo->addItems({QStringLiteral("خفيف"), QStringLiteral("متوازن"), QStringLiteral("أقصى سرعة")});
+    m_performanceCombo->setCurrentIndex(int(Performance::saved()));
+    auto describePerformance = [this] {
+        const auto level = Performance::Level(m_performanceCombo->currentIndex());
+        m_performanceCombo->setToolTip(QStringLiteral("استهلاك المعالج أثناء التحليل\n") + Performance::describe(level)
+                                       + QStringLiteral("\nإن كان الجهاز يعلق أثناء تحليل الفيديو اختر «خفيف»."));
+    };
+    describePerformance();
+    connect(m_performanceCombo, &QComboBox::currentIndexChanged, this, [this, describePerformance](int index) {
+        const auto level = Performance::Level(index);
+        Performance::save(level);
+        Performance::apply(level);
+        describePerformance();
+        // نماذج التعرف تأخذ عدد الأنوية عند تحميلها، أما الأولوية فتتغير فوراً
+        statusBar()->showMessage(Performance::describe(level)
+                                     + QStringLiteral(" · الأولوية تغيّرت الآن، وعدد الأنوية يُطبَّق كاملاً عند إعادة تشغيل البرنامج"),
+                                 8000);
+    });
+
     // جزء الفيديو المطلوب
     auto timeEdit = [settings](const QString &tip) {
         auto *edit = new QTimeEdit(settings);
@@ -768,6 +800,7 @@ QWidget *MainWindow::createRecognitionPage()
     settingsLayout->addWidget(m_thoroughSwitch);
     settingsLayout->addWidget(m_enhanceSwitch);
     settingsLayout->addWidget(group({new QLabel(QStringLiteral("إطار من كل"), settings), m_frameStepSpin}));
+    settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo}));
     settingsLayout->addWidget(group({new QLabel(QStringLiteral("الجزء: من"), settings), m_rangeStart,
                                      new QLabel(QStringLiteral("إلى"), settings), m_rangeEnd}));
     settingsLayout->addWidget(group({m_regionButton, m_clearRegionButton, m_reanalyzeButton}));
@@ -934,6 +967,14 @@ QWidget *MainWindow::createRecognitionPage()
     connect(m_timeline, &TimelineView::seekRequested, this, &MainWindow::loadVideoFrame);
     connect(m_timeline, &TimelineView::laneClicked, this, [this](int id, qint64) { selectFace(id); });
     connect(m_timeline, &TimelineView::laneActivated, this, [this](int id, qint64 ms) { openShotViewer(id, ms); });
+    connect(m_timeline, &TimelineView::rangeEdited, this, &MainWindow::setTrimRange);
+    connect(m_timeline, &TimelineView::contextMenuRequested, this, &MainWindow::showTimelineMenu);
+    auto syncTrim = [this] {
+        if (!m_videoRunning)
+            m_timeline->setRange(m_rangeStart->time().msecsSinceStartOfDay(), m_rangeEnd->time().msecsSinceStartOfDay());
+    };
+    connect(m_rangeStart, &QTimeEdit::timeChanged, this, syncTrim);
+    connect(m_rangeEnd, &QTimeEdit::timeChanged, this, syncTrim);
     m_laneTimer = new QTimer(this);
     m_laneTimer->setSingleShot(true);
     m_laneTimer->setInterval(400);
@@ -1185,6 +1226,8 @@ void MainWindow::updateVideoOptions()
     m_reanalyzeButton->setEnabled(idle && fileVideo);
     m_regionButton->setEnabled(m_ready && (m_view->hasImage() || m_regionButton->isChecked()));
     m_clearRegionButton->setEnabled(!m_view->region().isEmpty());
+    m_enhanceImageButton->setEnabled(m_ready && !m_analyzing && !m_videoRunning
+                                     && ((!m_videoMode && !m_currentImagePath.isEmpty()) || (m_videoMode && fileVideo)));
 }
 
 // ───────────── التعرف ─────────────
@@ -2550,4 +2593,188 @@ void MainWindow::removePhoto()
 void MainWindow::openDatabaseFolder()
 {
     QDesktopServices::openUrl(QUrl::fromLocalFile(m_database.directory()));
+}
+
+// ───────────── تحسين الصور والخط الزمني ─────────────
+
+void MainWindow::openEnhancer()
+{
+    if (m_videoMode) {
+        if (!m_videoSource.isEmpty() && !m_videoSource.startsWith(QStringLiteral("camera:")))
+            enhanceVideoFrame(std::max<qint64>(0, m_timeline->position()));
+        return;
+    }
+    if (m_currentImagePath.isEmpty())
+        return;
+    const cv::Mat image = ImageIO::loadImage(m_currentImagePath);
+    if (image.empty())
+        return;
+    EnhanceDialog dialog(image, &m_engine, QStringLiteral("تحسين الصورة — %1").arg(QFileInfo(m_currentImagePath).fileName()),
+                         QStringLiteral("تحليل الصورة المحسّنة"), this);
+    if (dialog.exec() != QDialog::Accepted || dialog.result().empty())
+        return;
+    const QString path = MatchPage::enhancedPath(m_currentImagePath);
+    if (ImageIO::toQImage(dialog.result()).save(path))
+        analyzeImage(path);
+}
+
+void MainWindow::enhanceVideoFrame(qint64 positionMs)
+{
+    const QString source = m_videoSource;
+    const cv::Mat frame = runResponsive([source, positionMs] { return VideoExport::frameAt(source, positionMs); });
+    if (frame.empty()) {
+        Toast::show(this, QStringLiteral("تعذر قراءة الإطار"), Toast::Kind::Warning);
+        return;
+    }
+    EnhanceDialog dialog(frame, &m_engine, QStringLiteral("تحسين الإطار عند %1").arg(ImageIO::formatTime(positionMs)),
+                         QStringLiteral("البحث عنه في القاعدة"), this);
+    if (dialog.exec() != QDialog::Accepted || dialog.result().empty())
+        return;
+    const QString path = MatchPage::enhancedPath(QStringLiteral("إطار_%1").arg(positionMs));
+    if (ImageIO::toQImage(dialog.result()).save(path)) {
+        m_navGroup->button(2)->click();
+        m_matchPage->searchImage(path);
+    }
+}
+
+void MainWindow::setTrimRange(qint64 startMs, qint64 endMs)
+{
+    const QSignalBlocker blockStart(m_rangeStart), blockEnd(m_rangeEnd);
+    m_rangeStart->setTime(QTime(0, 0).addMSecs(int(startMs)));
+    m_rangeEnd->setTime(QTime(0, 0).addMSecs(int(std::max<qint64>(0, endMs))));
+    m_timeline->setRange(startMs, endMs);
+    if (startMs <= 0 && endMs <= 0)
+        statusBar()->showMessage(QStringLiteral("أُلغي الاقتطاع: سيُحلل الفيديو كله"), 5000);
+    else
+        statusBar()->showMessage(QStringLiteral("الجزء المحدد: %1 ← %2 · «إعادة التحليل» يحلله، والزر الأيمن على الخط الزمني يصدّره")
+                                     .arg(ImageIO::formatTime(startMs),
+                                          endMs > 0 ? ImageIO::formatTime(endMs) : QStringLiteral("النهاية")),
+                                 8000);
+}
+
+void MainWindow::showTimelineMenu(const QPoint &globalPos, qint64 positionMs, int laneId)
+{
+    const bool fileVideo = !m_videoSource.isEmpty() && !m_videoSource.startsWith(QStringLiteral("camera:"));
+    if (!fileVideo)
+        return;
+    const qint64 start = m_rangeStart->time().msecsSinceStartOfDay();
+    const qint64 end = m_rangeEnd->time().msecsSinceStartOfDay();
+    const bool trimmed = start > 0 || end > 0;
+    const bool idle = m_ready && !m_analyzing && !m_videoRunning;
+    const QString at = ImageIO::formatTime(positionMs);
+
+    QMenu menu(this);
+    auto icon = [](Icons::Name name) { return Icons::icon(name, Theme::Accent2, 18); };
+    menu.addSection(QStringLiteral("الاقتطاع"));
+    menu.addAction(icon(Icons::Name::Previous), QStringLiteral("بداية الجزء هنا (%1)\tI").arg(at), this, [this, positionMs, end] {
+        setTrimRange(positionMs, end > positionMs ? end : 0);
+    });
+    menu.addAction(icon(Icons::Name::Next), QStringLiteral("نهاية الجزء هنا (%1)\tO").arg(at), this, [this, positionMs, start] {
+        setTrimRange(start < positionMs ? start : 0, positionMs);
+    });
+    menu.addAction(icon(Icons::Name::Stop), QStringLiteral("إلغاء الاقتطاع"), this, [this] { setTrimRange(0, 0); })->setEnabled(trimmed);
+    menu.addSection(QStringLiteral("العمليات"));
+    menu.addAction(icon(Icons::Name::Film), trimmed ? QStringLiteral("تحليل الجزء المحدد") : QStringLiteral("تحليل الفيديو كله"), this,
+                   &MainWindow::reanalyzeVideo)
+        ->setEnabled(idle);
+    menu.addAction(icon(Icons::Name::Play), QStringLiteral("تحليل الفيديو من هنا"), this, [this, positionMs] { analyzeVideoFrom(positionMs); })
+        ->setEnabled(m_ready && !m_analyzing);
+    menu.addAction(icon(Icons::Name::Export), trimmed ? QStringLiteral("تصدير الجزء المحدد كفيديو…") : QStringLiteral("تصدير الفيديو…"), this,
+                   [this, start, end] {
+                       const qint64 last = end > 0 ? end : m_videoDurationMs;
+                       exportClip({{start, last}}, QStringLiteral("%1_%2-%3").arg(QFileInfo(m_videoSource).completeBaseName(),
+                                                                               ImageIO::formatTime(start).remove(QLatin1Char(':')),
+                                                                               ImageIO::formatTime(last).remove(QLatin1Char(':'))));
+                   });
+    menu.addAction(icon(Icons::Name::Image), QStringLiteral("حفظ الإطار هنا كصورة…"), this, [this, positionMs] { saveVideoFrame(positionMs); });
+    menu.addAction(icon(Icons::Name::Sparkle), QStringLiteral("تحسين هذا الإطار وتوضيحه…"), this, [this, positionMs] { enhanceVideoFrame(positionMs); })
+        ->setEnabled(m_ready);
+
+    if (laneId >= 0) {
+        const auto face = std::find_if(m_faces.cbegin(), m_faces.cend(), [laneId](const FaceItem &f) { return f.id == laneId; });
+        if (face != m_faces.cend()) {
+            const QString name = matchLabel(face->match);
+            QList<QPair<qint64, qint64>> segments = face->appearances;
+            if (segments.isEmpty() && face->firstSeenMs >= 0)
+                segments.append({face->firstSeenMs, std::max(face->firstSeenMs + 1000, face->lastSeenMs)});
+            menu.addSection(name);
+            menu.addAction(icon(Icons::Name::Scan), QStringLiteral("لقطات %1").arg(name), this, [this, laneId, positionMs] {
+                openShotViewer(laneId, positionMs);
+            });
+            menu.addAction(icon(Icons::Name::Export), QStringLiteral("تصدير كل ظهور %1 في مقطع واحد…").arg(name), this, [this, segments, name] {
+                // هامش صغير قبل كل ظهور وبعده حتى لا يبدأ المقطع فجأة
+                QList<QPair<qint64, qint64>> padded;
+                for (const auto &segment : segments) {
+                    const qint64 a = std::max<qint64>(0, segment.first - 500);
+                    const qint64 b = std::min(m_videoDurationMs > 0 ? m_videoDurationMs : segment.second + 500, segment.second + 500);
+                    if (!padded.isEmpty() && a <= padded.last().second)
+                        padded.last().second = std::max(padded.last().second, b);
+                    else
+                        padded.append({a, b});
+                }
+                exportClip(padded, QStringLiteral("%1_ظهور_%2").arg(QFileInfo(m_videoSource).completeBaseName(), name));
+            })->setEnabled(!segments.isEmpty());
+        }
+    }
+    menu.exec(globalPos);
+}
+
+void MainWindow::exportClip(const QList<QPair<qint64, qint64>> &segments, const QString &suggestedName)
+{
+    if (segments.isEmpty())
+        return;
+    QString name = suggestedName;
+    name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("تصدير مقطع فيديو"),
+                                                      QDir(m_lastDirectory).filePath(name + QStringLiteral(".mp4")),
+                                                      QStringLiteral("فيديو MP4 (*.mp4)"));
+    if (path.isEmpty())
+        return;
+    auto progress = std::make_shared<VideoExport::Progress>();
+    QProgressDialog dialog(QStringLiteral("جارٍ تصدير المقطع… (الصوت لا يُنسخ)"), QStringLiteral("إلغاء"), 0, 1000, this);
+    dialog.setWindowTitle(QStringLiteral("تصدير مقطع"));
+    dialog.setWindowModality(Qt::WindowModal);
+    dialog.setMinimumDuration(0);
+    QFutureWatcher<QString> watcher;
+    QTimer timer;
+    connect(&timer, &QTimer::timeout, &dialog, [&] {
+        dialog.setValue(int(1000 * progress->done / std::max<qint64>(1, progress->total)));
+    });
+    connect(&dialog, &QProgressDialog::canceled, &dialog, [progress] { progress->cancel = true; });
+    QEventLoop loop;
+    connect(&watcher, &QFutureWatcherBase::finished, &loop, &QEventLoop::quit);
+    const QString source = m_videoSource;
+    watcher.setFuture(QtConcurrent::run([source, segments, path, progress] {
+        return VideoExport::exportSegments(source, segments, path, progress.get());
+    }));
+    timer.start(150);
+    loop.exec();
+    timer.stop();
+    dialog.reset();
+    const QString error = watcher.result();
+    if (error.isEmpty()) {
+        Toast::show(this, QStringLiteral("تم تصدير المقطع: %1").arg(QFileInfo(path).fileName()));
+        statusBar()->showMessage(QDir::toNativeSeparators(path), 8000);
+    } else {
+        Toast::show(this, error, Toast::Kind::Warning);
+    }
+}
+
+void MainWindow::saveVideoFrame(qint64 positionMs)
+{
+    const QString source = m_videoSource;
+    const cv::Mat frame = runResponsive([source, positionMs] { return VideoExport::frameAt(source, positionMs); });
+    if (frame.empty()) {
+        Toast::show(this, QStringLiteral("تعذر قراءة الإطار"), Toast::Kind::Warning);
+        return;
+    }
+    const QString suggested = QStringLiteral("إطار_%1.png").arg(ImageIO::formatTime(positionMs).replace(QLatin1Char(':'), QLatin1Char('-')));
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("حفظ الإطار"), QDir(m_lastDirectory).filePath(suggested),
+                                                      QStringLiteral("صور (*.png *.jpg)"));
+    if (path.isEmpty())
+        return;
+    if (ImageIO::toQImage(frame).save(path))
+        Toast::show(this, QStringLiteral("تم حفظ الإطار"));
+    else
+        Toast::show(this, QStringLiteral("تعذر حفظ الإطار"), Toast::Kind::Warning);
 }

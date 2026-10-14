@@ -1,6 +1,7 @@
 #include "matchpage.h"
 
 #include "carddelegates.h"
+#include "enhancedialog.h"
 #include "facedatabase.h"
 #include "faceengine.h"
 #include "icons.h"
@@ -16,10 +17,12 @@
 #include <QImageReader>
 #include <QLabel>
 #include <QListWidget>
+#include <QMenu>
 #include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
 #include <QStandardPaths>
+#include <QUuid>
 #include <QVariantAnimation>
 #include <QVBoxLayout>
 #include <QtConcurrent>
@@ -34,6 +37,14 @@ namespace {
 const QColor SameColor = Theme::Success;
 const QColor PossibleColor = Theme::Accent;
 const QColor DifferentColor(0xfb, 0x71, 0x85);
+const QColor UncertainColor(0xfb, 0xbf, 0x24);
+
+// حدود المقارنة المباشرة بين صورتين لنموذج ArcFace: بصمات شخصين مختلفين نادراً ما تتجاوز 0.28
+// (أعلى ما قيس بين شخصين مختلفين في اختباراتنا 0.17)، أما الشخص نفسه بين صورة واضحة ولقطة فيديو
+// بلحية أو غطاء رأس فقد ينزل إلى 0.30 أو أقل. حد التعرف في الإعدادات أعلى لأنه يقارن بكل القاعدة
+constexpr float SureSame = 0.40f;
+constexpr float LikelySame = 0.28f;
+constexpr float Undecided = 0.20f;
 
 QLabel *makeLabel(const QString &text, const QString &objectName, QWidget *parent)
 {
@@ -95,6 +106,7 @@ public:
     std::function<void()> onBrowse;
     std::function<void(const QString &)> onFile;
     std::function<void(int)> onFace;
+    std::function<void(const QPoint &)> onContext;
 
     void setBusy(bool busy)
     {
@@ -230,9 +242,14 @@ protected:
         else if (!m_message.isEmpty())
             pill(m_message, QPointF(bounds.center().x(), bounds.bottom() - 14), false, m_boxes.isEmpty() ? DifferentColor : Muted);
         if (m_hover > 0.5 && !m_busy)
-            pill(QStringLiteral("انقر خارج الوجوه لتغيير الصورة"), QPointF(bounds.center().x(), bounds.top() + 14), true, Text);
+            pill(QStringLiteral("انقر خارج الوجوه لتغيير الصورة · الزر الأيمن لتحسينها"), QPointF(bounds.center().x(), bounds.top() + 14), true, Text);
     }
 
+    void contextMenuEvent(QContextMenuEvent *event) override
+    {
+        if (!m_image.isNull() && !m_busy && onContext)
+            onContext(event->globalPos());
+    }
     void mousePressEvent(QMouseEvent *event) override
     {
         if (event->button() != Qt::LeftButton || m_busy)
@@ -576,6 +593,13 @@ MatchPage::MatchPage(const FaceEngine *engine, FaceDatabase *database, std::func
         m_slots[i]->onBrowse = [this, i] { browse(i); };
         m_slots[i]->onFile = [this, i](const QString &path) { load(i, path); };
         m_slots[i]->onFace = [this, i](int index) { selectFace(i, index); };
+        m_slots[i]->onContext = [this, i](const QPoint &pos) {
+            QMenu menu(this);
+            menu.addAction(Icons::icon(Icons::Name::Sparkle, Theme::Accent2, 18), QStringLiteral("تحسين الصورة وتوضيحها…"), this,
+                           [this, i] { enhance(i); });
+            menu.addAction(Icons::icon(Icons::Name::Image, Theme::Muted, 18), QStringLiteral("تغيير الصورة…"), this, [this, i] { browse(i); });
+            menu.exec(pos);
+        };
     }
     updateComparison();
 }
@@ -655,6 +679,36 @@ void MatchPage::load(int slot, const QString &path)
     }));
 }
 
+void MatchPage::enhance(int slot)
+{
+    const QString source = m_images[slot].path;
+    const cv::Mat image = ImageIO::loadImage(source);
+    if (image.empty())
+        return;
+    EnhanceDialog dialog(image, m_engine, QStringLiteral("تحسين الصورة — %1").arg(QFileInfo(source).fileName()),
+                         QStringLiteral("استخدام الصورة المحسّنة"), this);
+    if (dialog.exec() != QDialog::Accepted || dialog.result().empty())
+        return;
+    const QString path = enhancedPath(source);
+    if (ImageIO::toQImage(dialog.result()).save(path))
+        load(slot, path);
+}
+
+QString MatchPage::enhancedPath(const QString &source)
+{
+    const QString folder = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/Malamih");
+    QDir().mkpath(folder);
+    return QStringLiteral("%1/%2_محسنة_%3.png").arg(folder, QFileInfo(source).completeBaseName(),
+                                                    QUuid::createUuid().toString(QUuid::Id128).left(6));
+}
+
+void MatchPage::searchImage(const QString &path)
+{
+    if (!m_tabs.isEmpty() && m_tabs.size() > 1)
+        m_tabs.at(1)->click();
+    load(Query, path);
+}
+
 void MatchPage::onLoaded(int slot)
 {
     m_images[slot] = m_watchers[slot]->result();
@@ -712,8 +766,7 @@ void MatchPage::clearComparison()
 
 void MatchPage::updateComparison()
 {
-    const float threshold = m_threshold();
-    m_gauge->setThreshold(threshold);
+    m_gauge->setThreshold(LikelySame);
     const FaceItem *a = selectedFace(First);
     const FaceItem *b = selectedFace(Second);
     auto avatar = [](QLabel *label, const FaceItem *face) {
@@ -740,31 +793,34 @@ void MatchPage::updateComparison()
         m_gauge->setValue(-1);
         m_verdict->setText(QStringLiteral("أضف صورتين للمقارنة"));
         m_verdict->setStyleSheet(QString());
-        m_verdictDetail->setText(QStringLiteral("حد التأكيد الحالي %1% ويمكن تغييره من صفحة التعرف").arg(qRound(threshold * 100)));
+        m_verdictDetail->setText(QStringLiteral("فوق %1% على الأرجح الشخص نفسه، وفوق %2% مؤكد").arg(qRound(LikelySame * 100)).arg(qRound(SureSame * 100)));
         return;
     }
     const float score = std::max(0.0f, FaceEngine::cosine(a->embedding, b->embedding));
     m_gauge->setValue(score);
     QString verdict;
     QColor color;
-    if (score >= threshold) {
+    if (score >= SureSame) {
         verdict = QStringLiteral("الشخص نفسه");
         color = SameColor;
-    } else if (score >= threshold - 0.1f) {
-        verdict = QStringLiteral("تشابه محتمل");
-        color = PossibleColor;
+    } else if (score >= LikelySame) {
+        verdict = QStringLiteral("على الأرجح الشخص نفسه");
+        color = SameColor;
+    } else if (score >= Undecided) {
+        verdict = QStringLiteral("غير محسوم");
+        color = UncertainColor;
     } else {
         verdict = QStringLiteral("شخصان مختلفان");
         color = DifferentColor;
     }
     m_verdict->setText(verdict);
     m_verdict->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
-    QString detail = QStringLiteral("حد التأكيد %1% · جودة الوجهين %2% و%3%")
-                         .arg(qRound(threshold * 100))
-                         .arg(qRound(a->quality * 100))
-                         .arg(qRound(b->quality * 100));
+    QString detail = QStringLiteral("جودة الوجهين %1% و%2%").arg(qRound(a->quality * 100)).arg(qRound(b->quality * 100));
+    if (score >= Undecided && score < SureSame)
+        detail += QStringLiteral("\nبين شخصين مختلفين يبقى التشابه عادة تحت %1%؛ واختلاف الدقة واللحية وغطاء الرأس والزاوية يخفضه للشخص نفسه")
+                      .arg(qRound(LikelySame * 100));
     if (std::min(a->quality, b->quality) < 0.35f)
-        detail += QStringLiteral("\nإحدى الصورتين ضعيفة الوضوح فالنتيجة أقل دقة");
+        detail += QStringLiteral("\nإحدى الصورتين ضعيفة الوضوح: جرّب «تحسين الصورة» بالزر الأيمن عليها");
     m_verdictDetail->setText(detail);
 }
 

@@ -97,6 +97,12 @@ private:
     void onVideoFrameLoaded();
     void analyzeVideoFrom(qint64 positionMs);
     void reanalyzeVideo();
+    void openEnhancer();
+    void enhanceVideoFrame(qint64 positionMs);
+    void showTimelineMenu(const QPoint &globalPos, qint64 positionMs, int laneId);
+    void exportClip(const QList<QPair<qint64, qint64>> &segments, const QString &suggestedName);
+    void saveVideoFrame(qint64 positionMs);
+    void setTrimRange(qint64 startMs, qint64 endMs);
     void sortFaces();
     void applyFaceFilter();
     bool faceMatchesFilter(const FaceItem &face) const;
@@ -206,6 +212,8 @@ private:
     ToggleSwitch *m_thoroughSwitch = nullptr;
     ToggleSwitch *m_enhanceSwitch = nullptr;
     QSpinBox *m_frameStepSpin = nullptr;
+    QComboBox *m_performanceCombo = nullptr;
+    FancyButton *m_enhanceImageButton = nullptr;
     QProgressBar *m_progress = nullptr;
     QLabel *m_thresholdWarning = nullptr;
     QTimeEdit *m_rangeStart = nullptr;

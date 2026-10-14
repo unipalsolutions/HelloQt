@@ -802,8 +802,8 @@ int stressTest(const QString &enrollDir, const QString &probeDir, QTextStream &o
     return totalWrong == 0 ? 0 : 1;
 }
 
-// يقارن كل صورتين في مجلد بعدة طرق ويكتب أدنى تشابه لنفس الشخص وأعلاه لشخصين مختلفين
-// (اسم الصورة قبل __ هو اسم الشخص)، لاختيار طريقة المقارنة الأفضل في أداة "مقارنة صورتين"
+// يقارن كل صورتين في مجلد ويكتب أدنى تشابه لنفس الشخص وأعلاه لشخصين مختلفين
+// (اسم الصورة قبل __ هو اسم الشخص)، لمعايرة أحكام أداة "مقارنة صورتين"
 int pairMatrix(const QString &folder, QTextStream &out)
 {
     FaceEngine engine;
@@ -813,7 +813,6 @@ int pairMatrix(const QString &folder, QTextStream &out)
     {
         QString name, person;
         AnalyzedFace face;
-        std::vector<std::vector<float>> templates;
     };
     std::vector<Item> items;
     const QStringList files = QDir(folder).entryList(QDir::Files, QDir::Name);
@@ -830,30 +829,22 @@ int pairMatrix(const QString &folder, QTextStream &out)
         item.name = file;
         item.person = file.section(QStringLiteral("__"), 0, 0);
         item.face = *largest;
-        item.templates = engine.enrollmentEmbeddings(largest->aligned);
         items.push_back(std::move(item));
     }
-    const QStringList names{QStringLiteral("plain"), QStringLiteral("compare")};
-    std::vector<float> genuineMin(names.size(), 2.0f), impostorMax(names.size(), -2.0f);
+    float genuineMin = 2.0f, impostorMax = -2.0f;
     for (size_t i = 0; i < items.size(); ++i) {
         for (size_t j = i + 1; j < items.size(); ++j) {
             const Item &a = items[i], &b = items[j];
-            const std::array<float, 2> scores{FaceEngine::cosine(a.face.embedding, b.face.embedding),
-                                              engine.compare(a.face, b.face)};
+            const float score = FaceEngine::cosine(a.face.embedding, b.face.embedding);
             const bool same = a.person == b.person;
-            out << (same ? "genuine " : "impostor ") << a.name << " " << b.name;
-            for (int k = 0; k < names.size(); ++k) {
-                out << " " << names[k] << "=" << scores[size_t(k)];
-                if (same)
-                    genuineMin[size_t(k)] = std::min(genuineMin[size_t(k)], scores[size_t(k)]);
-                else
-                    impostorMax[size_t(k)] = std::max(impostorMax[size_t(k)], scores[size_t(k)]);
-            }
-            out << "\n";
+            out << (same ? "genuine " : "impostor ") << a.name << " " << b.name << " similarity=" << score << "\n";
+            if (same)
+                genuineMin = std::min(genuineMin, score);
+            else
+                impostorMax = std::max(impostorMax, score);
         }
     }
-    for (int k = 0; k < names.size(); ++k)
-        out << names[k] << "_genuine_min=" << genuineMin[size_t(k)] << " " << names[k] << "_impostor_max=" << impostorMax[size_t(k)] << "\n";
+    out << "genuine_min=" << genuineMin << "\nimpostor_max=" << impostorMax << "\n";
     return 0;
 }
 
