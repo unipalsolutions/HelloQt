@@ -918,8 +918,19 @@ int backupTest(const QString &directory, QTextStream &out)
     const bool watchTags = FaceDatabase::isWatched(QStringLiteral("موظف، مطلوب")) && !FaceDatabase::isWatched(QStringLiteral("مراقبات"))
         && FaceDatabase::withWatchTag(QStringLiteral("موظف، مراقبة"), false) == QStringLiteral("موظف");
     const int watched = int(database.watchedIds().size());
-    out << "\nwatch_tags=" << watchTags << "\nwatched_after_restore=" << watched << "\n" << error;
-    return saved && inspected.first == 3 && before == 5 && restored && after == 3 && invalid && watchTags && watched == 1 ? 0 : 1;
+    // سجل التنبيهات: ظهور الشخص المراقَب وحده في قائمة المراقبة، وكل الظهور في «كل الأشخاص»
+    const QList<Person> all = database.findPersons(QString(), 0, 10);
+    for (const Person &person : all)
+        database.addSighting(person.id, QStringLiteral("clip.mp4"), 4000, 0.7f, QImage());
+    const qsizetype logWatched = database.recentSightings(true, QDateTime(), 100).size();
+    const qsizetype logAll = database.recentSightings(false, QDateTime(), 100).size();
+    const qsizetype logFuture = database.recentSightings(false, QDateTime::currentDateTime().addDays(1), 100).size();
+    const bool alertLog = logWatched == 1 && logAll == all.size() && logFuture == 0;
+    out << "\nwatch_tags=" << watchTags << "\nwatched_after_restore=" << watched << "\nalert_log=" << alertLog << "\n" << error;
+    return saved && inspected.first == 3 && before == 5 && restored && after == 3 && invalid && watchTags && watched == 1
+                   && alertLog
+               ? 0
+               : 1;
 }
 
 } // namespace
