@@ -214,12 +214,21 @@ ShotViewer::ShotViewer(const FaceEngine *engine, const FaceDatabase *database, c
     auto *saveFrame = new FancyButton(Icons::Name::Image, QStringLiteral("حفظ الإطار"), FancyButton::Kind::Secondary, this);
     auto *advanced = new FancyButton(Icons::Name::Sparkle, QStringLiteral("تحسين متقدم…"), FancyButton::Kind::Secondary, this);
     advanced->setToolTip(QStringLiteral("إزالة التشويش والضبابية، الحدة، تكبير الدقة، الإضاءة، التدوير وتصحيح المنظور، مع معاينة قبل وبعد"));
-    connect(advanced, &QAbstractButton::clicked, this, [this] {
-        const cv::Mat frame = VideoExport::frameAt(m_videoPath, m_frame.positionMs);
-        if (frame.empty())
-            return;
-        EnhanceDialog dialog(frame, m_engine, QStringLiteral("تحسين الإطار عند %1").arg(ImageIO::formatTime(m_frame.positionMs)), {}, this);
-        dialog.exec();
+    connect(advanced, &QAbstractButton::clicked, this, [this, advanced] {
+        // القفز إلى موضع في فيديو طويل قد يستغرق ثانية أو أكثر، فيُقرأ الإطار في الخلفية
+        advanced->setEnabled(false);
+        const qint64 positionMs = m_frame.positionMs;
+        auto *watcher = new QFutureWatcher<cv::Mat>(this);
+        connect(watcher, &QFutureWatcher<cv::Mat>::finished, this, [this, advanced, watcher, positionMs] {
+            const cv::Mat frame = watcher->result();
+            watcher->deleteLater();
+            advanced->setEnabled(true);
+            if (frame.empty())
+                return;
+            EnhanceDialog dialog(frame, m_engine, QStringLiteral("تحسين الإطار عند %1").arg(ImageIO::formatTime(positionMs)), {}, this);
+            dialog.exec();
+        });
+        watcher->setFuture(QtConcurrent::run([path = m_videoPath, positionMs] { return VideoExport::frameAt(path, positionMs); }));
     });
     m_saveFaceButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ الوجه المحدد"), FancyButton::Kind::Secondary, this);
     m_addButton = new FancyButton(Icons::Name::UserPlus, QStringLiteral("إضافة إلى القاعدة"), FancyButton::Kind::Secondary, this);
