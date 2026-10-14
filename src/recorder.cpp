@@ -406,15 +406,15 @@ bool CameraRecorder::detectMotion(const cv::Mat &frame, Clock::time_point time)
     const Clock::time_point activity{Clock::duration(m_activity.load())};
     bool moved = m_activity.load() != 0 && time - activity <= std::chrono::seconds(2);
 
-    cv::Mat small, gray;
+    cv::Mat scaled, gray;
     const int width = 96;
-    cv::resize(frame, small, cv::Size(width, std::max(1, width * frame.rows / std::max(1, frame.cols))), 0, 0, cv::INTER_AREA);
-    if (small.channels() == 3)
-        cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
-    else if (small.channels() == 4)
-        cv::cvtColor(small, gray, cv::COLOR_BGRA2GRAY);
+    cv::resize(frame, scaled, cv::Size(width, std::max(1, width * frame.rows / std::max(1, frame.cols))), 0, 0, cv::INTER_AREA);
+    if (scaled.channels() == 3)
+        cv::cvtColor(scaled, gray, cv::COLOR_BGR2GRAY);
+    else if (scaled.channels() == 4)
+        cv::cvtColor(scaled, gray, cv::COLOR_BGRA2GRAY);
     else
-        gray = small;
+        gray = scaled;
     cv::GaussianBlur(gray, gray, cv::Size(3, 3), 0);
     if (!m_motionReference.empty() && m_motionReference.size() == gray.size()) {
         cv::Mat difference;

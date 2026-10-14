@@ -545,9 +545,9 @@ std::vector<std::vector<float>> FaceEngine::enrollmentEmbeddings(const cv::Mat &
     // محاكاة لقطات منخفضة الدقة ومشوشة حتى تتطابق الصور الرديئة مع صور التسجيل
     std::vector<cv::Mat> versions{aligned};
     for (int size : {24, 40}) {
-        cv::Mat small, restored;
-        cv::resize(aligned, small, cv::Size(size, size), 0, 0, cv::INTER_AREA);
-        cv::resize(small, restored, aligned.size(), 0, 0, cv::INTER_CUBIC);
+        cv::Mat scaled, restored;
+        cv::resize(aligned, scaled, cv::Size(size, size), 0, 0, cv::INTER_AREA);
+        cv::resize(scaled, restored, aligned.size(), 0, 0, cv::INTER_CUBIC);
         versions.push_back(restored);
     }
     cv::Mat blurred;

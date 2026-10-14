@@ -202,10 +202,10 @@ class SceneCutDetector
 public:
     bool update(const cv::Mat &frame)
     {
-        cv::Mat small;
-        cv::resize(frame, small, cv::Size(64, 36), 0, 0, cv::INTER_AREA);
+        cv::Mat scaled;
+        cv::resize(frame, scaled, cv::Size(64, 36), 0, 0, cv::INTER_AREA);
         cv::Mat hsv;
-        cv::cvtColor(small, hsv, cv::COLOR_BGR2HSV);
+        cv::cvtColor(scaled, hsv, cv::COLOR_BGR2HSV);
         const int channels[] = {0, 1};
         const int sizes[] = {16, 8};
         const float hueRange[] = {0.0f, 180.0f};
