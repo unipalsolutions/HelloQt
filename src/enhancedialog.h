@@ -8,7 +8,10 @@
 
 #include <opencv2/core.hpp>
 
+#include <functional>
+
 class BeforeAfterView;
+class FancyButton;
 class FaceEngine;
 class QComboBox;
 class QLabel;
@@ -30,6 +33,18 @@ public:
     // الصورة بالدقة الكاملة بعد التحسين (تُحسب عند القبول)
     cv::Mat result() const { return m_result; }
 
+    // للاستخدام كصفحة داخل النافذة: بلا زر إغلاق، وزر الاستخدام يستدعي onUse بدل الإغلاق
+    void setEmbedded(bool embedded);
+    std::function<void(const cv::Mat &)> onUse;
+    void setImage(const cv::Mat &image, const QString &name = {});
+    void openImage();
+    // صورة من الحافظة (أو مسار صورة منسوخ)
+    void pasteImage();
+
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+
 private:
     struct Control
     {
@@ -46,6 +61,7 @@ private:
     void save();
     void copy();
     void levelFace();
+    void updateEnabled();
 
     cv::Mat m_source;
     cv::Mat m_preview; // نسخة مصغرة للمعاينة السريعة
@@ -61,4 +77,9 @@ private:
     QTimer *m_debounce;
     QFutureWatcher<QImage> m_watcher;
     bool m_pending = false;
+    QString m_name;
+    QString m_lastDirectory;
+    QList<QWidget *> m_needImage;
+    FancyButton *m_close = nullptr;
+    class QShortcut *m_paste = nullptr;
 };

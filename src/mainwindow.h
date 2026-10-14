@@ -214,6 +214,7 @@ private:
     QSpinBox *m_frameStepSpin = nullptr;
     QComboBox *m_performanceCombo = nullptr;
     FancyButton *m_enhanceImageButton = nullptr;
+    class EnhanceDialog *m_studio = nullptr; // صفحة تحسين الصور
     QProgressBar *m_progress = nullptr;
     QLabel *m_thresholdWarning = nullptr;
     QTimeEdit *m_rangeStart = nullptr;

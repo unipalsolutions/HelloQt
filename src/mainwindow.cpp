@@ -284,6 +284,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_matchPage = new MatchPage(&m_engine, &m_database, [this] { return threshold(); }, m_pages);
     m_matchPage->setReady(false);
     m_pages->addWidget(m_matchPage);
+    // صفحة تحسين الصور: أي صورة تُفتح أو تُسحب وتُعدَّل والخيارات أمامك
+    m_studio = new EnhanceDialog(cv::Mat(), &m_engine, QStringLiteral("تحسين الصور"), QStringLiteral("التعرف على الوجوه فيها"), m_pages);
+    m_studio->setEmbedded(true);
+    m_studio->onUse = [this](const cv::Mat &image) {
+        const QString path = MatchPage::enhancedPath(QStringLiteral("صورة"));
+        if (ImageIO::toQImage(image).save(path)) {
+            m_navGroup->button(0)->click();
+            analyzeImage(path);
+        }
+    };
+    m_pages->addWidget(m_studio);
     connect(m_matchPage, &MatchPage::openPersonRequested, this, &MainWindow::showPerson);
     connect(m_matchPage, &MatchPage::enrollRequested, this, [this](const QString &personId, const FaceItem &face) {
         if (enrollFace(personId, face))
@@ -424,6 +435,7 @@ void MainWindow::setupShortcuts()
     add(QKeySequence(Qt::CTRL | Qt::Key_1), [this] { m_navGroup->button(0)->click(); });
     add(QKeySequence(Qt::CTRL | Qt::Key_2), [this] { m_navGroup->button(1)->click(); });
     add(QKeySequence(Qt::CTRL | Qt::Key_3), [this] { m_navGroup->button(2)->click(); });
+    add(QKeySequence(Qt::CTRL | Qt::Key_4), [this] { m_navGroup->button(3)->click(); });
 }
 
 void MainWindow::loadSettings()
@@ -487,6 +499,12 @@ void MainWindow::dropEvent(QDropEvent *event)
             pasteImage();
         return;
     }
+    if (m_pages->currentIndex() == 3 && !images.isEmpty()) {
+        const cv::Mat image = ImageIO::loadImage(images.first());
+        if (!image.empty())
+            m_studio->setImage(image, QFileInfo(images.first()).completeBaseName());
+        return;
+    }
     if (m_pages->currentIndex() == 2 && !images.isEmpty()) {
         m_matchPage->openFile(images.first());
         if (images.size() > 1)
@@ -499,6 +517,10 @@ void MainWindow::dropEvent(QDropEvent *event)
 
 void MainWindow::pasteImage()
 {
+    if (m_pages->currentIndex() == 3) {
+        m_studio->pasteImage();
+        return;
+    }
     const QImage image = QApplication::clipboard()->image();
     if (image.isNull()) {
         const QList<QUrl> urls = QApplication::clipboard()->mimeData()->urls();
@@ -561,17 +583,21 @@ QWidget *MainWindow::createSidebar()
     auto *recognitionNav = new FancyButton(Icons::Name::Scan, QStringLiteral("التعرف"), FancyButton::Kind::Nav, sidebar);
     auto *databaseNav = new FancyButton(Icons::Name::Users, QStringLiteral("قاعدة البيانات"), FancyButton::Kind::Nav, sidebar);
     auto *matchNav = new FancyButton(Icons::Name::Compare, QStringLiteral("المطابقة"), FancyButton::Kind::Nav, sidebar);
-    m_navButtons = {recognitionNav, databaseNav, matchNav};
+    auto *studioNav = new FancyButton(Icons::Name::Sparkle, QStringLiteral("تحسين الصور"), FancyButton::Kind::Nav, sidebar);
+    studioNav->setToolTip(QStringLiteral("افتح أي صورة وعدّلها: إزالة التشويش والضبابية، الحدة، تكبير الدقة، الإضاءة، الزاوية والمنظور (Ctrl+4)"));
+    m_navButtons = {recognitionNav, databaseNav, matchNav, studioNav};
     auto *group = new QButtonGroup(sidebar);
     m_navGroup = group;
     group->addButton(recognitionNav, 0);
     group->addButton(databaseNav, 1);
     group->addButton(matchNav, 2);
+    group->addButton(studioNav, 3);
     recognitionNav->setChecked(true);
     connect(group, &QButtonGroup::idClicked, this, [this](int id) { m_pages->slideTo(id); });
     layout->addWidget(recognitionNav);
     layout->addWidget(databaseNav);
     layout->addWidget(matchNav);
+    layout->addWidget(studioNav);
     layout->addStretch();
 
     auto *stats = card(sidebar, QStringLiteral("statCard"));
@@ -766,10 +792,9 @@ QWidget *MainWindow::createRecognitionPage()
     // جزء الفيديو المطلوب
     auto timeEdit = [settings](const QString &tip) {
         auto *edit = new QTimeEdit(settings);
-        edit->setDisplayFormat(QStringLiteral("HH:mm:ss"));
+        setLtrDisplayFormat(edit, QStringLiteral("HH:mm:ss"));
         edit->setTime(QTime(0, 0));
         edit->setToolTip(tip);
-        edit->setLayoutDirection(Qt::LeftToRight);
         return edit;
     };
     m_rangeStart = timeEdit(QStringLiteral("بداية الجزء المطلوب تحليله من الفيديو"));
@@ -945,7 +970,7 @@ QWidget *MainWindow::createRecognitionPage()
     auto *timelineHeader = new QHBoxLayout;
     timelineHeader->setSpacing(6);
     timelineHeader->addWidget(label(QStringLiteral("الخط الزمني"), QStringLiteral("sectionTitle"), m_timelineCard));
-    auto *timelineHint = label(QStringLiteral("انقر لعرض أي لحظة · نقر مزدوج على مقطع لعرض لقطاته · Ctrl+العجلة للتكبير"),
+    auto *timelineHint = label(QStringLiteral("انقر لعرض أي لحظة · اسحب المقبضين الأصفرين للاقتطاع · الزر الأيمن للعمليات · Ctrl+العجلة للتكبير"),
                                QStringLiteral("muted"), m_timelineCard);
     timelineHint->setMinimumWidth(10);
     timelineHeader->addWidget(timelineHint, 1);
@@ -1226,8 +1251,7 @@ void MainWindow::updateVideoOptions()
     m_reanalyzeButton->setEnabled(idle && fileVideo);
     m_regionButton->setEnabled(m_ready && (m_view->hasImage() || m_regionButton->isChecked()));
     m_clearRegionButton->setEnabled(!m_view->region().isEmpty());
-    m_enhanceImageButton->setEnabled(m_ready && !m_analyzing && !m_videoRunning
-                                     && ((!m_videoMode && !m_currentImagePath.isEmpty()) || (m_videoMode && fileVideo)));
+    m_enhanceImageButton->setEnabled(!m_analyzing && !m_videoRunning && (!m_videoMode || fileVideo));
 }
 
 // ───────────── التعرف ─────────────
@@ -2599,6 +2623,10 @@ void MainWindow::openDatabaseFolder()
 
 void MainWindow::openEnhancer()
 {
+    if (!m_videoMode && m_currentImagePath.isEmpty()) {
+        m_navGroup->button(3)->click();
+        return;
+    }
     if (m_videoMode) {
         if (!m_videoSource.isEmpty() && !m_videoSource.startsWith(QStringLiteral("camera:")))
             enhanceVideoFrame(std::max<qint64>(0, m_timeline->position()));

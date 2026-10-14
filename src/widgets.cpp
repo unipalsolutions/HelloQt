@@ -2,6 +2,7 @@
 
 #include "theme.h"
 
+#include <QDateTimeEdit>
 #include <QEasingCurve>
 #include <QEnterEvent>
 #include <QGraphicsOpacityEffect>
@@ -469,4 +470,13 @@ void Toast::paintEvent(QPaintEvent *)
     const QRectF textRect = rtl ? QRectF(bounds.left() + 16, 0, badge.left() - bounds.left() - 26, height())
                                 : QRectF(badge.right() + 10, 0, bounds.right() - badge.right() - 26, height());
     p.drawText(textRect, (rtl ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter | Qt::AlignAbsolute, m_text);
+}
+
+void setLtrDisplayFormat(QDateTimeEdit *edit, const QString &format)
+{
+    edit->setLayoutDirection(Qt::LeftToRight);
+    const Qt::LayoutDirection direction = QGuiApplication::layoutDirection();
+    QGuiApplication::setLayoutDirection(Qt::LeftToRight);
+    edit->setDisplayFormat(format);
+    QGuiApplication::setLayoutDirection(direction);
 }

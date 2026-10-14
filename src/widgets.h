@@ -9,6 +9,7 @@
 #include <QWidget>
 
 class QVariantAnimation;
+class QDateTimeEdit;
 
 // زر مرسوم يدوياً بانتقالات ناعمة عند المرور والضغط والتحديد
 class FancyButton : public QAbstractButton
@@ -122,3 +123,7 @@ private:
     Kind m_kind;
     static QPointer<Toast> s_current;
 };
+
+// Qt يعكس ترتيب أجزاء الوقت والتاريخ في الواجهات العربية (00:00:02 تظهر 02:00:00)،
+// فيُحلَّل التنسيق باتجاه لاتيني ويُعرض الحقل من اليسار إلى اليمين
+void setLtrDisplayFormat(QDateTimeEdit *edit, const QString &format);

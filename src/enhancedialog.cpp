@@ -9,6 +9,12 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
+#include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QImageReader>
+#include <QMimeData>
+#include <QShortcut>
 #include <QEventLoop>
 #include <QFileDialog>
 #include <QGridLayout>
@@ -40,6 +46,8 @@ public:
         setToolTip(QStringLiteral("اسحب الخط للمقارنة بين الأصل (يمين) والمحسّنة (يسار)"));
     }
 
+    std::function<void()> onEmptyClick;
+
     void setBefore(const QImage &image)
     {
         m_before = image;
@@ -61,8 +69,26 @@ protected:
         frame.addRoundedRect(QRectF(rect()), 12, 12);
         p.fillPath(frame, Theme::Background);
         const QImage &shown = m_after.isNull() ? m_before : m_after;
-        if (shown.isNull())
+        if (shown.isNull()) {
+            QPen pen(Theme::Border, 1.5, Qt::DashLine);
+            p.setPen(pen);
+            p.drawPath(frame);
+            const QPointF c = rect().center();
+            Icons::paint(p, Icons::Name::PhotoAdd, QRectF(c.x() - 28, c.y() - 70, 56, 56), Theme::Accent2);
+            QFont font = p.font();
+            font.setPointSizeF(font.pointSizeF() + 2);
+            font.setWeight(QFont::DemiBold);
+            p.setFont(font);
+            p.setPen(Theme::Text);
+            p.drawText(QRectF(0, c.y() - 4, width(), 30), Qt::AlignCenter, QStringLiteral("اسحب صورة إلى هنا، أو افتحها، أو الصقها بـ Ctrl+V"));
+            font.setPointSizeF(font.pointSizeF() - 3);
+            font.setWeight(QFont::Normal);
+            p.setFont(font);
+            p.setPen(Theme::Muted);
+            p.drawText(QRectF(0, c.y() + 28, width(), 24), Qt::AlignCenter,
+                       QStringLiteral("ثم حسّنها: التشويش، الضبابية، الحدة، الدقة، الإضاءة، الزاوية والمنظور"));
             return;
+        }
         const QSizeF fitted = QSizeF(shown.size()).scaled(QSizeF(size()) - QSizeF(16, 16), Qt::KeepAspectRatio);
         const QRectF target(QPointF((width() - fitted.width()) / 2, (height() - fitted.height()) / 2), fitted);
         const double split = target.left() + target.width() * m_split;
@@ -98,7 +124,15 @@ protected:
         badge(QStringLiteral("الأصل"), target.topRight() + QPointF(-10, 10), true);
     }
 
-    void mousePressEvent(QMouseEvent *event) override { moveSplit(event->position().x()); }
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (m_before.isNull() && m_after.isNull()) {
+            if (onEmptyClick)
+                onEmptyClick();
+            return;
+        }
+        moveSplit(event->position().x());
+    }
     void mouseMoveEvent(QMouseEvent *event) override
     {
         if (event->buttons() & Qt::LeftButton)
@@ -146,12 +180,7 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
 {
     setWindowTitle(title);
     resize(1180, 720);
-    const int longSide = std::max(m_source.cols, m_source.rows);
-    const double scale = std::min(1.0, 900.0 / std::max(1, longSide));
-    if (scale < 1.0)
-        cv::resize(m_source, m_preview, cv::Size(), scale, scale, cv::INTER_AREA);
-    else
-        m_preview = m_source;
+    setAcceptDrops(true);
 
     auto *layout = new QHBoxLayout(this);
     layout->setContentsMargins(18, 16, 18, 16);
@@ -166,9 +195,15 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     heading->setObjectName(QStringLiteral("sectionTitle"));
     side->addWidget(heading);
 
+    auto *openButton = new FancyButton(Icons::Name::Image, QStringLiteral("فتح صورة…"), FancyButton::Kind::Secondary, panel);
+    openButton->setToolTip(QStringLiteral("اختيار صورة أخرى للتحسين (أو اسحبها إلى النافذة، أو الصقها بـ Ctrl+V)"));
+    connect(openButton, &QAbstractButton::clicked, this, &EnhanceDialog::openImage);
     auto *autoButton = new FancyButton(Icons::Name::Sparkle, QStringLiteral("تحسين تلقائي"), FancyButton::Kind::Primary, panel);
     autoButton->setToolTip(QStringLiteral("يقيس الإضاءة والتشويش والوضوح والحجم ويقترح القيم المناسبة"));
-    side->addWidget(autoButton);
+    auto *topRow = new QHBoxLayout;
+    topRow->addWidget(autoButton, 1);
+    topRow->addWidget(openButton);
+    side->addLayout(topRow);
 
     auto *controls = new QWidget(panel);
     auto *grid = new QGridLayout(controls);
@@ -225,17 +260,28 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     actions->addWidget(saveButton);
     actions->addWidget(copyButton);
     side->addLayout(actions);
-    auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, panel);
-    connect(close, &QAbstractButton::clicked, this, &QDialog::reject);
+    m_close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, panel);
+    connect(m_close, &QAbstractButton::clicked, this, &QDialog::reject);
     if (!useText.isEmpty()) {
         auto *use = new FancyButton(Icons::Name::Search, useText, FancyButton::Kind::Primary, panel);
         connect(use, &QAbstractButton::clicked, this, [this] {
+            if (m_source.empty())
+                return;
             m_result = renderFull();
-            accept();
+            if (onUse)
+                onUse(m_result);
+            else
+                accept();
         });
         side->addWidget(use);
+        m_needImage << use;
     }
-    side->addWidget(close);
+    side->addWidget(m_close);
+    m_needImage << autoButton << controls << level << turn << mirror << reset << saveButton << copyButton;
+    m_view->onEmptyClick = [this] { openImage(); };
+    // داخل النافذة الرئيسية يمرّر اختصارها اللصق إلى هنا؛ في النافذة المنفصلة يكون الاختصار خاصاً بها
+    m_paste = new QShortcut(QKeySequence::Paste, this);
+    connect(m_paste, &QShortcut::activated, this, &EnhanceDialog::pasteImage);
 
     auto *scroll = new QScrollArea(this);
     scroll->setWidget(panel);
@@ -281,9 +327,109 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     connect(saveButton, &QAbstractButton::clicked, this, &EnhanceDialog::save);
     connect(copyButton, &QAbstractButton::clicked, this, &EnhanceDialog::copy);
 
-    m_view->setBefore(ImageIO::toQImage(m_preview));
-    m_info->setText(QStringLiteral("الأبعاد: %1×%2").arg(m_source.cols).arg(m_source.rows));
-    renderPreview();
+    setImage(m_source);
+}
+
+void EnhanceDialog::setEmbedded(bool embedded)
+{
+    setWindowFlags(embedded ? Qt::Widget : Qt::Dialog);
+    m_close->setVisible(!embedded);
+    m_paste->setEnabled(!embedded);
+}
+
+void EnhanceDialog::pasteImage()
+{
+    const QImage image = QApplication::clipboard()->image();
+    if (image.isNull()) {
+        const QList<QUrl> urls = QApplication::clipboard()->mimeData()->urls();
+        if (!urls.isEmpty() && urls.first().isLocalFile()) {
+            const cv::Mat loaded = ImageIO::loadImage(urls.first().toLocalFile());
+            if (!loaded.empty())
+                setImage(loaded, QFileInfo(urls.first().toLocalFile()).completeBaseName());
+        }
+        return;
+    }
+    const QImage rgb = image.convertToFormat(QImage::Format_RGB888);
+    const cv::Mat wrapped(rgb.height(), rgb.width(), CV_8UC3, const_cast<uchar *>(rgb.constBits()), size_t(rgb.bytesPerLine()));
+    cv::Mat bgr;
+    cv::cvtColor(wrapped, bgr, cv::COLOR_RGB2BGR);
+    setImage(bgr, QStringLiteral("صورة_ملصقة"));
+}
+
+void EnhanceDialog::setImage(const cv::Mat &image, const QString &name)
+{
+    m_watcher.waitForFinished();
+    m_source = image.clone();
+    m_name = name;
+    m_result.release();
+    m_preview.release();
+    if (!m_source.empty()) {
+        const int longSide = std::max(m_source.cols, m_source.rows);
+        const double scale = std::min(1.0, 900.0 / std::max(1, longSide));
+        if (scale < 1.0)
+            cv::resize(m_source, m_preview, cv::Size(), scale, scale, cv::INTER_AREA);
+        else
+            m_preview = m_source;
+    }
+    m_quarterTurns = 0;
+    m_mirror = false;
+    m_updating = true;
+    for (Control *c : {&m_brightness, &m_contrast, &m_denoise, &m_deblur, &m_sharpen, &m_rotation, &m_keystoneV, &m_keystoneH})
+        c->slider->setValue(0);
+    m_upscale->setCurrentIndex(0);
+    m_updating = false;
+    m_view->setBefore(m_preview.empty() ? QImage() : ImageIO::toQImage(m_preview));
+    m_view->setAfter({});
+    m_info->setText(m_source.empty() ? QString()
+                                     : QStringLiteral("%1الأبعاد: %2×%3")
+                                           .arg(name.isEmpty() ? QString() : name + QStringLiteral(" · "))
+                                           .arg(m_source.cols)
+                                           .arg(m_source.rows));
+    updateEnabled();
+    if (!m_source.empty())
+        renderPreview();
+}
+
+void EnhanceDialog::updateEnabled()
+{
+    for (QWidget *widget : std::as_const(m_needImage))
+        widget->setEnabled(!m_source.empty());
+}
+
+void EnhanceDialog::openImage()
+{
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("اختر صورة لتحسينها"), m_lastDirectory,
+                                                      QStringLiteral("الصور (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff *.jfif)"));
+    if (path.isEmpty())
+        return;
+    m_lastDirectory = QFileInfo(path).absolutePath();
+    const cv::Mat image = ImageIO::loadImage(path);
+    if (image.empty()) {
+        Toast::show(this, QStringLiteral("تعذر قراءة الصورة"), Toast::Kind::Warning);
+        return;
+    }
+    setImage(image, QFileInfo(path).completeBaseName());
+}
+
+void EnhanceDialog::dragEnterEvent(QDragEnterEvent *event)
+{
+    const QList<QUrl> urls = event->mimeData()->urls();
+    if ((!urls.isEmpty() && urls.first().isLocalFile() && !QImageReader::imageFormat(urls.first().toLocalFile()).isEmpty())
+        || event->mimeData()->hasImage())
+        event->acceptProposedAction();
+}
+
+void EnhanceDialog::dropEvent(QDropEvent *event)
+{
+    const QList<QUrl> urls = event->mimeData()->urls();
+    if (!urls.isEmpty() && urls.first().isLocalFile()) {
+        const QString path = urls.first().toLocalFile();
+        const cv::Mat image = ImageIO::loadImage(path);
+        if (!image.empty()) {
+            event->acceptProposedAction();
+            setImage(image, QFileInfo(path).completeBaseName());
+        }
+    }
 }
 
 EnhanceDialog::~EnhanceDialog()
@@ -301,6 +447,8 @@ EnhanceDialog::Control EnhanceDialog::addSlider(QGridLayout *grid, int row, cons
     control.slider->setValue(0);
     control.slider->setToolTip(tip);
     control.slider->setCursor(Qt::PointingHandCursor);
+    // الصفر في البداية والقيمة تزيد يميناً كالأرقام بجانبها
+    control.slider->setLayoutDirection(Qt::LeftToRight);
     control.value = new QLabel(QStringLiteral("0"), grid->parentWidget());
     control.value->setObjectName(QStringLiteral("badge"));
     control.value->setMinimumWidth(38);
@@ -359,6 +507,8 @@ void EnhanceDialog::schedulePreview()
 
 void EnhanceDialog::renderPreview()
 {
+    if (m_preview.empty())
+        return;
     if (m_watcher.isRunning()) {
         m_pending = true;
         return;
@@ -382,7 +532,10 @@ cv::Mat EnhanceDialog::renderFull()
 
 void EnhanceDialog::save()
 {
-    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("حفظ الصورة المحسّنة"), QStringLiteral("صورة_محسنة.png"),
+    if (m_source.empty())
+        return;
+    const QString suggested = (m_name.isEmpty() ? QStringLiteral("صورة") : m_name) + QStringLiteral("_محسنة.png");
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("حفظ الصورة المحسّنة"), QDir(m_lastDirectory).filePath(suggested),
                                                       QStringLiteral("صور (*.png *.jpg)"));
     if (path.isEmpty())
         return;
@@ -395,6 +548,8 @@ void EnhanceDialog::save()
 
 void EnhanceDialog::copy()
 {
+    if (m_source.empty())
+        return;
     QApplication::clipboard()->setImage(ImageIO::toQImage(renderFull()));
     Toast::show(this, QStringLiteral("نُسخت الصورة المحسّنة"));
 }

@@ -1,4 +1,5 @@
 #include "persondialog.h"
+#include "widgets.h"
 
 #include "personmodel.h"
 
@@ -39,7 +40,7 @@ PersonDialog::PersonDialog(const Person &person, QWidget *parent)
 
     m_gender->addItems({QStringLiteral("غير محدد"), QStringLiteral("ذكر"), QStringLiteral("أنثى")});
     m_gender->setCurrentIndex(std::max(0, m_gender->findText(person.gender)));
-    m_birthDate->setDisplayFormat(QStringLiteral("yyyy/MM/dd"));
+    setLtrDisplayFormat(m_birthDate, QStringLiteral("yyyy/MM/dd"));
     m_birthDate->setCalendarPopup(true);
     m_birthDate->setMaximumDate(QDate::currentDate());
     m_birthDate->setDate(person.birthDate.isValid() ? person.birthDate : QDate(1990, 1, 1));
