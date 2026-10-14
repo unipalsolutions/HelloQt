@@ -1,5 +1,7 @@
 #include "cameras.h"
 
+#include "recorder.h"
+
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -1084,8 +1086,9 @@ cv::Mat snapshot(const Camera &camera, QString *error, QString *info)
     return last;
 }
 
-LiveReader::LiveReader(const Camera &camera)
+LiveReader::LiveReader(const Camera &camera, CameraRecorder *recorder)
     : m_camera(camera)
+    , m_recorder(recorder)
 {
 }
 
@@ -1127,6 +1130,8 @@ void LiveReader::run()
             continue;
         }
         failures = 0;
+        if (m_recorder)
+            m_recorder->push(frame);
         std::lock_guard<std::mutex> lock(m_mutex);
         m_frame = frame;
         ++m_sequence;

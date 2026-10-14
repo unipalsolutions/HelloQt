@@ -14,6 +14,7 @@
 
 #include <opencv2/core.hpp>
 
+class CameraRecorder;
 class FaceEngine;
 
 // يحلل الفيديو أو الكاميرا في خيط منفصل ويتتبع كل وجه عبر الإطارات
@@ -42,6 +43,8 @@ public:
     void setPaused(bool paused); // إيقاف مؤقت دون فقدان التقدم أو الأشخاص المكتشفين
     bool isPaused() const { return m_paused; }
     void frameShown();
+    // يتسلم كل إطار من الكاميرا ليسجله؛ يُضبط مرة قبل التشغيل ويبقى حياً بعد العامل
+    void setRecorder(CameraRecorder *recorder) { m_recorder = recorder; }
     // آخر إطار من الكاميرا كما وصل قبل المعالجات (لمعاينة المعالجات أثناء البث)
     cv::Mat lastCameraFrame();
 
@@ -62,6 +65,7 @@ signals:
 
 private:
     const FaceEngine *m_engine;
+    CameraRecorder *m_recorder = nullptr;
     QMutex m_mutex;
     GalleryPtr m_gallery;
     float m_threshold = 0.30f;

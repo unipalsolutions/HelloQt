@@ -319,7 +319,7 @@ void VideoWorker::process(const QString &source)
             emit finished(QStringLiteral("هذه الكاميرا لم تعد في قائمة الكاميرات"));
             return;
         }
-        live = std::make_unique<Cameras::LiveReader>(cameraSpec);
+        live = std::make_unique<Cameras::LiveReader>(cameraSpec, m_recorder);
         QString error;
         if (!live->open(&error)) {
             emit finished(error.isEmpty() ? QStringLiteral("تعذر فتح الكاميرا") : error);
@@ -531,7 +531,7 @@ void VideoWorker::process(const QString &source)
                         QThread::msleep(100);
                     if (m_stop)
                         break;
-                    auto reader = std::make_unique<Cameras::LiveReader>(cameraSpec);
+                    auto reader = std::make_unique<Cameras::LiveReader>(cameraSpec, m_recorder);
                     if (reader->open(nullptr)) {
                         live = std::move(reader);
                         break;

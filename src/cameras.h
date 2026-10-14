@@ -15,6 +15,8 @@
 #include <mutex>
 #include <thread>
 
+class CameraRecorder;
+
 // الكاميرات: ما يتصل بالجهاز مباشرة (USB، محوّل الكاميرات التناظرية، بطاقة التقاط HDMI) يظهر
 // للنظام كاميرا برقم، وكاميرات الشبكة وأجهزة التسجيل تُفتح بعنوان بث RTSP أو HTTP
 namespace Cameras {
@@ -143,7 +145,8 @@ cv::Mat snapshot(const Camera &camera, QString *error, QString *info = nullptr);
 class LiveReader
 {
 public:
-    explicit LiveReader(const Camera &camera);
+    // recorder (اختياري) يتسلم كل إطار يصل من الكاميرا، لا ما يُحلَّل فقط
+    explicit LiveReader(const Camera &camera, CameraRecorder *recorder = nullptr);
     ~LiveReader();
 
     bool open(QString *error);
@@ -155,6 +158,7 @@ private:
     void run();
 
     Camera m_camera;
+    CameraRecorder *m_recorder = nullptr;
     cv::VideoCapture m_capture;
     std::thread m_thread;
     std::mutex m_mutex;

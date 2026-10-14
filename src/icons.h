@@ -46,6 +46,7 @@ enum class Name {
     Export,
     History,
     Copy,     // تكرار
+    Record,   // دائرة ممتلئة لتسجيل الكاميرا
 };
 
 void paint(QPainter &painter, Name name, const QRectF &rect, const QColor &color);

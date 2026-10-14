@@ -16,6 +16,7 @@
 #include "imageio.h"
 #include "imageview.h"
 #include "persondialog.h"
+#include "recorder.h"
 #include "shotviewer.h"
 #include "timelineview.h"
 #include "personmodel.h"
@@ -360,6 +361,18 @@ MainWindow::MainWindow(QWidget *parent)
     // الاسترجاع يفتح القاعدة من جديد بمعرض جديد؛ بدونه يبقى التحليل الحي على أشخاص النسخة القديمة
     connect(&m_database, &FaceDatabase::personsReset, this, [this] { m_videoWorker->setGallery(m_database.gallery()); });
     m_videoWorker->setThreshold(threshold());
+    // التسجيل يتسلم الإطارات من خيط قراءة الكاميرا مباشرة، فيسجّل كل إطار ولو كان التحليل أبطأ أو متوقفاً
+    m_recorder = new CameraRecorder(this);
+    m_videoWorker->setRecorder(m_recorder);
+    m_recordTimer = new QTimer(this);
+    m_recordTimer->setInterval(1000);
+    connect(m_recordTimer, &QTimer::timeout, this, &MainWindow::updateRecordButton);
+    connect(m_recorder, &CameraRecorder::fileSaved, this, &MainWindow::addRecentFile);
+    connect(m_recorder, &CameraRecorder::failed, this, [this](const QString &error) {
+        stopRecording();
+        statusBar()->showMessage(error);
+        Toast::show(this, error, Toast::Kind::Warning);
+    });
     connect(m_videoThread, &QThread::finished, m_videoWorker, &QObject::deleteLater);
     connect(m_videoWorker, &VideoWorker::started, this, [this](int step, double fps, qint64 durationMs) {
         m_videoClock.start();
@@ -374,6 +387,8 @@ MainWindow::MainWindow(QWidget *parent)
         m_timeline->setRange(m_videoStartMs, m_videoEndMs);
         m_timeline->setAnalyzedUntil(m_videoStartMs);
         m_timelineCard->setVisible(!camera && durationMs > 0);
+        if (camera && m_autoRecordSwitch->isChecked())
+            startRecording();
     });
     connect(&m_frameWatcher, &QFutureWatcher<ShotFrame>::finished, this, &MainWindow::onVideoFrameLoaded);
     connect(m_videoWorker, &VideoWorker::frameReady, this, &MainWindow::onFrameReady);
@@ -454,6 +469,10 @@ void MainWindow::setupShortcuts()
     add(QKeySequence(Qt::Key_Space), [this] {
         if (m_videoRunning)
             togglePause();
+    });
+    add(QKeySequence(Qt::CTRL | Qt::Key_R), [this] {
+        if (m_recordButton->isVisible())
+            toggleRecording();
     });
     add(QKeySequence(Qt::Key_F5), [this] {
         if (!m_currentImagePath.isEmpty() && m_openImageButton->isEnabled())
@@ -619,6 +638,8 @@ MainWindow::~MainWindow()
     m_videoWorker->requestStop();
     m_videoThread->quit();
     m_videoThread->wait();
+    m_recorder->disconnect(this);
+    m_recorder->stop();
     m_imageWatcher.waitForFinished();
     m_frameWatcher.waitForFinished();
     // الصفحات والحوارات تنتظر أعمالها الخلفية في هدمها، وتلك الأعمال تستخدم m_engine و m_database؛
@@ -753,6 +774,12 @@ QWidget *MainWindow::createRecognitionPage()
                                               "أو كاميرا شبكة وجهاز تسجيل\nCtrl+Shift+C يشغّل آخر كاميرا"));
     m_pauseButton->setToolTip(QStringLiteral("إيقاف مؤقت / استئناف (مسافة)"));
     m_stopButton->setToolTip(QStringLiteral("إيقاف التحليل (Esc)"));
+    m_recordButton = new FancyButton(Icons::Name::Record, QStringLiteral("تسجيل"), FancyButton::Kind::Secondary, page);
+    m_recordButton->setCheckable(true);
+    m_recordButton->setToolTip(QStringLiteral("تسجيل بث الكاميرا إلى ملف فيديو MP4 (Ctrl+R)، بكل إطاراته وبعد معالجات الفيديو،\n"
+                                              "ويستمر التسجيل أثناء الإيقاف المؤقت للتحليل. يُفتح التسجيل لاحقاً ويُحلَّل كأي فيديو"));
+    m_recordButton->setVisible(false);
+    connect(m_recordButton, &QAbstractButton::clicked, this, &MainWindow::toggleRecording);
     m_saveFacesButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ الوجوه"), FancyButton::Kind::Secondary, page);
     m_saveFacesButton->setToolTip(QStringLiteral("حفظ صور الوجوه المكتشفة مع تقرير مرئي (HTML) وتقرير Excel (CSV) — Ctrl+S"));
     connect(m_openImageButton, &QAbstractButton::clicked, this, &MainWindow::openImage);
@@ -772,7 +799,7 @@ QWidget *MainWindow::createRecognitionPage()
     m_recentButton->setToolTip(QStringLiteral("آخر الصور والفيديوهات التي فُتحت"));
     connect(m_recentButton, &QAbstractButton::clicked, this, &MainWindow::showRecentMenu);
     m_headerButtons = {m_openImageButton, m_openVideoButton, m_recentButton, m_cameraButton, m_folderScanButton,
-                       m_pauseButton, m_stopButton, m_enhanceImageButton, m_saveFacesButton};
+                       m_pauseButton, m_recordButton, m_stopButton, m_enhanceImageButton, m_saveFacesButton};
 
     auto *header = new QHBoxLayout;
     auto *titles = new QVBoxLayout;
@@ -910,11 +937,21 @@ QWidget *MainWindow::createRecognitionPage()
     QWidget *rangeGroup = group({new QLabel(QStringLiteral("الجزء: من"), settings), m_rangeStart,
                                  new QLabel(QStringLiteral("إلى"), settings), m_rangeEnd});
     QWidget *regionGroup = group({m_filtersButton, m_regionButton, m_clearRegionButton, m_reanalyzeButton});
+    auto *recordFolderButton = new FancyButton(Icons::Name::Folder, QStringLiteral("مجلد التسجيلات"), FancyButton::Kind::Secondary, settings);
+    recordFolderButton->setToolTip(QStringLiteral("فتح مجلد تسجيلات الكاميرا أو تغييره"));
+    connect(recordFolderButton, &QAbstractButton::clicked, this, &MainWindow::showRecordFolderMenu);
+    m_autoRecordSwitch = new ToggleSwitch(QStringLiteral("تسجيل تلقائي"), settings);
+    m_autoRecordSwitch->setToolTip(QStringLiteral("يبدأ تسجيل الكاميرا وحده كلما شُغّلت"));
+    m_autoRecordSwitch->setChecked(CameraRecorder::autoRecord());
+    connect(m_autoRecordSwitch, &QAbstractButton::toggled, this, [](bool on) { CameraRecorder::setAutoRecord(on); });
+    m_recordGroup = group({new QLabel(QStringLiteral("تسجيل الكاميرا"), settings), m_autoRecordSwitch, recordFolderButton});
     m_videoSettings = {frameStepGroup, rangeGroup, regionGroup};
     settingsLayout->addWidget(frameStepGroup);
     settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo}));
     settingsLayout->addWidget(rangeGroup);
     settingsLayout->addWidget(regionGroup);
+    settingsLayout->addWidget(m_recordGroup);
+    m_recordGroup->setVisible(false);
     layout->addWidget(settings);
 
     m_progress = new QProgressBar(page);
@@ -1430,6 +1467,7 @@ void MainWindow::setBusy(bool busy)
     m_stopButton->setEnabled(m_videoRunning);
     m_pauseButton->setEnabled(m_videoRunning);
     m_pauseButton->setVisible(m_videoRunning);
+    updateRecordButton();
     m_saveFacesButton->setEnabled(!m_faces.isEmpty());
     m_enrollFaceButton->setEnabled(m_ready && m_faceList->currentRow() >= 0);
     updateVideoOptions();
@@ -1714,6 +1752,90 @@ void MainWindow::togglePause()
     }
 }
 
+void MainWindow::toggleRecording()
+{
+    if (m_recorder->isRecording())
+        stopRecording();
+    else
+        startRecording();
+}
+
+void MainWindow::startRecording()
+{
+    if (!m_videoRunning || !m_videoSource.startsWith(QStringLiteral("camera:")) || m_recorder->isRecording())
+        return;
+    const QString folder = CameraRecorder::savedFolder();
+    QString error;
+    // سرعة الكاميرا تُعرف بعد اتصالها؛ قبل ذلك تُعتبر 25 والمدة تُضبط على الوقت الفعلي على أي حال
+    if (!m_recorder->start(folder, m_cameraName, m_videoClock.isValid() ? m_videoFps : 0.0, &error)) {
+        updateRecordButton();
+        statusBar()->showMessage(error);
+        Toast::show(this, error, Toast::Kind::Warning);
+        return;
+    }
+    m_recordTimer->start();
+    updateRecordButton();
+    statusBar()->showMessage(QStringLiteral("جارٍ تسجيل الكاميرا «%1» في: %2").arg(m_cameraName, QDir::toNativeSeparators(folder)));
+    Toast::show(this, QStringLiteral("بدأ تسجيل الكاميرا"), Toast::Kind::Info);
+}
+
+QString MainWindow::stopRecording()
+{
+    const bool wasRecording = m_recorder->isRecording();
+    m_recorder->stop(); // ينتظر حفظ آخر ملف
+    m_recordTimer->stop();
+    updateRecordButton();
+    if (!wasRecording)
+        return {};
+    const QStringList files = m_recorder->files();
+    if (files.isEmpty()) {
+        Toast::show(this, QStringLiteral("لم يصل من الكاميرا ما يُسجَّل"), Toast::Kind::Warning);
+        return {};
+    }
+    const QString folder = QDir::toNativeSeparators(QFileInfo(files.last()).absolutePath());
+    const QString text = files.size() == 1
+        ? QStringLiteral("حُفظ التسجيل: %1").arg(QDir::toNativeSeparators(files.last()))
+        : QStringLiteral("حُفظ التسجيل في %1 ملفات في: %2").arg(files.size()).arg(folder);
+    statusBar()->showMessage(text + QStringLiteral(" · يُفتح من «الأخيرة» أو «مجلد التسجيلات»"));
+    Toast::show(this, QStringLiteral("حُفظ تسجيل الكاميرا"), Toast::Kind::Success);
+    return text;
+}
+
+void MainWindow::updateRecordButton()
+{
+    if (!m_recordButton || !m_recorder)
+        return;
+    const bool camera = m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:"));
+    const bool recording = m_recorder->isRecording();
+    m_recordButton->setVisible(camera || recording);
+    m_recordButton->setChecked(recording);
+    m_recordButton->setIconName(recording ? Icons::Name::Stop : Icons::Name::Record);
+    m_recordButton->setText(recording ? QStringLiteral("إيقاف التسجيل %1").arg(ImageIO::formatTime(m_recorder->elapsedMs()))
+                                      : QStringLiteral("تسجيل"));
+}
+
+void MainWindow::showRecordFolderMenu()
+{
+    const QString folder = CameraRecorder::savedFolder();
+    QMenu menu(this);
+    menu.addAction(QStringLiteral("فتح مجلد التسجيلات"), this, [folder] {
+        QDir().mkpath(folder);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(folder));
+    });
+    menu.addAction(QStringLiteral("تغيير المجلد…"), this, [this, folder] {
+        const QString chosen = QFileDialog::getExistingDirectory(this, QStringLiteral("مجلد تسجيلات الكاميرا"), folder);
+        if (chosen.isEmpty())
+            return;
+        CameraRecorder::setSavedFolder(chosen);
+        statusBar()->showMessage(QStringLiteral("تسجيلات الكاميرا تُحفظ في: %1%2")
+                                     .arg(QDir::toNativeSeparators(chosen),
+                                          m_recorder->isRecording() ? QStringLiteral(" (من التسجيل القادم)") : QString()));
+    });
+    menu.addSeparator();
+    menu.addAction(QDir::toNativeSeparators(folder))->setEnabled(false);
+    menu.exec(QCursor::pos());
+}
+
 void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress)
 {
     m_videoWorker->frameShown();
@@ -1792,6 +1914,8 @@ void MainWindow::onVideoFinished(const QString &error)
     }
     m_videoRunning = false;
     m_videoPaused = false;
+    // قبل إعادة معالجات الملفات، فلا تُطبَّق على آخر إطارات التسجيل
+    const QString recorded = stopRecording();
     if (!m_cameraId.isEmpty()) {
         VideoFilters::setCurrent(m_fileFilters, false);
         m_cameraId.clear();
@@ -1802,7 +1926,7 @@ void MainWindow::onVideoFinished(const QString &error)
     m_view->setBusy(false);
     m_progress->setVisible(false);
     if (!error.isEmpty()) {
-        statusBar()->showMessage(error);
+        statusBar()->showMessage(recorded.isEmpty() ? error : error + QStringLiteral(" · ") + recorded);
         Toast::show(this, error, Toast::Kind::Warning);
     } else {
         if (m_faceSort->currentIndex() != 0)
@@ -1810,8 +1934,8 @@ void MainWindow::onVideoFinished(const QString &error)
         recordSightings(m_videoSource);
         const QString summary = QStringLiteral("انتهى التحليل — أشخاص مختلفون: %1 · انقر نقراً مزدوجاً على وجه لعرض لقطاته")
                                     .arg(m_faces.size());
-        statusBar()->showMessage(summary);
-        Toast::show(this, summary, Toast::Kind::Info);
+        statusBar()->showMessage(recorded.isEmpty() ? summary : summary + QStringLiteral(" · ") + recorded);
+        Toast::show(this, recorded.isEmpty() ? summary : QStringLiteral("انتهى التحليل وحُفظ تسجيل الكاميرا"), Toast::Kind::Info);
     }
     setBusy(false);
 }
@@ -2485,6 +2609,7 @@ void MainWindow::setVideoSettingsVisible(bool visible)
 {
     for (QWidget *widget : std::as_const(m_videoSettings))
         widget->setVisible(visible);
+    m_recordGroup->setVisible(visible && m_videoSource.startsWith(QStringLiteral("camera:")));
 }
 
 // يجهّز قائمة صور المجلد الذي فيه الصورة الحالية، بترتيب طبيعي (2 قبل 10) كما في مستكشف الملفات

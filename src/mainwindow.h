@@ -26,6 +26,7 @@ class QListWidgetItem;
 class QListView;
 class PersonListModel;
 class QTimer;
+class CameraRecorder;
 class QProgressBar;
 class QSlider;
 class QSpinBox;
@@ -82,6 +83,12 @@ private:
     void startVideo(const QString &source);
     void stopVideo();
     void togglePause();
+    // تسجيل الكاميرا الجارية إلى ملفات فيديو
+    void toggleRecording();
+    void startRecording();
+    QString stopRecording(); // رسالة الحفظ، أو فارغ إن لم يكن التسجيل جارياً
+    void updateRecordButton();
+    void showRecordFolderMenu();
     void onImageAnalyzed();
     void onFrameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress);
     void onTrackUpdated(const FaceItem &track);
@@ -210,6 +217,11 @@ private:
     QTimer *m_laneTimer = nullptr;
     QHash<int, QPair<float, QPixmap>> m_laneAvatars; // صورة كل مسار مع جودة الوجه الذي صُنعت منه
     bool m_videoPaused = false;
+    CameraRecorder *m_recorder = nullptr;
+    QTimer *m_recordTimer = nullptr; // يحدّث مدة التسجيل على الزر
+    FancyButton *m_recordButton = nullptr;
+    QWidget *m_recordGroup = nullptr; // مجلد التسجيلات والتسجيل التلقائي، للكاميرا فقط
+    ToggleSwitch *m_autoRecordSwitch = nullptr;
     QElapsedTimer m_pauseClock;
     qint64 m_pausedMs = 0;
 
