@@ -6,6 +6,7 @@ on:
 
 env:
   OPENCV_VERSION: '4.10.0'
+  APP_VERSION: 3.0.${{ github.run_number }}
 
 jobs:
   build:
@@ -165,6 +166,64 @@ jobs:
           if ($titles -notcontains "ملامح") { throw "Main window not found" }
         shell: pwsh
 
+      - name: Worst-conditions recognition test
+        run: |
+          $base = "https://raw.githubusercontent.com/ageitgey/face_recognition/master"
+          $files = @{
+            'enroll\obama\obama.jpg'       = 'examples/obama.jpg'
+            'enroll\biden\biden.jpg'       = 'examples/knn_examples/train/biden/biden.jpg'
+            'enroll\kit\john1.jpeg'        = 'examples/knn_examples/train/kit_harington/john1.jpeg'
+            'enroll\rose\img1.jpg'         = 'examples/knn_examples/train/rose_leslie/img1.jpg'
+            'enroll\alex\img1.jpg'         = 'examples/knn_examples/train/alex_lacamoire/img1.jpg'
+            'probe\obama__2.jpg'           = 'examples/obama2.jpg'
+            'probe\obama__3.jpg'           = 'tests/test_images/obama3.jpg'
+            'probe\biden__2.jpg'           = 'examples/knn_examples/train/biden/biden2.jpg'
+            'probe\kit__test.jpg'          = 'examples/knn_examples/test/johnsnow_test1.jpg'
+            'probe\rose__2.jpg'            = 'examples/knn_examples/train/rose_leslie/img2.jpg'
+            'probe\alex__png.png'          = 'examples/alex-lacamoire.png'
+            'probe\obama+biden__pair.jpg'  = 'examples/knn_examples/test/obama_and_biden.jpg'
+            'probe\kit+rose__pair.jpg'     = 'examples/knn_examples/test/kit_with_rose.jpg'
+            'probe\unknown__lin.png'       = 'examples/lin-manuel-miranda.png'
+          }
+          foreach ($entry in $files.GetEnumerator()) {
+            $target = Join-Path "stress" $entry.Key
+            New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+            Invoke-WebRequest "$base/$($entry.Value)" -OutFile $target
+          }
+          $out = Join-Path $PWD "stress.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--stress-test', 'stress\enroll', 'stress\probe', $out -Wait -PassThru
+          $text = Get-Content $out -Raw
+          Write-Host "exit $($p.ExitCode):`n$text"
+          $wrong = [int](($text | Select-String 'total_wrong=(\d+)').Matches[0].Groups[1].Value)
+          $recall = [double](($text | Select-String 'recall=([\d.]+)').Matches[0].Groups[1].Value)
+          if ($wrong -gt 0) { throw "Wrong matches under bad conditions: $wrong" }
+          if ($recall -lt 0.95) { throw "Recognition under bad conditions dropped: $recall" }
+        shell: pwsh
+
+      - name: Build installer
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc /Q "/DAppVersion=$env:APP_VERSION" "/DSourceDir=$PWD\dist\Malamih" installer\malamih.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
+          Get-Item dist\Malamih-Setup.exe
+        shell: pwsh
+
+      - name: Installer test
+        run: |
+          $dir = Join-Path $PWD "installed"
+          $p = Start-Process dist\Malamih-Setup.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=$dir", '/TASKS=' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Installer failed with code $($p.ExitCode)" }
+          $out = Join-Path $PWD "installed.txt"
+          $p = Start-Process "$dir\Malamih.exe" -ArgumentList '--self-test', 'testdata\obama.jpg', 'testdata\obama2.jpg', $out -Wait -PassThru
+          Write-Host (Get-Content $out -Raw)
+          if ($p.ExitCode -ne 0) { throw "Installed app failed its self-test" }
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Uninstaller failed with code $($p.ExitCode)" }
+        shell: pwsh
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -176,3 +235,8 @@ jobs:
         with:
           name: Malamih-windows-x64
           path: dist/Malamih
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Malamih-Setup
+          path: dist/Malamih-Setup.exe
