@@ -61,7 +61,8 @@ jobs:
           New-Item -ItemType Directory dist\Malamih | Out-Null
           Copy-Item build\Malamih.exe, build\*.dll dist\Malamih\
           Copy-Item build\models dist\Malamih\models -Recurse
-          windeployqt --release --no-translations dist\Malamih\Malamih.exe
+          windeployqt --release --no-translations --no-compiler-runtime dist\Malamih\Malamih.exe
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
           $crt = Get-ChildItem "$env:VCToolsRedistDir\x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
           if (-not $crt) { throw "MSVC runtime not found under $env:VCToolsRedistDir" }
           Copy-Item "$($crt.FullName)\*.dll" dist\Malamih\
@@ -143,13 +144,17 @@ jobs:
         shell: pwsh
 
       - name: Camera test
-        timeout-minutes: 6
+        timeout-minutes: 8
         run: |
-          # صيغ عناوين الكاميرات وحفظها، ثم الفيديو يُبث كأنه كاميرا شبكة مع انقطاع وعودة إن وُجد ffmpeg
+          # صيغ عناوين الكاميرات وحفظها، ثم الفيديو يُبث بـ ffmpeg كأنه كاميرا شبكة مع انقطاع وعودة واكتشاف تلقائي
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress | Out-Null }
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw "ffmpeg not available for the live camera test" }
           $out = Join-Path $PWD "camera.txt"
           $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--camera-test', (Join-Path $PWD "testdata\clip.mp4"), $out -Wait -PassThru
-          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          $text = Get-Content $out -Raw
+          Write-Host "exit $($p.ExitCode):`n$text"
           if ($p.ExitCode -ne 0) { throw "Camera test failed" }
+          if ($text -match 'live=skipped') { throw "Live camera part was skipped" }
         shell: pwsh
 
       - name: Smoke test

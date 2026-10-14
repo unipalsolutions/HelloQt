@@ -14,6 +14,8 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPointer>
+#include <QProcess>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -55,42 +57,6 @@ const QList<QPair<int, int>> &resolutions()
     return list;
 }
 
-QString localHelp()
-{
-    return QStringLiteral(
-        "<b>كيف أوصل الكاميرا باللابتوب مباشرة؟</b>"
-        "<ul style='margin-right:-20px'>"
-        "<li><b>كاميرا USB</b> (ويب أو مؤتمرات): تُوصل بمنفذ USB وتظهر فوراً في القائمة.</li>"
-        "<li><b>كاميرا مراقبة تناظرية</b> (سلك محوري BNC): محوّل «USB Video Capture» مثل EasyCAP، "
-        "مع وصلة BNC إلى RCA ومحوّل كهرباء 12 فولت للكاميرا. فعّل «إزالة التشابك» من «معالجات».</li>"
-        "<li><b>كاميرات AHD / TVI / CVI</b> (تناظرية عالية الدقة): المحوّل الرخيص لا يقرؤها؛ حوّل الكاميرا إلى "
-        "وضع CVBS من قائمتها (زر أو سلك التحكم)، أو استخدم محوّل AHD إلى HDMI ثم بطاقة التقاط HDMI.</li>"
-        "<li><b>كاميرا فيديو أو احترافية أو مخرج HDMI لجهاز تسجيل DVR</b>: بطاقة التقاط HDMI إلى USB "
-        "(مثل Cam Link). كاميرات SDI تحتاج محوّل SDI إلى HDMI قبلها.</li>"
-        "<li><b>الهاتف بسلك USB</b>: تطبيق DroidCam أو Camo يجعله كاميرا ويب على الجهاز.</li>"
-        "</ul>"
-        "كل هذه تظهر للنظام كاميرا برقم. إن لم تعمل الصورة جرّب «طريقة الالتقاط» الأخرى أو دقة أقل، "
-        "وأغلق أي برنامج آخر يستخدم الكاميرا.");
-}
-
-QString networkHelp()
-{
-    const QStringList mine = Cameras::localAddresses();
-    return QStringLiteral(
-               "<b>كاميرات الشبكة وأجهزة التسجيل</b>"
-               "<ul style='margin-right:-20px'>"
-               "<li><b>سلك مباشر من الكاميرا إلى اللابتوب</b>: كاميرا PoE تحتاج «حاقن PoE» صغيراً يعطيها الكهرباء. "
-               "اضبط عنوان اللابتوب يدوياً على نطاق الكاميرا: إن كانت 192.168.1.64 فاجعل اللابتوب 192.168.1.10 "
-               "والقناع 255.255.255.0.</li>"
-               "<li><b>عبر الراوتر أو Wi-Fi</b>: الكاميرا واللابتوب على الشبكة نفسها؛ عنوان الكاميرا من تطبيقها أو من صفحة الراوتر.</li>"
-               "<li><b>جهاز تسجيل DVR / NVR</b>: عنوان الجهاز نفسه، والقناة رقم الكاميرا فيه. الكاميرات التناظرية "
-               "الموصولة بالجهاز تصل بهذه الطريقة أيضاً.</li>"
-               "<li><b>البث الفرعي</b> أخف وأسرع عبر Wi-Fi، والرئيسي أوضح للوجوه البعيدة.</li>"
-               "</ul>")
-        + QStringLiteral("عناوين هذا اللابتوب الآن: <b>%1</b>")
-              .arg(mine.isEmpty() ? QStringLiteral("غير متصل بأي شبكة") : mine.join(QStringLiteral("، ")));
-}
-
 } // namespace
 
 CameraDialog::CameraDialog(QWidget *parent, const QString &selectId)
@@ -119,13 +85,10 @@ CameraDialog::CameraDialog(QWidget *parent, const QString &selectId)
     listColumn->addLayout(listButtons);
     layout->addLayout(listColumn, 0);
 
-    auto *addMenu = new QMenu(this);
-    addMenu->addAction(Icons::icon(Icons::Name::Camera, Theme::Text), QStringLiteral("كاميرا موصولة بالجهاز (USB، تناظرية، HDMI)"),
-                       this, [this] { addCamera(Cameras::Kind::Local); });
-    addMenu->addAction(Icons::icon(Icons::Name::Video, Theme::Text), QStringLiteral("كاميرا شبكة أو جهاز تسجيل (IP / RTSP)"),
-                       this, [this] { addCamera(Cameras::Kind::Network); });
-    connect(addButton, &QAbstractButton::clicked, this, [addButton, addMenu] {
-        addMenu->exec(addButton->mapToGlobal(QPoint(0, addButton->height())));
+    connect(addButton, &QAbstractButton::clicked, this, [this] {
+        const QString via = chooseConnection();
+        if (!via.isEmpty())
+            addCamera(via);
     });
     connect(m_removeButton, &QAbstractButton::clicked, this, &CameraDialog::removeCamera);
     connect(m_list, &QListWidget::currentRowChanged, this, &CameraDialog::select);
@@ -191,6 +154,33 @@ CameraDialog::CameraDialog(QWidget *parent, const QString &selectId)
     hostLayout->addWidget(new QLabel(QStringLiteral("المنفذ"), hostField));
     hostLayout->addWidget(m_port);
     network->addWidget(formRow(QStringLiteral("العنوان (IP)"), hostField, m_networkBox));
+    m_hostCheck = new QLabel(m_networkBox);
+    m_hostCheck->setWordWrap(true);
+    m_hostCheck->setTextFormat(Qt::RichText);
+    m_hostCheck->setStyleSheet(QStringLiteral("color: %1;").arg(Theme::Warning.name()));
+    m_hostCheck->setVisible(false);
+    network->addWidget(m_hostCheck);
+    m_findButton = new FancyButton(Icons::Name::Scan, QStringLiteral("البحث في الشبكة"), FancyButton::Kind::Secondary, m_networkBox);
+    m_findButton->setToolTip(QStringLiteral("يجد الكاميرات وأجهزة التسجيل الموصولة بشبكة اللابتوب أو بسلكه مباشرة"));
+    m_detectButton = new FancyButton(Icons::Name::Check, QStringLiteral("اكتشاف تلقائي"), FancyButton::Kind::Secondary, m_networkBox);
+    m_detectButton->setToolTip(QStringLiteral("يجرّب أنواع الكاميرات المعروفة على العنوان والمستخدم حتى تظهر الصورة"));
+    m_netSettingsButton = new FancyButton(Icons::Name::Video, QStringLiteral("إعدادات الشبكة"), FancyButton::Kind::Secondary, m_networkBox);
+    m_netSettingsButton->setToolTip(QStringLiteral("فتح اتصالات الشبكة في ويندوز لضبط عنوان اللابتوب للسلك المباشر"));
+#ifndef Q_OS_WIN
+    m_netSettingsButton->setVisible(false);
+#endif
+    auto *helpers = new QHBoxLayout;
+    helpers->setContentsMargins(110, 0, 0, 0);
+    helpers->addWidget(m_findButton);
+    helpers->addWidget(m_detectButton);
+    helpers->addWidget(m_netSettingsButton);
+    helpers->addStretch();
+    network->addLayout(helpers);
+    connect(m_findButton, &QAbstractButton::clicked, this, &CameraDialog::findCameras);
+    connect(m_detectButton, &QAbstractButton::clicked, this, &CameraDialog::detectCamera);
+    connect(m_netSettingsButton, &QAbstractButton::clicked, this, [] {
+        QProcess::startDetached(QStringLiteral("control.exe"), {QStringLiteral("ncpa.cpl")});
+    });
     m_channel = new QSpinBox(m_networkBox);
     m_channel->setRange(1, 128);
     m_channel->setToolTip(QStringLiteral("رقم الكاميرا في جهاز التسجيل؛ 1 للكاميرا المنفردة"));
@@ -345,13 +335,76 @@ void CameraDialog::select(int row)
     loadForm();
 }
 
-void CameraDialog::addCamera(Cameras::Kind kind)
+QString CameraDialog::chooseConnection()
+{
+    QDialog chooser(this);
+    chooser.setWindowTitle(QStringLiteral("إضافة كاميرا"));
+    auto *layout = new QVBoxLayout(&chooser);
+    layout->setSpacing(8);
+    auto *question = new QLabel(QStringLiteral("<b>كيف الكاميرا موصولة؟</b>"), &chooser);
+    question->setStyleSheet(QStringLiteral("font-size: 16px;"));
+    layout->addWidget(question);
+    auto *hint = new QLabel(QStringLiteral("اختر الأقرب لحالتك، وسيعرض البرنامج خطوات التوصيل خطوة بخطوة."), &chooser);
+    hint->setObjectName(QStringLiteral("muted"));
+    layout->addWidget(hint);
+    QString chosen;
+    auto *columns = new QHBoxLayout;
+    columns->setSpacing(16);
+    for (const Cameras::Kind kind : {Cameras::Kind::Local, Cameras::Kind::Network}) {
+        auto *column = new QVBoxLayout;
+        column->addWidget(sectionTitle(kind == Cameras::Kind::Local ? QStringLiteral("بسلك في اللابتوب مباشرة")
+                                                                    : QStringLiteral("عبر الشبكة"),
+                                       &chooser));
+        for (const Cameras::Connection &c : Cameras::connections()) {
+            if (c.kind != kind)
+                continue;
+            auto *card = new QPushButton(&chooser);
+            card->setCursor(Qt::PointingHandCursor);
+            card->setMinimumSize(330, 66);
+            card->setStyleSheet(QStringLiteral("QPushButton { text-align: right; border-radius: 10px; padding: 0; }"));
+            auto *cardLayout = new QHBoxLayout(card);
+            cardLayout->setContentsMargins(12, 8, 12, 8);
+            auto *icon = new QLabel(card);
+            icon->setPixmap(Icons::icon(kind == Cameras::Kind::Local ? Icons::Name::Camera : Icons::Name::Video, Theme::Accent)
+                                .pixmap(26, 26));
+            cardLayout->addWidget(icon);
+            auto *texts = new QVBoxLayout;
+            texts->setSpacing(2);
+            auto *title = new QLabel(QStringLiteral("<b>%1</b>").arg(c.title), card);
+            auto *description = new QLabel(c.description, card);
+            description->setObjectName(QStringLiteral("muted"));
+            description->setWordWrap(true);
+            texts->addWidget(title);
+            texts->addWidget(description);
+            cardLayout->addLayout(texts, 1);
+            for (QLabel *label : {icon, title, description})
+                label->setAttribute(Qt::WA_TransparentForMouseEvents);
+            connect(card, &QPushButton::clicked, &chooser, [&chooser, &chosen, key = c.key] {
+                chosen = key;
+                chooser.accept();
+            });
+            column->addWidget(card);
+        }
+        column->addStretch();
+        columns->addLayout(column, 1);
+    }
+    layout->addLayout(columns);
+    auto *cancel = new FancyButton(Icons::Name::Check, QStringLiteral("إلغاء"), FancyButton::Kind::Secondary, &chooser);
+    connect(cancel, &QAbstractButton::clicked, &chooser, &QDialog::reject);
+    layout->addWidget(cancel, 0, Qt::AlignLeft);
+    return chooser.exec() == QDialog::Accepted ? chosen : QString();
+}
+
+void CameraDialog::addCamera(const QString &via)
 {
     storeForm();
+    const Cameras::Connection &how = Cameras::connection(via);
     Cameras::Camera c;
     c.id = Cameras::newId();
-    c.kind = kind;
-    if (kind == Cameras::Kind::Local) {
+    c.kind = how.kind;
+    c.via = how.key;
+    if (c.kind == Cameras::Kind::Local) {
+        m_devices = Cameras::localDevices();
         // أول كاميرا موصولة لم تُحفظ بعد
         int index = m_devices.isEmpty() ? 0 : m_devices.first().index;
         for (const Cameras::LocalDevice &d : m_devices) {
@@ -366,11 +419,18 @@ void CameraDialog::addCamera(Cameras::Kind kind)
         c.index = index;
         c.name = Cameras::localName(index, m_devices);
     } else {
-        int count = 1;
-        for (const Cameras::Camera &x : m_cameras)
-            count += x.kind == Cameras::Kind::Network ? 1 : 0;
-        c.name = QStringLiteral("كاميرا شبكة %1").arg(count);
+        c.brand = how.brand;
         c.port = Cameras::brand(c.brand).port;
+        if (via == QLatin1String("recorder")) {
+            c.name = QStringLiteral("جهاز التسجيل - قناة 1");
+        } else if (via == QLatin1String("phone_wifi")) {
+            c.name = QStringLiteral("الهاتف");
+        } else {
+            int count = 1;
+            for (const Cameras::Camera &x : m_cameras)
+                count += x.kind == Cameras::Kind::Network ? 1 : 0;
+            c.name = QStringLiteral("كاميرا شبكة %1").arg(count);
+        }
     }
     m_cameras.append(c);
     rebuildList();
@@ -412,8 +472,7 @@ void CameraDialog::loadForm()
     m_loading = true;
     m_form->setEnabled(camera);
     m_removeButton->setEnabled(camera);
-    m_testButton->setEnabled(camera);
-    m_startButton->setEnabled(camera);
+    setBusy(false);
     const bool network = camera && camera->kind == Cameras::Kind::Network;
     m_localBox->setVisible(camera && !network);
     m_networkBox->setVisible(network);
@@ -494,18 +553,160 @@ void CameraDialog::storeForm()
 void CameraDialog::updateUrl()
 {
     const Cameras::Camera *camera = current();
-    m_url->setText(camera && camera->kind == Cameras::Kind::Network ? camera->url(false) : QString());
+    const bool network = camera && camera->kind == Cameras::Kind::Network;
+    m_url->setText(network ? camera->url(false) : QString());
+    // كاميرا على نطاق آخر لا يصلها اللابتوب: يُقال ذلك قبل الاختبار مع العنوان المطلوب
+    const QString host = network ? camera->host.trimmed() : QString();
+    const bool away = !host.isEmpty() && !Cameras::onLocalNetwork(host);
+    m_hostCheck->setVisible(away);
+    if (away)
+        m_hostCheck->setText(QStringLiteral("⚠ هذا العنوان ليس على شبكة اللابتوب. إن كانت الكاميرا موصولة بسلك مباشر فاجعل عنوان "
+                                            "اللابتوب <b>%1</b> والقناع 255.255.255.0 من «إعدادات الشبكة».")
+                                 .arg(Cameras::suggestedAddress(host)));
 }
 
 void CameraDialog::updateHelp()
 {
     const Cameras::Camera *camera = current();
     if (!camera) {
-        m_help->setText(QStringLiteral("<b>لا توجد كاميرات محفوظة بعد.</b><br>اضغط «إضافة كاميرا» واختر نوعها.<br><br>") + localHelp()
-                        + QStringLiteral("<br><br>") + networkHelp());
+        m_help->setText(QStringLiteral("<b>لا توجد كاميرات محفوظة بعد.</b><br><br>اضغط «إضافة كاميرا» واختر كيف الكاميرا موصولة: "
+                                       "بسلك USB، أو كاميرا مراقبة بمحوّل، أو عبر الشبكة، أو جهاز تسجيل، أو الهاتف. "
+                                       "يعرض البرنامج بعدها خطوات التوصيل خطوة بخطوة."));
         return;
     }
-    m_help->setText(camera->kind == Cameras::Kind::Network ? networkHelp() : localHelp());
+    QString via = camera->via;
+    if (via.isEmpty())
+        via = camera->kind == Cameras::Kind::Network ? QStringLiteral("router") : QStringLiteral("usb");
+    m_help->setText(Cameras::steps(via));
+}
+
+void CameraDialog::setBusy(bool busy)
+{
+    const bool enabled = !busy && current();
+    m_testButton->setEnabled(enabled);
+    m_findButton->setEnabled(enabled);
+    m_detectButton->setEnabled(enabled);
+    // الاختبار يُبقي الكاميرا الموصولة مفتوحة، فلا تُشغَّل قبل أن يتركها
+    m_startButton->setEnabled(enabled);
+}
+
+void CameraDialog::findCameras()
+{
+    storeForm();
+    if (!current())
+        return;
+    const int token = ++m_testToken;
+    setBusy(true);
+    m_status->setStyleSheet(QString());
+    m_status->setText(QStringLiteral("جارٍ البحث عن الكاميرات في الشبكة… (حتى 10 ثوانٍ)"));
+    QtConcurrent::run([] { return Cameras::discover(); }).then(this, [this, token](const QList<Cameras::Found> &found) {
+        setBusy(false);
+        if (token != m_testToken)
+            return;
+        if (found.isEmpty()) {
+            showPreview(QImage(),
+                        QStringLiteral("لم يُعثر على كاميرا. تأكد أن الكاميرا تعمل (ضوءها مضاء) وأن السلك موصول، وأن اللابتوب "
+                                       "على شبكة الكاميرا نفسها. بعض الكاميرات لا تعلن عن نفسها: اكتب عنوانها من تطبيقها أو "
+                                       "من شاشة جهاز التسجيل."),
+                        false);
+            return;
+        }
+        QMenu menu(this);
+        for (const Cameras::Found &f : found) {
+            QString text = f.host;
+            if (!f.model.isEmpty())
+                text += QStringLiteral(" · ") + f.model;
+            else if (f.brand != QLatin1String("rtsp"))
+                text += QStringLiteral(" · ") + Cameras::brand(f.brand).name;
+            if (!f.sameNetwork)
+                text += QStringLiteral("  (يحتاج ضبط عنوان اللابتوب)");
+            QAction *action = menu.addAction(Icons::icon(Icons::Name::Video, Theme::Text), text);
+            action->setData(int(&f - found.constData()));
+        }
+        m_status->setText(QStringLiteral("وُجد %1. اختر الكاميرا من القائمة.").arg(found.size()));
+        QAction *picked = menu.exec(m_findButton->mapToGlobal(QPoint(0, m_findButton->height())));
+        Cameras::Camera *camera = current();
+        if (!picked || !camera || camera->kind != Cameras::Kind::Network)
+            return;
+        const Cameras::Found f = found.at(picked->data().toInt());
+        camera->host = f.host;
+        // الشركة تُضبط إن عُرفت؛ وإلا يبقى النوع ويكشفه «اكتشاف تلقائي»
+        if (f.brand != QLatin1String("rtsp")) {
+            camera->brand = f.brand;
+            camera->port = f.port;
+        }
+        loadForm();
+        if (!f.sameNetwork)
+            showPreview(QImage(),
+                        QStringLiteral("الكاميرا على %1 وهو نطاق غير نطاق اللابتوب. اضغط «إعدادات الشبكة» واجعل عنوان اللابتوب "
+                                       "%2 والقناع 255.255.255.0، ثم اكتب مستخدم الكاميرا وكلمة مرورها واضغط «اكتشاف تلقائي».")
+                            .arg(f.host, Cameras::suggestedAddress(f.host)),
+                        false);
+        else
+            showPreview(QImage(),
+                        QStringLiteral("تم اختيار %1. اكتب اسم المستخدم وكلمة المرور، ثم اضغط «اكتشاف تلقائي» أو «اختبار».").arg(f.host),
+                        true);
+    });
+}
+
+void CameraDialog::detectCamera()
+{
+    storeForm();
+    const Cameras::Camera *camera = current();
+    if (!camera || camera->kind != Cameras::Kind::Network)
+        return;
+    const int token = ++m_testToken;
+    setBusy(true);
+    m_preview->clear();
+    m_preview->setText(QStringLiteral("جارٍ تجربة أنواع الكاميرات…"));
+    m_status->setStyleSheet(QString());
+    m_status->clear();
+    const Cameras::Camera spec = *camera;
+    QPointer<CameraDialog> self(this);
+    struct Detected
+    {
+        bool ok = false;
+        Cameras::Camera camera;
+        QImage image;
+        QString error;
+    };
+    QtConcurrent::run([spec, self, token] {
+        Detected d;
+        d.camera = spec;
+        cv::Mat frame;
+        d.ok = Cameras::detect(d.camera, &frame, &d.error, [self, token](const QString &text) {
+            QMetaObject::invokeMethod(
+                qApp,
+                [self, token, text] {
+                    if (self && token == self->m_testToken)
+                        self->m_status->setText(text);
+                },
+                Qt::QueuedConnection);
+        });
+        if (!frame.empty())
+            d.image = ImageIO::toQImage(frame);
+        return d;
+    }).then(this, [this, token](const Detected &d) {
+        setBusy(false);
+        if (token != m_testToken)
+            return;
+        Cameras::Camera *camera = current();
+        if (!d.ok || !camera || camera->id != d.camera.id) {
+            showPreview(QImage(), d.error, false);
+            return;
+        }
+        camera->brand = d.camera.brand;
+        camera->port = d.camera.port;
+        camera->path = d.camera.path;
+        camera->substream = d.camera.substream;
+        loadForm();
+        showPreview(d.image,
+                    QStringLiteral("✓ تم التعرف على الكاميرا: %1 · %2×%3. اضغط «تشغيل الكاميرا».")
+                        .arg(Cameras::brand(d.camera.brand).name)
+                        .arg(d.image.width())
+                        .arg(d.image.height()),
+                    true);
+    });
 }
 
 void CameraDialog::showPreview(const QImage &image, const QString &text, bool ok)
@@ -525,7 +726,7 @@ void CameraDialog::testConnection()
     if (!camera)
         return;
     const int token = ++m_testToken;
-    m_testButton->setEnabled(false);
+    setBusy(true);
     m_preview->clear();
     m_preview->setText(QStringLiteral("جارٍ الاتصال بالكاميرا…"));
     m_status->setStyleSheet(QString());
@@ -539,11 +740,17 @@ void CameraDialog::testConnection()
             result.image = ImageIO::toQImage(frame);
         return result;
     }).then(this, [this, token](const TestResult &result) {
-        m_testButton->setEnabled(current());
+        setBusy(false);
         if (token != m_testToken)
             return;
+        const Cameras::Camera *camera = current();
         if (result.image.isNull())
-            showPreview(QImage(), result.error, false);
+            showPreview(QImage(),
+                        result.error
+                            + (camera && camera->kind == Cameras::Kind::Network && !camera->host.trimmed().isEmpty()
+                                   ? QStringLiteral("\n\nلا تعرف الإعدادات الصحيحة؟ اضغط «اكتشاف تلقائي».")
+                                   : QString()),
+                        false);
         else
             showPreview(result.image, QStringLiteral("✓ الكاميرا تعمل · %1").arg(result.info), true);
     });

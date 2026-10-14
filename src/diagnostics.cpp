@@ -21,6 +21,7 @@
 #include <QSet>
 #include <QTextStream>
 #include <QThread>
+#include <QtConcurrent>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -1122,6 +1123,7 @@ int cameraTest(const QString &videoPath, QTextStream &out)
     usb.index = 1;
     usb.width = 720;
     usb.height = 576;
+    usb.via = QStringLiteral("analog");
     Cameras::save({hik, usb});
     VideoFilters::Settings night = VideoFilters::preset(VideoFilters::Preset::Night, VideoFilters::Settings());
     night.quarterTurns = 2;
@@ -1134,7 +1136,8 @@ int cameraTest(const QString &videoPath, QTextStream &out)
     const bool hidden = QSettings().value(QStringLiteral("cameras/list/1/password")).toString() != hik.password;
     const QList<bool> checks = {loaded.size() == 2, resolved, found.password == hik.password, found.url() == hikUrl,
         found.hasFilters, found.filters == night, found.source() == QLatin1String("camera:") + hik.id,
-        loaded.size() == 2 && loaded.at(1).width == 720, loaded.size() == 2 && !loaded.at(1).hasFilters, localOk, missingOk, hidden};
+        loaded.size() == 2 && loaded.at(1).width == 720, loaded.size() == 2 && !loaded.at(1).hasFilters, localOk, missingOk, hidden,
+        loaded.size() == 2 && loaded.at(1).via == QLatin1String("analog")};
     QString failed;
     for (int i = 0; i < checks.size(); ++i) {
         if (!checks.at(i))
@@ -1149,22 +1152,48 @@ int cameraTest(const QString &videoPath, QTextStream &out)
     out << "storage=" << storage << " last=" << last << "\n";
     out << "local_devices=" << Cameras::localDevices().size() << " addresses=" << Cameras::localAddresses().join(QLatin1Char(',')) << "\n";
 
+    // مساعدات التوصيل: العنوان المقترح للابتوب، والشبكة، وخطوات كل طريقة
+    bool guide = Cameras::suggestedAddress(QStringLiteral("192.168.1.64")) == QLatin1String("192.168.1.200")
+        && Cameras::suggestedAddress(QStringLiteral("10.0.5.200")) == QLatin1String("10.0.5.201")
+        && Cameras::onLocalNetwork(QStringLiteral("127.0.0.1")) && Cameras::onLocalNetwork(QStringLiteral("camera.local"))
+        && !Cameras::onLocalNetwork(QStringLiteral("203.0.113.7")) && Cameras::connections().size() == 8;
+    for (const Cameras::Connection &c : Cameras::connections())
+        guide = guide && Cameras::connection(c.key).key == c.key && Cameras::steps(c.key).contains(QLatin1String("<ol"));
+    out << "guide=" << guide << "\n";
+
+    // البحث في الشبكة ينتهي في وقت معقول ولو لم توجد كاميرات
+    QElapsedTimer timer;
+    timer.start();
+    const QList<Cameras::Found> nearby = Cameras::discover();
+    const bool discovered = timer.elapsed() < 30000;
+    out << "discover=" << discovered << " found=" << nearby.size() << " " << timer.elapsed() << "ms\n";
+
+    // الاكتشاف التلقائي على عنوان لا يرد: فشل مفهوم دون تغيير الكاميرا
+    Cameras::Camera nobody;
+    nobody.kind = Cameras::Kind::Network;
+    nobody.host = QStringLiteral("127.0.0.1");
+    QString detectError;
+    timer.restart();
+    const bool detectFails = !Cameras::detect(nobody, nullptr, &detectError) && !detectError.isEmpty()
+        && nobody.brand == QLatin1String("hikvision") && timer.elapsed() < 20000;
+    out << "detect_unreachable=" << detectFails << " " << timer.elapsed() << "ms\n";
+
     // عنوان لا يرد عليه أحد: الفشل سريع وسببه مفهوم
     Cameras::Camera dead;
     dead.kind = Cameras::Kind::Network;
     dead.brand = QStringLiteral("rtsp");
     dead.host = QStringLiteral("127.0.0.1");
     dead.port = 1;
-    QElapsedTimer timer;
-    timer.start();
+    timer.restart();
     QString deadError;
     const bool deadFails = Cameras::snapshot(dead, &deadError).empty() && !deadError.isEmpty() && timer.elapsed() < 20000;
     out << "unreachable=" << deadFails << " " << timer.elapsed() << "ms " << deadError.section(QLatin1Char('\n'), 0, 0) << "\n";
 
     bool live = true;
+    bool detected = true;
     const QString ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
     if (videoPath != QLatin1String("-") && !ffmpeg.isEmpty()) {
-        const QString url = QStringLiteral("http://127.0.0.1:8090/video");
+        const QString url = QStringLiteral("http://127.0.0.1:8080/video"); // منفذ تطبيق IP Webcam ومساره
         QProcess server;
         server.setStandardOutputFile(QProcess::nullDevice());
         server.setStandardErrorFile(QProcess::nullDevice());
@@ -1202,6 +1231,24 @@ int cameraTest(const QString &videoPath, QTextStream &out)
         }
         stopServer();
 
+        // الاكتشاف التلقائي من العنوان وحده يصل إلى صيغة الهاتف
+        startServer();
+        QThread::msleep(800);
+        Cameras::Camera guess;
+        guess.kind = Cameras::Kind::Network;
+        guess.host = QStringLiteral("127.0.0.1");
+        cv::Mat guessed;
+        QString guessError;
+        // خادم ffmpeg يخدم اتصالاً واحداً ثم يخرج، وفحص المنافذ يستهلك اتصالاً: يُعاد تشغيله حتى ينتهي الاكتشاف
+        QFuture<bool> detecting = QtConcurrent::run([&] { return Cameras::detect(guess, &guessed, &guessError); });
+        while (!detecting.isFinished()) {
+            if (server.waitForFinished(50))
+                startServer();
+        }
+        detected = detecting.result() && guess.brand == QLatin1String("phone") && !guessed.empty();
+        out << "detect=" << detected << " " << guess.url(false) << " " << guessError << "\n";
+        stopServer();
+
         // التحليل كاملاً من كاميرا محفوظة، مع قطع البث ثم إعادته
         Cameras::save({hik, usb, stream});
         FaceEngine engine;
@@ -1237,7 +1284,7 @@ int cameraTest(const QString &videoPath, QTextStream &out)
         const bool snapshotAfter = worker.lastCameraFrame().empty();
         out << "worker_frames=" << frames << " lost_attempts=" << lost << " restored=" << restored
             << " frames_after=" << framesAfter << " error=" << error << " elapsed_ms=" << timer.elapsed() << "\n";
-        live = read >= 30 && frames >= 45 && lost >= 1 && restored == 1 && framesAfter >= 20 && error.isEmpty() && snapshotAfter;
+        live = detected && read >= 30 && frames >= 45 && lost >= 1 && restored == 1 && framesAfter >= 20 && error.isEmpty() && snapshotAfter;
     } else {
         out << "live=skipped\n";
     }
@@ -1248,7 +1295,7 @@ int cameraTest(const QString &videoPath, QTextStream &out)
         QSettings settings;
         settings.remove(QStringLiteral("cameras"));
     }
-    return urls && secrets && storage && last && deadFails && live ? 0 : 1;
+    return urls && secrets && storage && last && guide && discovered && detectFails && deadFails && live ? 0 : 1;
 }
 
 } // namespace

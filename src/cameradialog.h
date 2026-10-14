@@ -29,7 +29,9 @@ public:
 private:
     void rebuildList();
     void select(int row);
-    void addCamera(Cameras::Kind kind);
+    // يسأل كيف الكاميرا موصولة؛ مفتاح Connection أو فارغ إن ألغى
+    QString chooseConnection();
+    void addCamera(const QString &via);
     void removeCamera();
     void refreshDevices();
     void loadForm();
@@ -37,6 +39,9 @@ private:
     void updateUrl();
     void updateHelp();
     void testConnection();
+    void findCameras();
+    void detectCamera();
+    void setBusy(bool busy);
     void showPreview(const QImage &image, const QString &text, bool ok);
     Cameras::Camera *current();
 
@@ -72,6 +77,10 @@ private:
     QLineEdit *m_user = nullptr;
     QLineEdit *m_password = nullptr;
     QLabel *m_url = nullptr;
+    QLabel *m_hostCheck = nullptr;
+    FancyButton *m_findButton = nullptr;
+    FancyButton *m_detectButton = nullptr;
+    FancyButton *m_netSettingsButton = nullptr;
 
     QLabel *m_preview = nullptr;
     QLabel *m_status = nullptr;

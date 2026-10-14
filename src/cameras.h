@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <thread>
 
@@ -37,11 +38,26 @@ struct Brand
 const QList<Brand> &brands();
 const Brand &brand(const QString &key);
 
+// طريقة توصيل الكاميرا كما يفهمها المستخدم؛ تحدد نوعها وخطوات الشرح المناسبة لها
+struct Connection
+{
+    QString key;
+    QString title;
+    QString description;
+    Kind kind = Kind::Local;
+    QString brand; // نوع الكاميرا الافتراضي لكاميرات الشبكة
+};
+const QList<Connection> &connections();
+const Connection &connection(const QString &key);
+// خطوات التوصيل بلغة بسيطة (HTML)
+QString steps(const QString &key);
+
 struct Camera
 {
     QString id; // فارغ لكاميرا موصولة غير محفوظة
     QString name;
     Kind kind = Kind::Local;
+    QString via; // مفتاح Connection؛ فارغ للكاميرات المحفوظة قبل إضافته
 
     // كاميرا موصولة بالجهاز
     int index = 0;
@@ -89,6 +105,24 @@ QString localName(int index, const QList<LocalDevice> &devices);
 
 // عناوين IPv4 لهذا الجهاز، لضبط الكاميرا الموصولة بسلك مباشر على النطاق نفسه
 QStringList localAddresses();
+// هل العنوان على إحدى شبكات هذا الجهاز؛ true لاسم نطاق أو عنوان لا يُفحص
+bool onLocalNetwork(const QString &host);
+// عنوان يُعطى للابتوب ليصل إلى كاميرا موصولة بسلك مباشر، مثل 192.168.1.200 للكاميرا 192.168.1.64
+QString suggestedAddress(const QString &cameraHost);
+
+// كاميرا وُجدت في الشبكة
+struct Found
+{
+    QString host;
+    QString brand; // مفتاح Brand إن عُرفت الشركة، وإلا "rtsp"
+    QString model; // الاسم أو الطراز كما تعلنه الكاميرا
+    int port = 554;
+    bool sameNetwork = true; // false: تحتاج ضبط عنوان اللابتوب أولاً
+};
+// يبحث بـ ONVIF ثم بفحص منافذ البث في شبكة اللابتوب؛ يستغرق ثواني ويُستدعى خارج خيط الواجهة
+QList<Found> discover();
+// يجرّب صيغ الشركات المعروفة على عنوان الكاميرا ومستخدمها حتى تعطي صورة، ويضبط camera عليها
+bool detect(Camera &camera, cv::Mat *frame, QString *error, const std::function<void(const QString &)> &progress = {});
 
 // كلمة المرور لا تُحفظ نصاً مكشوفاً (DPAPI على Windows)
 QString protect(const QString &secret);
