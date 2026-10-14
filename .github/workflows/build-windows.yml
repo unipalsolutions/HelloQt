@@ -143,6 +143,16 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "HTML report test failed" }
         shell: pwsh
 
+      - name: Recording test
+        timeout-minutes: 5
+        run: |
+          # تسجيل الكاميرا في مجلد عربي: المدة، والموضع، والحركة فقط، ومربعات الوجوه، والحذف التلقائي
+          $out = Join-Path $PWD "record.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--record-test', (Join-Path $PWD "recordtest"), $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "Recording test failed" }
+        shell: pwsh
+
       - name: Camera test
         timeout-minutes: 12
         run: |

@@ -92,6 +92,8 @@ void save(const QList<Camera> &cameras);
 QString newId();
 // الكاميرا لمصدر بعد "camera:" (رقم كاميرا موصولة، أو معرّف كاميرا محفوظة)؛ false إن لم توجد
 bool resolve(const QString &key, Camera *camera);
+// اسم الكاميرا للعرض من مصدرها "camera:…" دون البحث عن الأجهزة الموصولة (للسجلات والقوائم)
+QString displayName(const QString &source);
 void saveFilters(const QString &id, const VideoFilters::Settings &filters);
 QString lastSource();
 void setLastSource(const QString &source);

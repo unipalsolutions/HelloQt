@@ -3,6 +3,7 @@
 #include "cameras.h"
 #include "facedatabase.h"
 #include "importdialog.h"
+#include "recorder.h"
 #include "faceengine.h"
 #include "imageio.h"
 #include "report.h"
@@ -1323,6 +1324,132 @@ int cameraTest(const QString &videoPath, QTextStream &out)
     return urls && secrets && storage && last && guide && discovered && detectFails && deadFails && live ? 0 : 1;
 }
 
+
+// تسجيل الكاميرا بإطارات مولَّدة في مجلد باسم عربي: مدة مطابقة للوقت الفعلي مع تخطي الانقطاع، وموضع
+// التسجيل الجاري، والتسجيل عند الحركة فقط، ورسم مربعات الوجوه، وحذف تسجيلات البرنامج القديمة وحدها
+int recordTest(const QString &directory, QTextStream &out)
+{
+    const QString folder = QDir(directory).filePath(QStringLiteral("تسجيلات الاختبار"));
+    QDir(folder).removeRecursively();
+    const int previousRetention = CameraRecorder::retentionDays();
+    CameraRecorder::setRetentionDays(0);
+    std::mt19937 random(7);
+    // إطار يتغير كله في كل مرة (حركة)، أو ثابت
+    auto movingFrame = [&](cv::Size size) {
+        cv::Mat frame(size, CV_8UC3);
+        cv::randu(frame, cv::Scalar::all(0), cv::Scalar::all(255));
+        return frame;
+    };
+    const cv::Mat still(cv::Size(640, 480), CV_8UC3, cv::Scalar(90, 90, 90));
+    auto feed = [&](CameraRecorder &recorder, int frames, int intervalMs, const std::function<cv::Mat()> &make) {
+        for (int i = 0; i < frames; ++i) {
+            recorder.push(make());
+            QThread::msleep(intervalMs);
+        }
+    };
+    auto frameCount = [](const QString &path, cv::Size *size, cv::Mat *middle) {
+        cv::VideoCapture capture;
+        if (!ImageIO::openVideo(capture, path))
+            return -1;
+        int count = 0;
+        cv::Mat frame;
+        std::vector<cv::Mat> frames;
+        while (capture.read(frame)) {
+            if (size)
+                *size = frame.size();
+            frames.push_back(frame.clone());
+            ++count;
+        }
+        if (middle && !frames.empty())
+            *middle = frames[frames.size() / 2];
+        return count;
+    };
+    QString error;
+
+    // 1) تسجيل متصل: 3 ثوانٍ بسرعة 10 إطارات، ثم انقطاع 4 ثوانٍ لا يُملأ، ثم ثانية
+    CameraRecorder continuous;
+    const bool started = continuous.start(folder, QStringLiteral("كاميرا الاختبار"), 10.0, {}, &error);
+    feed(continuous, 30, 100, [&] { return movingFrame(cv::Size(641, 481)); });
+    const CameraRecorder::Position live = continuous.position();
+    QThread::msleep(4000);
+    feed(continuous, 10, 100, [&] { return movingFrame(cv::Size(641, 481)); });
+    continuous.stop();
+    const QStringList continuousFiles = continuous.files();
+    cv::Size size;
+    const int continuousFrames = continuousFiles.size() == 1 ? frameCount(continuousFiles.first(), &size, nullptr) : -1;
+    const bool continuousOk = started && continuousFiles.size() == 1 && continuousFrames >= 34 && continuousFrames <= 48
+        && size == cv::Size(640, 480) && QFileInfo(continuousFiles.first()).fileName().startsWith(QStringLiteral("كاميرا الاختبار"));
+    const bool positionOk = live.path == (continuousFiles.isEmpty() ? QString() : continuousFiles.first()) && live.ms >= 2000
+        && live.ms <= 3200 && continuous.position().ms < 0;
+    out << "continuous_frames=" << continuousFrames << "\ncontinuous_size=" << size.width << "x" << size.height
+        << "\nlive_position_ms=" << live.ms << "\ncontinuous=" << continuousOk << "\nposition=" << positionOk << "\n";
+
+    // 2) عند الحركة فقط: مشهد ساكن لا يُسجَّل، ثم حركة ثانية تُسجَّل مع ثانيتين قبلها وما بعدها
+    CameraRecorder::Options motionOptions;
+    motionOptions.motionOnly = true;
+    CameraRecorder motion;
+    motion.start(folder, QStringLiteral("حركة"), 10.0, motionOptions, &error);
+    feed(motion, 40, 100, [&] { return still.clone(); });
+    const bool waited = motion.isWaitingForMotion() && motion.position().path.isEmpty();
+    feed(motion, 10, 100, [&] { return movingFrame(still.size()); });
+    const bool recordingMotion = !motion.isWaitingForMotion();
+    feed(motion, 10, 100, [&] { return still.clone(); });
+    motion.stop();
+    const QStringList motionFiles = motion.files();
+    const int motionFrames = motionFiles.size() == 1 ? frameCount(motionFiles.first(), nullptr, nullptr) : -1;
+    // نحو ثانيتين قبل الحركة + ثانية حركة + ثانية بعدها، لا الثواني الأربع الساكنة كلها
+    const bool motionOk = waited && recordingMotion && motionFiles.size() == 1 && motionFrames >= 25 && motionFrames <= 48;
+    out << "motion_frames=" << motionFrames << "\nmotion_waited=" << waited << "\nmotion=" << motionOk << "\n";
+
+    // 3) مربعات الوجوه تُرسم في التسجيل حين تُطلب
+    CameraRecorder::Options overlayOptions;
+    overlayOptions.overlay = true;
+    CameraRecorder overlay;
+    overlay.start(folder, QStringLiteral("مربعات"), 10.0, overlayOptions, &error);
+    const cv::Mat black(cv::Size(640, 480), CV_8UC3, cv::Scalar::all(0));
+    for (int i = 0; i < 15; ++i) {
+        overlay.setOverlay({{QRectF(0.25, 0.25, 0.5, 0.5), QStringLiteral("أحمد"), QColor(0, 255, 0)}});
+        overlay.push(black.clone());
+        QThread::msleep(100);
+    }
+    overlay.stop();
+    cv::Mat middle;
+    const QStringList overlayFiles = overlay.files();
+    if (overlayFiles.size() == 1)
+        frameCount(overlayFiles.first(), nullptr, &middle);
+    // الحافة اليسرى للمربع خضراء، ومركزه أسود كما هو
+    int edge = 0;
+    for (int x = 154; !middle.empty() && x <= 166; ++x)
+        edge = std::max<int>(edge, middle.at<cv::Vec3b>(240, x)[1]);
+    const bool overlayOk = !middle.empty() && edge > 80 && middle.at<cv::Vec3b>(240, 320)[1] < 40
+        && black.at<cv::Vec3b>(240, 160)[1] == 0;
+    out << "overlay_edge=" << edge << "\noverlay=" << overlayOk << "\n";
+
+    // 4) الحذف التلقائي: تسجيل قديم للبرنامج يُحذف، وملف قديم آخر في المجلد لا يُمس
+    const QString oldRecording = QDir(folder).filePath(QStringLiteral("تسجيل قديم.mp4"));
+    const QString otherFile = QDir(folder).filePath(QStringLiteral("ملف المستخدم.mp4"));
+    const QDateTime old = QDateTime::currentDateTime().addDays(-40);
+    for (const QString &path : {oldRecording, otherFile}) {
+        QFile file(path);
+        file.open(QIODevice::WriteOnly);
+        file.write("old");
+        file.close();
+        // بعد الكتابة، وإلا يعيد إغلاق الملف وقت التعديل إلى الآن
+        file.open(QIODevice::ReadWrite);
+        file.setFileTime(old, QFileDevice::FileModificationTime);
+        file.close();
+    }
+    CameraRecorder::rememberFile(oldRecording);
+    const int keptWithoutRetention = CameraRecorder::removeExpired();
+    CameraRecorder::setRetentionDays(30);
+    const int removed = CameraRecorder::removeExpired();
+    CameraRecorder::setRetentionDays(previousRetention);
+    const bool retentionOk = keptWithoutRetention == 0 && removed == 1 && !QFile::exists(oldRecording) && QFile::exists(otherFile)
+        && !continuousFiles.isEmpty() && QFile::exists(continuousFiles.first());
+    out << "retention_removed=" << removed << "\nretention=" << retentionOk << "\n" << error;
+    return continuousOk && positionOk && motionOk && overlayOk && retentionOk ? 0 : 1;
+}
+
 } // namespace
 
 int run(const QStringList &args)
@@ -1335,7 +1462,7 @@ int run(const QStringList &args)
         && command != QLatin1String("--embed-dump") && command != QLatin1String("--stress-test")
         && command != QLatin1String("--pair-matrix") && command != QLatin1String("--report-test")
         && command != QLatin1String("--backup-test") && command != QLatin1String("--filters-test")
-        && command != QLatin1String("--camera-test"))
+        && command != QLatin1String("--camera-test") && command != QLatin1String("--record-test"))
         return -1;
 
     QFile output(args.last());
@@ -1371,6 +1498,9 @@ int run(const QStringList &args)
     // Malamih --camera-test <فيديو يُبث كأنه كاميرا شبكة، أو -> <ملف النتائج>
     if (command == QLatin1String("--camera-test") && args.size() == 4)
         return cameraTest(args.at(2), out);
+    // Malamih --record-test <مجلد مؤقت> <ملف النتائج>
+    if (command == QLatin1String("--record-test") && args.size() == 4)
+        return recordTest(args.at(2), out);
     // Malamih --report-test <صورة> <تقرير.html> <ملف النتائج>
     if (command == QLatin1String("--report-test") && args.size() == 5)
         return reportTest(args.at(2), args.at(3), out);

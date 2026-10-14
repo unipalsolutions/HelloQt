@@ -1,5 +1,6 @@
 #include "personprofile.h"
 
+#include "cameras.h"
 #include "theme.h"
 
 #include <QDateTime>
@@ -200,7 +201,10 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
                                    "<td align='right'>%2</td><td width='40' align='right'>%1</td></tr>")
                         .arg(sighting.thumbnail.isNull() ? QString() : QStringLiteral("<img src='%1' width='34' height='34'>").arg(addImage(sighting.thumbnail)),
                              sighting.seen.toString(QStringLiteral("yyyy/MM/dd hh:mm")),
-                             QFileInfo(sighting.source).fileName().toHtmlEscaped(), position,
+                             (sighting.source.startsWith(QStringLiteral("camera:"))
+                                  ? Cameras::displayName(sighting.source)
+                                  : QFileInfo(sighting.source).fileName()).toHtmlEscaped(),
+                             position,
                              QString::number(qRound(sighting.score * 100)));
         }
         html += QStringLiteral("</table>");

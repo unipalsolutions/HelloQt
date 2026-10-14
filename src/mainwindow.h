@@ -56,6 +56,10 @@ public:
 
     void openFile(const QString &path); // صورة أو فيديو
 
+signals:
+    // تنبيه مراقبة (لإشعار ويندوز حين تكون النافذة مخفية)؛ camera فارغ للملفات
+    void watchAlert(const QString &name, const QString &camera);
+
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
@@ -102,9 +106,15 @@ private:
     void setVideoSettingsVisible(bool visible);
     void refreshWatched();
     void checkWatchAlert(const FaceItem &face);
+    void showWatchAlert(const FaceItem &face, const QImage &crop);
+    // الكاميرا: ظهور شخص معروف بعد غياب يُسجَّل (مع موضعه في التسجيل وصورة الإطار) وينبَّه عنه إن كان مراقَباً
+    void noteCameraFaces(const QImage &frame, const QList<FaceItem> &faces);
+    QString saveSightingSnapshot(const QImage &frame, const QRectF &box, const QString &name);
     void clearWatchAlerts();
     void toggleWatch();
     void showAlertLog();
+    // يفتح الملف الذي ظهر فيه شخص، والفيديو من لحظة ظهوره
+    void openSighting(const QString &path, qint64 positionMs);
     void importPersons();
     void addRecentFile(const QString &path);
     void showRecentMenu();
@@ -274,6 +284,7 @@ private:
     // قائمة المراقبة: تنبيه فور ظهور شخص مراقَب
     QSet<QString> m_watched;
     QSet<QString> m_alerted; // من نُبِّه عنه في الصورة أو الفيديو الحالي
+    QHash<QString, qint64> m_cameraSeen; // آخر ظهور لكل شخص أمام الكاميرا الجارية (مللي ثانية منذ 1970)
     QFrame *m_alertBar = nullptr;
     QLabel *m_alertAvatar = nullptr;
     QLabel *m_alertText = nullptr;

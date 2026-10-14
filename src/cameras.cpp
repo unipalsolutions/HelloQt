@@ -550,6 +550,20 @@ bool resolve(const QString &key, Camera *camera)
     return false;
 }
 
+QString displayName(const QString &source)
+{
+    const QString key = source.startsWith(QStringLiteral("camera:")) ? source.mid(7) : source;
+    bool number = false;
+    const int index = key.toInt(&number);
+    if (number)
+        return index == 0 ? QStringLiteral("كاميرا الجهاز") : QStringLiteral("كاميرا الجهاز %1").arg(index + 1);
+    for (const Camera &c : load()) {
+        if (c.id == key)
+            return c.name;
+    }
+    return QStringLiteral("كاميرا محذوفة");
+}
+
 void saveFilters(const QString &id, const VideoFilters::Settings &filters)
 {
     if (id.isEmpty())

@@ -906,6 +906,17 @@ bool FaceDatabase::upgradeSchema()
         if (!columns.contains(name) && !exec(QStringLiteral("ALTER TABLE persons ADD COLUMN %1 %2").arg(name, type)))
             return false;
     }
+    // ظهور الكاميرا: الكاميرا التي ظهر أمامها الشخص وصورة الإطار كاملاً
+    QSet<QString> sightingColumns;
+    if (!query.exec(QStringLiteral("PRAGMA table_info(sightings)")))
+        return false;
+    while (query.next())
+        sightingColumns.insert(query.value(1).toString());
+    query.finish();
+    for (const QString &name : {QStringLiteral("camera"), QStringLiteral("snapshot")}) {
+        if (!sightingColumns.contains(name) && !exec(QStringLiteral("ALTER TABLE sightings ADD COLUMN %1 TEXT").arg(name)))
+            return false;
+    }
     return true;
 }
 
@@ -1513,13 +1524,37 @@ bool FaceDatabase::addSighting(const QString &personId, const QString &source, q
     return endBatch() && ok;
 }
 
+bool FaceDatabase::addCameraSighting(const QString &personId, const QString &camera, const QString &recording, qint64 positionMs,
+                                     float score, const QImage &face, const QString &snapshot)
+{
+    const qint64 id = personId.toLongLong();
+    if (!m_db.isOpen() || id <= 0)
+        return false;
+    QByteArray thumb;
+    if (!face.isNull()) {
+        QBuffer buffer(&thumb);
+        buffer.open(QIODevice::WriteOnly);
+        face.scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation).save(&buffer, "JPG", 85);
+    }
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    const QString source = recording.isEmpty() ? camera : recording;
+    beginBatch();
+    const bool ok = exec(QStringLiteral("INSERT INTO sightings(person_id, seen, source, position_ms, score, thumb, camera, snapshot)"
+                                        " VALUES(?, ?, ?, ?, ?, ?, ?, ?)"),
+                         {id, now, source, recording.isEmpty() ? qint64(-1) : positionMs, double(score), thumb, camera, snapshot})
+        && exec(QStringLiteral("UPDATE persons SET last_seen = ?, seen_count = seen_count + 1 WHERE id = ?"), {now, id});
+    if (ok)
+        notify(personId, false);
+    return endBatch() && ok;
+}
+
 QList<Sighting> FaceDatabase::sightings(const QString &personId, int limit) const
 {
     QList<Sighting> list;
     if (!m_db.isOpen())
         return list;
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral("SELECT id, seen, source, position_ms, score, thumb FROM sightings WHERE person_id = ?"
+    query.prepare(QStringLiteral("SELECT id, seen, source, position_ms, score, thumb, camera, snapshot FROM sightings WHERE person_id = ?"
                                  " ORDER BY id DESC LIMIT ?"));
     query.addBindValue(personId.toLongLong());
     query.addBindValue(limit);
@@ -1533,6 +1568,8 @@ QList<Sighting> FaceDatabase::sightings(const QString &personId, int limit) cons
         sighting.positionMs = query.value(3).toLongLong();
         sighting.score = query.value(4).toFloat();
         sighting.thumbnail.loadFromData(query.value(5).toByteArray(), "JPG");
+        sighting.camera = query.value(6).toString();
+        sighting.snapshot = query.value(7).toString();
         list.append(sighting);
     }
     return list;
@@ -1543,7 +1580,8 @@ QList<SightingEntry> FaceDatabase::recentSightings(bool watchedOnly, const QDate
     QList<SightingEntry> list;
     if (!m_db.isOpen())
         return list;
-    QString sql = QStringLiteral("SELECT s.id, s.seen, s.source, s.position_ms, s.score, s.thumb, p.id, p.name, p.tags"
+    QString sql = QStringLiteral("SELECT s.id, s.seen, s.source, s.position_ms, s.score, s.thumb, p.id, p.name, p.tags,"
+                                 " s.camera, s.snapshot"
                                  " FROM sightings s JOIN persons p ON p.id = s.person_id WHERE s.seen >= ?");
     if (watchedOnly)
         sql += QStringLiteral(" AND (p.tags LIKE ? OR p.tags LIKE ?)");
@@ -1572,6 +1610,8 @@ QList<SightingEntry> FaceDatabase::recentSightings(bool watchedOnly, const QDate
         entry.sighting.thumbnail.loadFromData(query.value(5).toByteArray(), "JPG");
         entry.personId = query.value(6).toString();
         entry.name = query.value(7).toString();
+        entry.sighting.camera = query.value(9).toString();
+        entry.sighting.snapshot = query.value(10).toString();
         list.append(entry);
     }
     return list;

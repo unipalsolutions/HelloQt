@@ -31,6 +31,8 @@ struct Sighting
     qint64 positionMs = -1; // موضعه في الفيديو
     float score = 0.0f;
     QImage thumbnail;
+    QString camera;   // "camera:…" إن كان الظهور أمام كاميرا (والمصدر ملف تسجيلها إن كانت تُسجَّل)
+    QString snapshot; // صورة الإطار كاملاً لحظة الظهور (للكاميرا)
 };
 
 // ظهور مع صاحبه (لسجل التنبيهات الذي يجمع ظهور عدة أشخاص)
@@ -127,6 +129,10 @@ public:
 
     // سجل الظهور
     bool addSighting(const QString &personId, const QString &source, qint64 positionMs, float score, const QImage &face);
+    // ظهور أمام الكاميرا: يُضاف دائماً سجلاً جديداً (لا يُدمج مع ظهور سابق في المصدر نفسه)؛
+    // recording ملف التسجيل الجاري وpositionMs موضع الظهور فيه، أو فارغ و -1 إن لم تكن تُسجَّل
+    bool addCameraSighting(const QString &personId, const QString &camera, const QString &recording, qint64 positionMs,
+                           float score, const QImage &face, const QString &snapshot);
     QList<Sighting> sightings(const QString &personId, int limit = 50) const;
     // أحدث الظهور لكل الأشخاص منذ since (أو كله إن كان غير صالح)؛ watchedOnly لقائمة المراقبة فقط
     QList<SightingEntry> recentSightings(bool watchedOnly, const QDateTime &since, int limit) const;
