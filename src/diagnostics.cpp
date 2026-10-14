@@ -1126,12 +1126,12 @@ int cameraTest(const QString &videoPath, QTextStream &out)
         && !shown.contains(QLatin1String("p%40ss")) && shown.contains(QLatin1String("****"))
         && dahua.url(false).endsWith(QLatin1String("/cam/realmonitor?channel=2&subtype=0"))
         && custom.url() == QLatin1String("rtsp://u:v@10.0.0.9:8554/live");
-    out << "urls=" << urls << " " << hikUrl << " | " << shown << " | " << dahua.url(false) << " | " << custom.url() << "\n";
+    out << "urls=" << urls << " " << hikUrl << " | " << shown << " | " << dahua.url(false) << " | " << custom.url() << "\n" << Qt::flush;
 
     const QString stored = Cameras::protect(hik.password);
     const bool secrets = !stored.isEmpty() && !stored.contains(hik.password) && Cameras::unprotect(stored) == hik.password
         && Cameras::protect(QString()).isEmpty() && Cameras::unprotect(QString()).isEmpty();
-    out << "secrets=" << secrets << " " << stored.left(2) << "\n";
+    out << "secrets=" << secrets << " " << stored.left(2) << "\n" << Qt::flush;
 
     // القائمة المحفوظة؛ تُستعاد قائمة المستخدم بعد الاختبار
     const QList<Cameras::Camera> userCameras = Cameras::load();
@@ -1167,11 +1167,11 @@ int cameraTest(const QString &videoPath, QTextStream &out)
     const bool storage = failed.isEmpty();
     if (!storage)
         out << "storage_failed=" << failed << "count=" << loaded.size() << " url=" << found.url(false)
-            << " filters=" << found.hasFilters << "/" << found.filters.quarterTurns << "\n";
+            << " filters=" << found.hasFilters << "/" << found.filters.quarterTurns << "\n" << Qt::flush;
     Cameras::setLastSource(found.source());
     const bool last = Cameras::lastSource() == found.source();
-    out << "storage=" << storage << " last=" << last << "\n";
-    out << "local_devices=" << Cameras::localDevices().size() << " addresses=" << Cameras::localAddresses().join(QLatin1Char(',')) << "\n";
+    out << "storage=" << storage << " last=" << last << "\n" << Qt::flush;
+    out << "local_devices=" << Cameras::localDevices().size() << " addresses=" << Cameras::localAddresses().join(QLatin1Char(',')) << "\n" << Qt::flush;
 
     // مساعدات التوصيل: العنوان المقترح للابتوب، والشبكة، وخطوات كل طريقة
     bool guide = Cameras::suggestedAddress(QStringLiteral("192.168.1.64")) == QLatin1String("192.168.1.200")
@@ -1180,7 +1180,7 @@ int cameraTest(const QString &videoPath, QTextStream &out)
         && !Cameras::onLocalNetwork(QStringLiteral("203.0.113.7")) && Cameras::connections().size() == 8;
     for (const Cameras::Connection &c : Cameras::connections())
         guide = guide && Cameras::connection(c.key).key == c.key && Cameras::steps(c.key).contains(QLatin1String("<ol"));
-    out << "guide=" << guide << "\n";
+    out << "guide=" << guide << "\n" << Qt::flush;
 
     // البحث في الشبكة ينتهي في وقت معقول ولو لم توجد كاميرات
     QElapsedTimer timer;
@@ -1208,7 +1208,7 @@ int cameraTest(const QString &videoPath, QTextStream &out)
     timer.restart();
     QString deadError;
     const bool deadFails = Cameras::snapshot(dead, &deadError).empty() && !deadError.isEmpty() && timer.elapsed() < 20000;
-    out << "unreachable=" << deadFails << " " << timer.elapsed() << "ms " << deadError.section(QLatin1Char('\n'), 0, 0) << "\n";
+    out << "unreachable=" << deadFails << " " << timer.elapsed() << "ms " << deadError.section(QLatin1Char('\n'), 0, 0) << "\n" << Qt::flush;
 
     bool live = true;
     bool detected = true;
@@ -1248,7 +1248,7 @@ int cameraTest(const QString &videoPath, QTextStream &out)
                 while (read < 40 && reader.read(frame, 5000) && !frame.empty())
                     ++read;
             }
-            out << "live_reader_frames=" << read << " fps=" << reader.fps() << " " << error << "\n";
+            out << "live_reader_frames=" << read << " fps=" << reader.fps() << " " << error << "\n" << Qt::flush;
         }
         stopServer();
 
@@ -1267,7 +1267,7 @@ int cameraTest(const QString &videoPath, QTextStream &out)
                 startServer();
         }
         detected = detecting.result() && guess.brand == QLatin1String("phone") && !guessed.empty();
-        out << "detect=" << detected << " " << guess.url(false) << " " << guessError << "\n";
+        out << "detect=" << detected << " " << guess.url(false) << " " << guessError << "\n" << Qt::flush;
         stopServer();
 
         // التحليل كاملاً من كاميرا محفوظة، مع قطع البث ثم إعادته
@@ -1284,6 +1284,8 @@ int cameraTest(const QString &videoPath, QTextStream &out)
         QString error;
         QObject::connect(&worker, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &, qint64, double) {
             worker.frameShown();
+            if (timer.elapsed() > 120000)
+                worker.requestStop(); // لم ينقطع البث أو لم يعد: لا ينتظر الاختبار للأبد
             ++frames;
             if (restored > 0 && ++framesAfter >= 20)
                 worker.requestStop();
@@ -1304,7 +1306,7 @@ int cameraTest(const QString &videoPath, QTextStream &out)
         stopServer();
         const bool snapshotAfter = worker.lastCameraFrame().empty();
         out << "worker_frames=" << frames << " lost_attempts=" << lost << " restored=" << restored
-            << " frames_after=" << framesAfter << " error=" << error << " elapsed_ms=" << timer.elapsed() << "\n";
+            << " frames_after=" << framesAfter << " error=" << error << " elapsed_ms=" << timer.elapsed() << "\n" << Qt::flush;
         live = detected && read >= 30 && frames >= 45 && lost >= 1 && restored == 1 && framesAfter >= 20 && error.isEmpty() && snapshotAfter;
     } else {
         out << "live=skipped\n";

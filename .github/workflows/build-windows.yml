@@ -144,16 +144,24 @@ jobs:
         shell: pwsh
 
       - name: Camera test
-        timeout-minutes: 8
+        timeout-minutes: 12
         run: |
           # صيغ عناوين الكاميرات وحفظها، ثم الفيديو يُبث بـ ffmpeg كأنه كاميرا شبكة مع انقطاع وعودة واكتشاف تلقائي
           if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress | Out-Null }
-          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw "ffmpeg not available for the live camera test" }
+          # choco يضع ffmpeg.exe وسيطاً يشغّل البرنامج الحقيقي، وإيقاف الوسيط يترك البث يعمل فيعلق الفحص؛
+          # يُقدَّم مجلد ffmpeg.exe الحقيقي في PATH
+          $real = Get-ChildItem "$env:ChocolateyInstall\lib\ffmpeg*" -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($real) { $env:PATH = "$($real.DirectoryName);$env:PATH" }
+          $ffmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+          if (-not $ffmpeg) { throw "ffmpeg not available for the live camera test" }
+          Write-Host "ffmpeg: $($ffmpeg.Source)"
           $out = Join-Path $PWD "camera.txt"
-          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--camera-test', (Join-Path $PWD "testdata\clip.mp4"), $out -Wait -PassThru
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--camera-test', (Join-Path $PWD "testdata\clip.mp4"), $out -PassThru
+          # مهلة للفحص نفسه، فتظهر النتائج التي كتبها حتى لحظة التعليق إن علق
+          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id -Force; Get-Process ffmpeg -ErrorAction SilentlyContinue | Stop-Process -Force }
           $text = Get-Content $out -Raw
-          Write-Host "exit $($p.ExitCode):`n$text"
-          if ($p.ExitCode -ne 0) { throw "Camera test failed" }
+          Write-Host "exit $(if ($p.HasExited) { $p.ExitCode } else { 'timeout' }):`n$text"
+          if (-not $p.HasExited -or $p.ExitCode -ne 0) { throw "Camera test failed" }
           if ($text -match 'live=skipped') { throw "Live camera part was skipped" }
         shell: pwsh
 
