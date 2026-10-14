@@ -103,7 +103,7 @@ if(MSVC)
     target_compile_options(Malamih PRIVATE /utf-8)
 endif()
 if(WIN32)
-    target_link_libraries(Malamih PRIVATE psapi strmiids ole32 oleaut32 crypt32)
+    target_link_libraries(Malamih PRIVATE psapi strmiids ole32 oleaut32 crypt32 mfplat mf mfuuid)
 endif()
 
 set_target_properties(Malamih PROPERTIES

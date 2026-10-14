@@ -26,6 +26,8 @@
 #include <windows.h>
 #include <dpapi.h>
 #include <dshow.h>
+#include <mfapi.h>
+#include <mfidl.h>
 #endif
 
 namespace Cameras {
@@ -33,6 +35,43 @@ namespace Cameras {
 namespace {
 
 constexpr int OpenTimeoutMs = 8000;
+
+#ifdef Q_OS_WIN
+// رقم الكاميرا في Media Foundation؛ ترتيبه يختلف عن DirectShow (والكاميرات الافتراضية مثل OBS
+// لا تظهر فيه)، فيُبحث بالاسم. -1 إن لم توجد فيه
+int mediaFoundationIndex(const QString &name)
+{
+    int found = -1;
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE))) {
+        IMFAttributes *attributes = nullptr;
+        if (SUCCEEDED(MFCreateAttributes(&attributes, 1))
+            && SUCCEEDED(attributes->SetGUID(MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID))) {
+            IMFActivate **devices = nullptr;
+            UINT32 count = 0;
+            if (SUCCEEDED(MFEnumDeviceSources(attributes, &devices, &count))) {
+                for (UINT32 i = 0; i < count; ++i) {
+                    WCHAR *friendly = nullptr;
+                    UINT32 length = 0;
+                    if (found < 0 && SUCCEEDED(devices[i]->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &friendly, &length))) {
+                        if (QString::fromWCharArray(friendly, int(length)) == name)
+                            found = int(i);
+                        CoTaskMemFree(friendly);
+                    }
+                    devices[i]->Release();
+                }
+                CoTaskMemFree(devices);
+            }
+        }
+        if (attributes)
+            attributes->Release();
+        MFShutdown();
+    }
+    if (SUCCEEDED(init))
+        CoUninitialize();
+    return found;
+}
+#endif
 
 QString streamValue(const QString &pattern, const Camera &c)
 {
@@ -819,21 +858,35 @@ bool open(cv::VideoCapture &capture, const Camera &camera, QString *error)
 {
     capture.release();
     if (camera.kind == Kind::Local) {
-        std::vector<int> apis;
+        // كل طريقة التقاط برقم الكاميرا فيها
+        std::vector<std::pair<int, int>> attempts;
 #ifdef Q_OS_WIN
+        // الرقم في القائمة رقم DirectShow؛ Media Foundation يرتّب الكاميرات بطريقته فيُطابَق بالاسم
+        const QList<LocalDevice> devices = localDevices();
         if (camera.backend != Backend::MediaFoundation)
-            apis.push_back(cv::CAP_DSHOW);
-        if (camera.backend != Backend::DirectShow)
-            apis.push_back(cv::CAP_MSMF);
-#elif defined(Q_OS_LINUX)
-        apis.push_back(cv::CAP_V4L2);
+            attempts.push_back({cv::CAP_DSHOW, camera.index});
+        if (camera.backend != Backend::DirectShow) {
+            // بلا أسماء (تعذرت القراءة) يُجرَّب الرقم نفسه كما كان
+            const int mf = devices.isEmpty() ? camera.index : mediaFoundationIndex(localName(camera.index, devices));
+            if (mf >= 0)
+                attempts.push_back({cv::CAP_MSMF, mf});
+        }
+#else
+#ifdef Q_OS_LINUX
+        attempts.push_back({cv::CAP_V4L2, camera.index});
 #endif
-        apis.push_back(cv::CAP_ANY);
-        for (int api : apis) {
-            try {
-                if (capture.open(camera.index, api))
-                    break;
-            } catch (const cv::Exception &) {
+        attempts.push_back({cv::CAP_ANY, camera.index});
+#endif
+        // الكاميرا التي أُغلقت للتو أو استيقظت من السكون قد ترفض الفتح الأول
+        for (int round = 0; round < 2 && !capture.isOpened(); ++round) {
+            if (round > 0)
+                QThread::msleep(700);
+            for (const auto &[api, index] : attempts) {
+                try {
+                    if (capture.open(index, api))
+                        break;
+                } catch (const cv::Exception &) {
+                }
             }
         }
         if (!capture.isOpened()) {
@@ -869,9 +922,18 @@ bool open(cv::VideoCapture &capture, const Camera &camera, QString *error)
 QString diagnose(const Camera &camera)
 {
     if (camera.kind == Kind::Local) {
-        return QStringLiteral("تعذر فتح الكاميرا رقم %1. تأكد أنها موصولة، وأن برنامجاً آخر (Zoom أو Teams أو تطبيق الكاميرا) "
-                              "لا يستخدمها، وجرّب طريقة التقاط أخرى أو منفذ USB آخر.")
-            .arg(camera.index);
+        const QList<LocalDevice> devices = localDevices();
+        bool present = devices.isEmpty();
+        for (const LocalDevice &d : devices)
+            present = present || d.index == camera.index;
+        if (!present)
+            return QStringLiteral("الكاميرا رقم %1 غير موصولة الآن. وصّلها واضغط «تحديث» ثم اخترها من «الجهاز».").arg(camera.index);
+        return QStringLiteral("تعذر فتح «%1». ويندوز يراها لكنها رفضت الفتح:\n"
+                              "• أغلق أي برنامج قد يستخدمها (Zoom أو Teams أو تطبيق الكاميرا أو المتصفح)\n"
+                              "• تأكد أن «السماح لتطبيقات سطح المكتب بالوصول إلى الكاميرا» مفعّل في إعدادات الخصوصية في ويندوز\n"
+                              "• افصلها وأعد توصيلها في منفذ USB مباشر في الجهاز لا في موزّع (Hub)\n"
+                              "• جرّبها في تطبيق «الكاميرا» في ويندوز: إن لم تعمل هناك فالمشكلة في الكاميرا أو تعريفها")
+            .arg(localName(camera.index, devices));
     }
     const QUrl url(camera.url(false), QUrl::TolerantMode);
     const QString host = url.host();

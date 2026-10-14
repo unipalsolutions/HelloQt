@@ -263,12 +263,10 @@ CameraDialog::CameraDialog(QWidget *parent, const QString &selectId)
             return;
         storeForm();
         updateUrl();
-    };
-    connect(m_name, &QLineEdit::textEdited, this, [this, edited] {
-        edited();
         if (m_current >= 0 && m_list->item(m_current))
             m_list->item(m_current)->setText(m_cameras.at(m_current).name);
-    });
+    };
+    connect(m_name, &QLineEdit::textEdited, this, edited);
     for (QLineEdit *edit : {m_host, m_path, m_user, m_password})
         connect(edit, &QLineEdit::textEdited, this, edited);
     for (QSpinBox *spin : {m_port, m_channel})
@@ -531,7 +529,14 @@ void CameraDialog::storeForm()
         return;
     camera->name = m_name->text().trimmed().isEmpty() ? camera->name : m_name->text().trimmed();
     if (camera->kind == Cameras::Kind::Local) {
-        camera->index = m_device->currentData().isValid() ? m_device->currentData().toInt() : camera->index;
+        const int index = m_device->currentData().isValid() ? m_device->currentData().toInt() : camera->index;
+        // الاسم يتبع الجهاز المختار ما لم يكتب المستخدم اسماً خاصاً
+        if (index != camera->index && camera->name == Cameras::localName(camera->index, m_devices)) {
+            camera->name = Cameras::localName(index, m_devices);
+            const QSignalBlocker blocker(m_name);
+            m_name->setText(camera->name);
+        }
+        camera->index = index;
         const auto [w, h] = resolutions().value(m_resolution->currentIndex());
         camera->width = w;
         camera->height = h;
