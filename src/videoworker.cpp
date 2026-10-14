@@ -215,7 +215,7 @@ public:
         cv::calcHist(&hsv, 1, channels, cv::Mat(), hist, 2, sizes, ranges);
         cv::normalize(hist, hist, 1.0, 0.0, cv::NORM_L1);
         cv::Mat gray;
-        cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
+        cv::cvtColor(scaled, gray, cv::COLOR_BGR2GRAY);
 
         bool cut = false;
         if (!m_hist.empty()) {
