@@ -51,7 +51,7 @@ jobs:
           key: deps-${{ hashFiles('cmake/*.cmake') }}
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDEPS_DIR="${{ github.workspace }}/.deps-cache" -DOpenCV_DIR=C:/opencv/opencv/build/x64/vc16/lib
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDEPS_DIR="${{ github.workspace }}/.deps-cache" -DOpenCV_DIR=C:/opencv/opencv/build/x64/vc16/lib -DMALAMIH_VERSION="$env:APP_VERSION"
 
       - name: Build
         run: cmake --build build
@@ -143,6 +143,16 @@ jobs:
           $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--report-test', (Join-Path $PWD "report_input.jpg"), (Join-Path $PWD "report.html"), $out -Wait -PassThru
           Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
           if ($p.ExitCode -ne 0) { throw "HTML report test failed" }
+        shell: pwsh
+
+      - name: Camera watch test
+        timeout-minutes: 3
+        run: |
+          # تأكيد الظهور في إطارين، وتجميع الزوار المجهولين ببصماتهم، وتسمية الزائر
+          $out = Join-Path $PWD "watch.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--watch-test', (Join-Path $PWD "watchtest"), $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "Camera watch test failed" }
         shell: pwsh
 
       - name: Recording test

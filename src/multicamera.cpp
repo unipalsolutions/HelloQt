@@ -1,5 +1,7 @@
 #include "multicamera.h"
 
+#include "applog.h"
+#include "camerawatch.h"
 #include "carddelegates.h"
 #include "facedatabase.h"
 #include "faceengine.h"
@@ -227,6 +229,13 @@ QStringList MultiCameraWindow::chooseCameras()
     return {};
 }
 
+void MultiCameraWindow::setWatched(const QSet<QString> &ids)
+{
+    m_watched = ids;
+    for (const auto &feed : m_feeds)
+        feed->watch->setWatched(ids);
+}
+
 void MultiCameraWindow::setGallery(std::shared_ptr<Gallery> gallery)
 {
     std::lock_guard<std::mutex> lock(m_galleryMutex);
@@ -242,11 +251,17 @@ void MultiCameraWindow::start(const QStringList &sources)
             continue;
         feed->source = source;
         feed->recorder = new CameraRecorder(this);
+        feed->watch = new CameraWatch(m_database, this);
+        feed->watch->reset(source, feed->camera.name, feed->recorder);
+        feed->watch->setWatched(m_watched);
         Feed *raw = feed.get();
         connect(feed->recorder, &CameraRecorder::failed, this, [this, raw](const QString &error) {
             notice(QStringLiteral("توقف تسجيل «%1»: %2").arg(raw->camera.name, error));
+            emit systemAlert(QStringLiteral("توقف التسجيل"), QStringLiteral("«%1»: %2").arg(raw->camera.name, error));
             updateRecordButton();
         });
+        connect(feed->watch, &CameraWatch::watchAlert, this,
+                [this, raw](const QString &, const QString &name, float score, const QImage &crop) { showAlert(*raw, name, score, crop); });
         m_feeds.push_back(std::move(feed));
     }
     if (m_feeds.empty()) {
@@ -287,6 +302,7 @@ void MultiCameraWindow::stop()
     }
     for (const auto &feed : m_feeds) {
         feed->recorder->stop();
+        delete feed->watch;
         delete feed->recorder;
         delete feed->tile;
     }
@@ -392,6 +408,7 @@ void MultiCameraWindow::openFeed(int index)
         feed.opened.reset();
         if (!opened->reader) {
             feed.error = opened->error.section(QLatin1Char('\n'), 0, 0);
+            noteLost(feed, nowMs());
             feed.retryAt = nowMs() + RetryMs * std::min(feed.attempts, 8);
             feed.view->setWordWrap(true);
             feed.view->setText(QStringLiteral("تعذر الاتصال — إعادة المحاولة تلقائياً\n\n%1").arg(feed.error));
@@ -402,6 +419,11 @@ void MultiCameraWindow::openFeed(int index)
         opened->reader.reset();
         feed.error.clear();
         feed.attempts = 0;
+        if (feed.offlineAlerted)
+            emit systemAlert(QStringLiteral("عادت الكاميرا"), QStringLiteral("«%1» متصلة من جديد").arg(feed.camera.name));
+        AppLog::write(QStringLiteral("عدة كاميرات: اتصلت «%1»").arg(feed.camera.name));
+        feed.lostAt = 0;
+        feed.offlineAlerted = false;
         feed.fpsSince = nowMs();
         feed.frames = 0;
         if (m_recording)
@@ -425,6 +447,14 @@ void MultiCameraWindow::tick()
             feed.tile->setStyleSheet(tileStyle(alert));
         }
         if (!feed.reader) {
+            if (feed.lostAt > 0 && !feed.offlineAlerted && now - feed.lostAt >= OfflineAlertMs) {
+                feed.offlineAlerted = true;
+                emit systemAlert(QStringLiteral("كاميرا منقطعة"),
+                                 QStringLiteral("«%1» منقطعة منذ أكثر من %2 دقائق: %3")
+                                     .arg(feed.camera.name)
+                                     .arg(OfflineAlertMs / 60000)
+                                     .arg(feed.error));
+            }
             if (!feed.opening && now >= feed.retryAt)
                 openFeed(int(&pointer - m_feeds.data()));
             continue;
@@ -452,6 +482,7 @@ void MultiCameraWindow::tick()
         } else if (feed.reader->failed()) {
             feed.reader.reset();
             feed.error = QStringLiteral("انقطع الاتصال");
+            noteLost(feed, now);
             feed.retryAt = now + RetryMs;
             feed.faces.clear();
             feed.view->setText(QStringLiteral("انقطع الاتصال — إعادة المحاولة تلقائياً"));
@@ -567,6 +598,8 @@ void MultiCameraWindow::analysisLoop()
                     Face face;
                     const cv::Rect2f &box = analyzed.detection.box;
                     face.box = QRectF(box.x, box.y, box.width, box.height);
+                    face.embedding = analyzed.embedding;
+                    face.quality = analyzed.quality;
                     if (gallery && !analyzed.embedding.empty())
                         face.match = FaceDatabase::identify(*gallery, analyzed.embedding, threshold);
                     // وجه مشوش أو جانبي جداً لا يكفي وحده لتأكيد الشخص
@@ -597,56 +630,46 @@ void MultiCameraWindow::onAnalyzed(int index, quint64 generation, const cv::Mat 
     feed.facesSize = QSize(frame.cols, frame.rows);
     feed.facesAt = now;
 
-    if (feed.recorder->isRecording() && frame.cols > 0 && frame.rows > 0) {
-        QList<CameraRecorder::OverlayBox> boxes;
-        for (const Face &face : faces) {
-            const QRectF box(face.box.x() / frame.cols, face.box.y() / frame.rows, face.box.width() / frame.cols,
-                             face.box.height() / frame.rows);
-            const bool watched = face.match.status == MatchStatus::Confirmed && m_watched.contains(face.match.personId);
-            boxes.append({box, matchLabel(face.match), watched ? QColor(0xff, 0x5c, 0x5c) : matchColor(face.match.status)});
-        }
-        feed.recorder->setOverlay(boxes);
-    }
-
-    QImage full;
+    QList<CameraWatch::Face> watched;
     for (const Face &face : faces) {
-        if (face.match.status != MatchStatus::Confirmed || face.match.personId.isEmpty())
-            continue;
-        const QString personId = face.match.personId;
-        const qint64 last = feed.seen.value(personId, -1);
-        feed.seen.insert(personId, now);
-        // ما دام ظاهراً أمام هذه الكاميرا (أو غاب أقل من ReappearMs) فهو الظهور نفسه
-        if (last >= 0 && now - last < ReappearMs)
-            continue;
-        const QImage crop = ImageIO::cropFace(frame, cv::Rect2f(float(face.box.x()), float(face.box.y()),
-                                                                float(face.box.width()), float(face.box.height())),
-                                              256);
-        if (full.isNull())
-            full = ImageIO::toQImage(frame);
-        const QString snapshot = CameraRecorder::saveSnapshot(full, face.box, face.match.name);
-        // موضع الظهور في تسجيل هذه الكاميرا، قبله بثانيتين ليظهر الشخص داخلاً
-        const CameraRecorder::Position position = feed.recorder->position();
-        m_database->addCameraSighting(personId, feed.source, position.path,
-                                      position.ms >= 0 ? std::max<qint64>(0, position.ms - 2000) : -1, face.match.score,
-                                      crop, snapshot);
-        if (m_watched.contains(personId))
-            showAlert(feed, face, crop);
+        CameraWatch::Face item;
+        item.box = face.box;
+        item.match = face.match;
+        item.embedding = face.embedding;
+        item.quality = face.quality;
+        if (face.match.status != MatchStatus::Possible)
+            item.crop = ImageIO::cropFace(frame, cv::Rect2f(float(face.box.x()), float(face.box.y()), float(face.box.width()),
+                                                            float(face.box.height())),
+                                          256);
+        watched.append(item);
     }
+    if (feed.recorder->isRecording() && frame.cols > 0 && frame.rows > 0)
+        feed.recorder->setOverlay(feed.watch->overlay(QSize(frame.cols, frame.rows), watched));
+    feed.watch->setThreshold(m_currentThreshold);
+    feed.watch->process(faces.isEmpty() ? QImage() : ImageIO::toQImage(frame), watched);
 }
 
-void MultiCameraWindow::showAlert(Feed &feed, const Face &face, const QImage &crop)
+void MultiCameraWindow::noteLost(Feed &feed, qint64 now)
+{
+    if (feed.lostAt > 0)
+        return;
+    feed.lostAt = now;
+    AppLog::write(QStringLiteral("عدة كاميرات: انقطعت «%1»: %2").arg(feed.camera.name, feed.error));
+}
+
+void MultiCameraWindow::showAlert(Feed &feed, const QString &name, float score, const QImage &crop)
 {
     ++m_alertCount;
     feed.alertUntil = nowMs() + AlertFrameMs;
     m_alertAvatar->setPixmap(circularPixmap(crop, 44));
     m_alert->setText(QStringLiteral("<span style='color:%1; font-weight:700; font-size:12pt'>تنبيه مراقبة: ظهر %2</span>"
                                     "<br><span style='color:#cfe0ff'>أمام «%3» · التشابه %4% · الساعة ⁦%5⁩</span>")
-                         .arg(Theme::Accent2.name(), face.match.name.toHtmlEscaped(), feed.camera.name.toHtmlEscaped())
-                         .arg(qRound(face.match.score * 100))
+                         .arg(Theme::Accent2.name(), name.toHtmlEscaped(), feed.camera.name.toHtmlEscaped())
+                         .arg(qRound(score * 100))
                          .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss"))));
     m_alertBar->show();
     QApplication::beep();
-    emit watchAlert(face.match.name, feed.camera.name);
+    emit watchAlert(name, feed.camera.name);
 }
 
 void MultiCameraWindow::toggleRecording()

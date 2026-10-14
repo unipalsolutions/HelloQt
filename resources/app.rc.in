@@ -1,8 +1,8 @@
-IDI_ICON1 ICON "app.ico"
+IDI_ICON1 ICON "@APP_ICON@"
 
 1 VERSIONINFO
-FILEVERSION 3,0,0,0
-PRODUCTVERSION 3,0,0,0
+FILEVERSION @MALAMIH_VERSION_COMMAS@,0
+PRODUCTVERSION @MALAMIH_VERSION_COMMAS@,0
 BEGIN
     BLOCK "StringFileInfo"
     BEGIN
@@ -10,8 +10,8 @@ BEGIN
         BEGIN
             VALUE "FileDescription", "Malamih - Offline face recognition"
             VALUE "ProductName", "Malamih"
-            VALUE "FileVersion", "3.0.0"
-            VALUE "ProductVersion", "3.0.0"
+            VALUE "FileVersion", "@MALAMIH_VERSION@"
+            VALUE "ProductVersion", "@MALAMIH_VERSION@"
             VALUE "OriginalFilename", "Malamih.exe"
         END
     END

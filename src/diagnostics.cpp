@@ -1,6 +1,7 @@
 #include "diagnostics.h"
 
 #include "cameras.h"
+#include "camerawatch.h"
 #include "facedatabase.h"
 #include "importdialog.h"
 #include "recorder.h"
@@ -1450,6 +1451,132 @@ int recordTest(const QString &directory, QTextStream &out)
     return continuousOk && positionOk && motionOk && overlayOk && retentionOk ? 0 : 1;
 }
 
+
+// منطق مراقبة الكاميرا دون كاميرا ولا نماذج: بصمات صناعية تمر على CameraWatch كأنها إطارات محلَّلة
+int watchTest(const QString &directory, QTextStream &out)
+{
+    QDir(directory).removeRecursively();
+    FaceDatabase database;
+    QString error;
+    if (!database.open(directory, &error)) {
+        out << "error=" << error << "\n";
+        return 1;
+    }
+    std::mt19937 random(7);
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+    const auto randomPrint = [&] {
+        std::vector<float> print(size_t(FaceEngine::EmbeddingSize));
+        for (float &value : print)
+            value = gauss(random);
+        FaceEngine::normalize(print);
+        return print;
+    };
+    // بصمة الوجه نفسه في إطار آخر: تشابه نحو 0.8
+    const auto noisy = [&](const std::vector<float> &base) {
+        std::vector<float> print = base;
+        for (float &value : print)
+            value += gauss(random) * 0.03f;
+        FaceEngine::normalize(print);
+        return print;
+    };
+    QImage crop(64, 64, QImage::Format_RGB32);
+    crop.fill(Qt::gray);
+
+    Person watchedPerson;
+    watchedPerson.name = QStringLiteral("مراقَب");
+    watchedPerson.tags = FaceDatabase::withWatchTag(QString(), true);
+    const QString watchedId = database.addPerson(watchedPerson);
+    Person other;
+    other.name = QStringLiteral("معروف");
+    const QString otherId = database.addPerson(other);
+
+    const bool previousVisitors = CameraWatch::visitorsEnabled();
+    CameraWatch::setVisitorsEnabled(true);
+    const float threshold = 0.5f;
+    CameraWatch watch(&database);
+    watch.reset(QStringLiteral("camera:0"), QStringLiteral("اختبار"), nullptr);
+    watch.setWatched(database.watchedIds());
+    watch.setThreshold(threshold);
+    int alerts = 0;
+    QObject::connect(&watch, &CameraWatch::watchAlert, [&alerts] { ++alerts; });
+
+    const auto known = [&](const QString &id, const QString &name, float score) {
+        CameraWatch::Face face;
+        face.box = QRectF(10, 10, 50, 50);
+        face.match.status = MatchStatus::Confirmed;
+        face.match.personId = id;
+        face.match.name = name;
+        face.match.score = score;
+        face.quality = 0.8f;
+        face.crop = crop;
+        return face;
+    };
+    const auto stranger = [&](const std::vector<float> &print, float quality, int track) {
+        CameraWatch::Face face;
+        face.box = QRectF(100, 10, 50, 50);
+        face.match.status = MatchStatus::Unknown;
+        face.embedding = print;
+        face.quality = quality;
+        face.track = track;
+        face.crop = crop;
+        return face;
+    };
+    const auto count = [&](const QString &id) { return database.sightings(id, 100).size(); };
+
+    // إطار واحد بتشابه عادي لا يكفي (وجه مارّ يشبه المراقَب لحظة)، والثاني يؤكده
+    watch.process(QImage(), {known(watchedId, watchedPerson.name, 0.55f)});
+    const qsizetype afterOne = count(watchedId);
+    watch.process(QImage(), {known(watchedId, watchedPerson.name, 0.56f)});
+    const qsizetype afterTwo = count(watchedId);
+    // ما دام ظاهراً فهو الظهور نفسه
+    for (int i = 0; i < 5; ++i)
+        watch.process(QImage(), {known(watchedId, watchedPerson.name, 0.6f)});
+    const qsizetype afterMore = count(watchedId);
+    // تشابه قوي جداً يكفي وحده
+    watch.process(QImage(), {known(otherId, other.name, threshold + CameraWatch::StrongMargin + 0.05f)});
+    const qsizetype strong = count(otherId);
+    const bool confirmOk = afterOne == 0 && afterTwo == 1 && afterMore == 1 && strong == 1 && alerts == 1;
+    out << "confirm_one=" << afterOne << "\nconfirm_two=" << afterTwo << "\nconfirm_more=" << afterMore
+        << "\nstrong=" << strong << "\nalerts=" << alerts << "\nconfirm=" << confirmOk << "\n";
+
+    // الزوار المجهولون: الوجه نفسه بمسارات مختلفة زائر واحد، ووجه آخر زائر ثانٍ، والمشوش لا يُحفظ
+    const std::vector<float> visitorA = randomPrint();
+    const std::vector<float> visitorB = randomPrint();
+    watch.process(QImage(), {stranger(noisy(visitorA), 0.8f, 1), stranger(noisy(visitorB), 0.8f, 2)});
+    watch.process(QImage(), {stranger(noisy(visitorA), 0.8f, 1), stranger(noisy(visitorB), 0.8f, 2)});
+    watch.process(QImage(), {stranger(noisy(visitorA), 0.8f, 3)}); // فقد التتبع ثم عاد بمسار جديد
+    watch.process(QImage(), {stranger(randomPrint(), 0.1f, 4), stranger(randomPrint(), 0.1f, 4)});
+    const QList<Visitor> firstDay = database.visitors(QDateTime(), 1, 100);
+    // عودة الزائر الأول في جلسة أخرى (بعد غياب): يُعرف من القاعدة ببصمته فيبقى الرقم نفسه
+    CameraWatch later(&database);
+    later.reset(QStringLiteral("camera:1"), QStringLiteral("اختبار 2"), nullptr);
+    later.setThreshold(threshold);
+    later.process(QImage(), {stranger(noisy(visitorA), 0.8f, 1)});
+    later.process(QImage(), {stranger(noisy(visitorA), 0.8f, 1)});
+    const QList<Visitor> visitors = database.visitors(QDateTime(), 1, 100);
+    const QList<Visitor> repeated = database.visitors(QDateTime(), 2, 100);
+    const bool clusterOk = firstDay.size() == 2 && visitors.size() == 2 && repeated.size() == 1
+        && repeated.first().seenCount == 2 && repeated.first().cameras.size() == 2;
+    out << "visitors_first=" << firstDay.size() << "\nvisitors=" << visitors.size() << "\nrepeated=" << repeated.size()
+        << "\nrepeated_count=" << (repeated.isEmpty() ? 0 : repeated.first().seenCount) << "\ncluster=" << clusterOk << "\n";
+
+    // تسمية الزائر: ينتقل ظهوره إلى سجل الشخص ويختفي من الزوار
+    bool assignOk = false;
+    if (!repeated.isEmpty()) {
+        const qint64 id = repeated.first().id;
+        Person named;
+        named.name = QStringLiteral("زائر مسمّى");
+        const QString namedId = database.addPerson(named);
+        const bool assigned = database.assignVisitor(id, namedId, crop, {database.visitorEmbedding(id)}, 0.8f);
+        assignOk = assigned && count(namedId) == 2 && database.visitors(QDateTime(), 1, 100).size() == 1
+            && !database.personEmbedding(namedId).empty();
+        out << "assigned_sightings=" << count(namedId) << "\n";
+    }
+    out << "assign=" << assignOk << "\n";
+    CameraWatch::setVisitorsEnabled(previousVisitors);
+    return confirmOk && clusterOk && assignOk ? 0 : 1;
+}
+
 } // namespace
 
 int run(const QStringList &args)
@@ -1462,7 +1589,8 @@ int run(const QStringList &args)
         && command != QLatin1String("--embed-dump") && command != QLatin1String("--stress-test")
         && command != QLatin1String("--pair-matrix") && command != QLatin1String("--report-test")
         && command != QLatin1String("--backup-test") && command != QLatin1String("--filters-test")
-        && command != QLatin1String("--camera-test") && command != QLatin1String("--record-test"))
+        && command != QLatin1String("--camera-test") && command != QLatin1String("--record-test")
+        && command != QLatin1String("--watch-test"))
         return -1;
 
     QFile output(args.last());
@@ -1501,6 +1629,9 @@ int run(const QStringList &args)
     // Malamih --record-test <مجلد مؤقت> <ملف النتائج>
     if (command == QLatin1String("--record-test") && args.size() == 4)
         return recordTest(args.at(2), out);
+    // Malamih --watch-test <مجلد مؤقت> <ملف النتائج>
+    if (command == QLatin1String("--watch-test") && args.size() == 4)
+        return watchTest(args.at(2), out);
     // Malamih --report-test <صورة> <تقرير.html> <ملف النتائج>
     if (command == QLatin1String("--report-test") && args.size() == 5)
         return reportTest(args.at(2), args.at(3), out);

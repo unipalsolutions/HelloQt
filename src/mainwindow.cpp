@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 
 #include "alertlog.h"
+#include "applog.h"
 #include "importdialog.h"
 #include "harvestdialog.h"
 #include "matchpage.h"
@@ -8,6 +9,7 @@
 
 #include "cameradialog.h"
 #include "cameras.h"
+#include "camerawatch.h"
 #include "carddelegates.h"
 #include "enhancedialog.h"
 #include "folderscan.h"
@@ -27,6 +29,7 @@
 #include "videofilters.h"
 #include "videofiltersdialog.h"
 #include "videoworker.h"
+#include "visitorsdialog.h"
 #include "widgets.h"
 
 #include <QApplication>
@@ -82,7 +85,10 @@
 namespace {
 
 // شخص غاب عن الكاميرا أكثر من هذا ثم عاد يُسجَّل ظهوره من جديد ويُنبَّه عنه مرة أخرى
-constexpr qint64 CameraReappearMs = 5 * 60 * 1000;
+// انقطاع الكاميرا أطول من هذا يصل إشعاراً (الانقطاع القصير يعود وحده عادةً)
+constexpr qint64 CameraOfflineAlertMs = 2 * 60 * 1000;
+// الكاميرا الموصولة التي انقطعت ولم تعد يُعاد تشغيلها بعد هذه المدة ما لم يفتح المستخدم شيئاً آخر
+constexpr int CameraRestartMs = 30 * 1000;
 constexpr int SightingPositionRole = Qt::UserRole + 120;
 
 const QString ImageFilter = QStringLiteral("الصور (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff);;كل الملفات (*)");
@@ -341,6 +347,10 @@ MainWindow::MainWindow(QWidget *parent)
     }));
     m_view->setBusy(true, QStringLiteral("جارٍ تحميل نماذج التعرف"));
     statusBar()->showMessage(QStringLiteral("جارٍ تحميل نماذج التعرف…"));
+    // رقم الإصدار ظاهر دائماً حتى يُعرف أي نسخة مثبتة عند المستخدم
+    auto *version = new QLabel(QStringLiteral("الإصدار \u2066%1\u2069").arg(QApplication::applicationVersion()), this);
+    version->setStyleSheet(QStringLiteral("color: %1; padding: 0 8px;").arg(Theme::Muted.name()));
+    statusBar()->addPermanentWidget(version);
 
     connect(&m_database, &FaceDatabase::changed, this, [this] {
         refreshStats();
@@ -375,6 +385,23 @@ MainWindow::MainWindow(QWidget *parent)
     // التسجيل يتسلم الإطارات من خيط قراءة الكاميرا مباشرة، فيسجّل كل إطار ولو كان التحليل أبطأ أو متوقفاً
     m_recorder = new CameraRecorder(this);
     m_videoWorker->setRecorder(m_recorder);
+    m_cameraWatch = new CameraWatch(&m_database, this);
+    m_cameraWatch->setWatched(m_watched);
+    connect(m_cameraWatch, &CameraWatch::watchAlert, this, [this](const QString &personId, const QString &name, float score, const QImage &crop) {
+        FaceItem face;
+        face.id = -1;
+        for (const FaceItem &item : std::as_const(m_cameraFaces)) {
+            if (item.match.personId == personId) {
+                face = item;
+                break;
+            }
+        }
+        face.match.personId = personId;
+        face.match.name = name;
+        face.match.score = score;
+        face.match.status = MatchStatus::Confirmed;
+        showWatchAlert(face, crop);
+    });
     m_recordTimer = new QTimer(this);
     m_recordTimer->setInterval(1000);
     connect(m_recordTimer, &QTimer::timeout, this, &MainWindow::updateRecordButton);
@@ -382,7 +409,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_recorder, &CameraRecorder::failed, this, [this](const QString &error) {
         stopRecording();
         statusBar()->showMessage(error);
-        Toast::show(this, error, Toast::Kind::Warning);
+        emit systemAlert(QStringLiteral("توقف تسجيل الكاميرا «%1»").arg(m_cameraName), error);
     });
     connect(m_videoThread, &QThread::finished, m_videoWorker, &QObject::deleteLater);
     connect(m_videoWorker, &VideoWorker::started, this, [this](int step, double fps, qint64 durationMs) {
@@ -417,14 +444,31 @@ MainWindow::MainWindow(QWidget *parent)
         const QString text = QStringLiteral("انقطع الاتصال بالكاميرا «%1» — إعادة المحاولة (%2)").arg(m_cameraName).arg(attempt);
         m_view->setBusy(true, text);
         statusBar()->showMessage(text);
-        if (attempt == 1)
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (attempt == 1) {
+            m_cameraLostAt = now;
+            m_cameraOfflineAlerted = false;
+            AppLog::write(QStringLiteral("انقطع الاتصال بالكاميرا «%1»").arg(m_cameraName));
             Toast::show(this, QStringLiteral("انقطع الاتصال بالكاميرا — تُعاد المحاولة تلقائياً"), Toast::Kind::Warning);
+        } else if (!m_cameraOfflineAlerted && m_cameraLostAt > 0 && now - m_cameraLostAt >= CameraOfflineAlertMs) {
+            m_cameraOfflineAlerted = true;
+            emit systemAlert(QStringLiteral("الكاميرا «%1» منقطعة").arg(m_cameraName),
+                             QStringLiteral("لا صورة منها منذ %1 دقيقة، وتُعاد المحاولة تلقائياً").arg(CameraOfflineAlertMs / 60000));
+        }
     });
     connect(m_videoWorker, &VideoWorker::connectionRestored, this, [this] {
         if (!m_videoRunning)
             return;
         m_view->setBusy(false);
-        Toast::show(this, QStringLiteral("عاد الاتصال بالكاميرا «%1»").arg(m_cameraName), Toast::Kind::Success);
+        const qint64 seconds = m_cameraLostAt > 0 ? (QDateTime::currentMSecsSinceEpoch() - m_cameraLostAt) / 1000 : 0;
+        AppLog::write(QStringLiteral("عاد الاتصال بالكاميرا «%1» بعد %2 ثانية").arg(m_cameraName).arg(seconds));
+        if (m_cameraOfflineAlerted)
+            emit systemAlert(QStringLiteral("عادت الكاميرا «%1»").arg(m_cameraName),
+                             QStringLiteral("عاد الاتصال بعد انقطاع %1 دقيقة").arg(qMax<qint64>(1, seconds / 60)));
+        else
+            Toast::show(this, QStringLiteral("عاد الاتصال بالكاميرا «%1»").arg(m_cameraName), Toast::Kind::Success);
+        m_cameraLostAt = 0;
+        m_cameraOfflineAlerted = false;
     });
     m_videoThread->start();
 
@@ -432,6 +476,28 @@ MainWindow::MainWindow(QWidget *parent)
     setBusy(false);
     updateResponsiveLayout();
     setupTray();
+    // الأعطال: في السجل دائماً، ورسالة في النافذة إن كانت ظاهرة، وإشعار من ويندوز إن كانت مخفية
+    connect(this, &MainWindow::systemAlert, this, [this](const QString &title, const QString &text) {
+        AppLog::write(QStringLiteral("[تنبيه] %1 — %2").arg(title, text));
+        if (isVisible() && !isMinimized())
+            Toast::show(this, QStringLiteral("%1: %2").arg(title, text), Toast::Kind::Warning);
+        if (m_tray && !(isVisible() && !isMinimized() && isActiveWindow()))
+            m_tray->showMessage(title, text, QSystemTrayIcon::Warning, 15000);
+    });
+    connect(this, &MainWindow::watchAlert, this, [](const QString &name, const QString &camera) {
+        AppLog::write(camera.isEmpty() ? QStringLiteral("تنبيه مراقبة: ظهر %1").arg(name)
+                                       : QStringLiteral("تنبيه مراقبة: ظهر %1 أمام «%2»").arg(name, camera));
+    });
+    m_cameraRetryTimer = new QTimer(this);
+    m_cameraRetryTimer->setSingleShot(true);
+    m_cameraRetryTimer->setInterval(CameraRestartMs);
+    connect(m_cameraRetryTimer, &QTimer::timeout, this, [this] {
+        // لم يفتح المستخدم شيئاً آخر منذ توقفها
+        if (m_ready && !m_videoRunning && !m_analyzing && m_videoSource.startsWith(QStringLiteral("camera:"))) {
+            AppLog::write(QStringLiteral("إعادة تشغيل الكاميرا «%1» بعد انقطاعها").arg(m_cameraName));
+            startVideo(m_videoSource);
+        }
+    });
 }
 
 void MainWindow::onEngineLoaded()
@@ -453,6 +519,14 @@ void MainWindow::onEngineLoaded()
     statusBar()->showMessage(QStringLiteral("جاهز — كل المعالجة تتم محلياً على هذا الجهاز (التحليل على %1) · اسحب صورة أو فيديو إلى "
                                             "النافذة أو الصق صورة بـ Ctrl+V")
                                  .arg(device));
+    AppLog::write(QStringLiteral("جاهز — التحليل على %1، والقاعدة فيها %2 شخصاً").arg(device).arg(m_database.personCount()));
+    if (m_previousCrash.isValid()) {
+        Toast::show(this,
+                    QStringLiteral("لم يُغلق البرنامج إغلاقاً طبيعياً في المرة السابقة (بدأت %1). التفاصيل في «سجل الأحداث» من قائمة "
+                                   "الكاميرا ← السجلات والتقارير")
+                        .arg(m_previousCrash.toString(QStringLiteral("yyyy-MM-dd HH:mm"))),
+                    Toast::Kind::Warning);
+    }
     if (!m_pendingFile.isEmpty()) {
         openFile(std::exchange(m_pendingFile, QString()));
     } else if (startCameraOnLaunch() && !Cameras::lastSource().isEmpty()) {
@@ -647,6 +721,7 @@ void MainWindow::setupTray()
     QAction *stop = menu->addAction(QStringLiteral("إيقاف الكاميرا"), this, [this] { stopVideo(); });
     QAction *record = menu->addAction(QStringLiteral("تسجيل"), this, [this] { toggleRecording(); });
     menu->addSeparator();
+    addRecordsMenu(menu->addMenu(QStringLiteral("السجلات والتقارير")));
     addBackgroundMenu(menu);
     menu->addSeparator();
     menu->addAction(QStringLiteral("خروج"), this, &MainWindow::quitApplication);
@@ -677,6 +752,22 @@ void MainWindow::setupTray()
     m_tray->show();
 }
 
+void MainWindow::activateFromOtherInstance(const QString &message)
+{
+    if (message == QLatin1String("startup"))
+        return;
+    showFromTray();
+    if (message.startsWith(QLatin1String("open:"))) {
+        const QString path = message.mid(5);
+        if (m_ready && (m_videoRunning || m_analyzing))
+            Toast::show(this, QStringLiteral("البرنامج مشغول الآن؛ افتح الملف بعد انتهاء العمل الحالي"), Toast::Kind::Warning);
+        else
+            openFile(path);
+    } else {
+        statusBar()->showMessage(QStringLiteral("ملامح يعمل أصلاً؛ هذه نافذته"), 5000);
+    }
+}
+
 void MainWindow::showFromTray()
 {
     if (isMinimized())
@@ -697,6 +788,11 @@ void MainWindow::quitApplication()
 void MainWindow::addBackgroundMenu(QMenu *parent)
 {
     QMenu *menu = parent->addMenu(QStringLiteral("العمل في الخلفية"));
+    QAction *visitors = menu->addAction(QStringLiteral("حفظ الزوار المجهولين"));
+    visitors->setCheckable(true);
+    visitors->setChecked(CameraWatch::visitorsEnabled());
+    visitors->setToolTip(QStringLiteral("الوجوه غير المسجلة أمام الكاميرات تُحفظ زواراً (الوجه نفسه تحت رقم واحد) لتسميتهم لاحقاً"));
+    connect(visitors, &QAction::toggled, this, [](bool on) { CameraWatch::setVisitorsEnabled(on); });
     QAction *tray = menu->addAction(QStringLiteral("إبقاء الكاميرا تعمل عند إغلاق النافذة"));
     tray->setCheckable(true);
     tray->setChecked(keepRunningInTray());
@@ -1428,9 +1524,13 @@ QWidget *MainWindow::createDatabasePage()
     auto *openFolderButton = new FancyButton(Icons::Name::Folder, QStringLiteral("فتح المجلد"), FancyButton::Kind::Secondary, page);
     connect(addPersonButton, &QAbstractButton::clicked, this, &MainWindow::addPerson);
     connect(openFolderButton, &QAbstractButton::clicked, this, &MainWindow::openDatabaseFolder);
-    auto *alertLogButton = new FancyButton(Icons::Name::Alert, QStringLiteral("سجل التنبيهات"), FancyButton::Kind::Secondary, page);
-    alertLogButton->setToolTip(QStringLiteral("كل مرات ظهور الأشخاص المراقَبين في الصور والفيديوهات والكاميرا"));
-    connect(alertLogButton, &QAbstractButton::clicked, this, &MainWindow::showAlertLog);
+    auto *alertLogButton = new FancyButton(Icons::Name::History, QStringLiteral("السجلات والتقارير"), FancyButton::Kind::Secondary, page);
+    alertLogButton->setToolTip(QStringLiteral("سجل التنبيهات، الزوار المجهولون، تسجيلات الكاميرات، تقرير اليوم، سجل الأحداث"));
+    connect(alertLogButton, &QAbstractButton::clicked, this, [this, alertLogButton] {
+        QMenu menu(this);
+        addRecordsMenu(&menu);
+        menu.exec(alertLogButton->mapToGlobal(QPoint(0, alertLogButton->height())));
+    });
     m_importButton = new FancyButton(Icons::Name::Collect, QStringLiteral("استيراد"), FancyButton::Kind::Secondary, page);
     m_importButton->setToolTip(QStringLiteral("إضافة أشخاص كثيرين دفعة واحدة من مجلد: كل مجلد فرعي شخص وفيه صوره"));
     m_importButton->setEnabled(false);
@@ -1823,6 +1923,8 @@ void MainWindow::openCamera()
     menu.addSeparator();
     menu.addAction(icon(Icons::Name::Users), QStringLiteral("عدة كاميرات معاً (شبكة مراقبة)…"), this, [this] { openMultiCamera(); });
     menu.addAction(icon(Icons::Name::Sliders), QStringLiteral("إدارة الكاميرات وإضافة كاميرا شبكة…"), this, [this] { manageCameras(); });
+    menu.addSeparator();
+    addRecordsMenu(menu.addMenu(icon(Icons::Name::History), QStringLiteral("السجلات والتقارير")));
     addBackgroundMenu(&menu);
     menu.exec(m_cameraButton->mapToGlobal(QPoint(0, m_cameraButton->height())));
 }
@@ -1849,6 +1951,7 @@ void MainWindow::openMultiCamera()
         m_multiCamera = new MultiCameraWindow(&m_engine, &m_database, [this] { return threshold(); }, this);
         m_multiCamera->setAttribute(Qt::WA_DeleteOnClose, false);
         connect(m_multiCamera, &MultiCameraWindow::watchAlert, this, &MainWindow::watchAlert);
+        connect(m_multiCamera, &MultiCameraWindow::systemAlert, this, &MainWindow::systemAlert);
     }
     m_multiCamera->setGallery(m_database.gallery());
     m_multiCamera->setWatched(m_watched);
@@ -1910,6 +2013,8 @@ void MainWindow::startVideo(const QString &source)
     m_view->setNavigation(false, false, QString());
     setVideoSettingsVisible(true);
     clearWatchAlerts();
+    if (camera)
+        m_cameraWatch->reset(source, m_cameraName, m_recorder);
     if (!source.startsWith(QStringLiteral("camera:")))
         addRecentFile(source);
     m_faces.clear();
@@ -1942,6 +2047,11 @@ void MainWindow::startVideo(const QString &source)
     m_pausedMs = 0;
     m_pauseButton->setIconName(Icons::Name::Pause);
     m_pauseButton->setText(QStringLiteral("إيقاف مؤقت"));
+    m_cameraRetryTimer->stop();
+    m_cameraLostAt = 0;
+    m_cameraOfflineAlerted = false;
+    if (camera)
+        AppLog::write(QStringLiteral("تشغيل الكاميرا «%1»").arg(m_cameraName));
     m_videoWorker->prepareStart();
     QMetaObject::invokeMethod(m_videoWorker, "process", Qt::QueuedConnection, Q_ARG(QString, source));
 }
@@ -1994,6 +2104,7 @@ void MainWindow::startRecording()
     }
     m_recordTimer->start();
     updateRecordButton();
+    AppLog::write(QStringLiteral("بدء تسجيل الكاميرا «%1»").arg(m_cameraName));
     statusBar()->showMessage(QStringLiteral("جارٍ تسجيل الكاميرا «%1»%2 في: %3")
                                  .arg(m_cameraName, options.motionOnly ? QStringLiteral(" عند الحركة فقط") : QString(),
                                       QDir::toNativeSeparators(folder)));
@@ -2010,6 +2121,7 @@ QString MainWindow::stopRecording()
     if (!wasRecording)
         return {};
     const QStringList files = m_recorder->files();
+    AppLog::write(QStringLiteral("إيقاف تسجيل الكاميرا «%1» (%2 ملفات)").arg(m_cameraName).arg(files.size()));
     if (files.isEmpty()) {
         Toast::show(this, QStringLiteral("لم يصل من الكاميرا ما يُسجَّل"), Toast::Kind::Warning);
         return {};
@@ -2197,6 +2309,16 @@ void MainWindow::onVideoFinished(const QString &error)
     rebuildTimelineLanes();
     m_view->setBusy(false);
     m_progress->setVisible(false);
+    const bool cameraSource = m_videoSource.startsWith(QStringLiteral("camera:"));
+    if (cameraSource)
+        AppLog::write(error.isEmpty() ? QStringLiteral("إيقاف الكاميرا «%1»").arg(m_cameraName)
+                                      : QStringLiteral("توقفت الكاميرا «%1»: %2").arg(m_cameraName, error));
+    if (cameraSource && !error.isEmpty() && m_cameraLostAt > 0) {
+        // انقطعت أثناء المراقبة ولم تعد: لا تبقى المراقبة متوقفة على جهاز يعمل وحده
+        emit systemAlert(QStringLiteral("توقفت الكاميرا «%1»").arg(m_cameraName),
+                         QStringLiteral("%1. تُعاد المحاولة كل %2 ثانية").arg(error).arg(CameraRestartMs / 1000));
+        m_cameraRetryTimer->start();
+    }
     if (!error.isEmpty()) {
         statusBar()->showMessage(recorded.isEmpty() ? error : error + QStringLiteral(" · ") + recorded);
         Toast::show(this, error, Toast::Kind::Warning);
@@ -2754,6 +2876,8 @@ void MainWindow::showFaceDetails()
 void MainWindow::refreshWatched()
 {
     m_watched = m_database.watchedIds();
+    if (m_cameraWatch)
+        m_cameraWatch->setWatched(m_watched);
     if (m_multiCamera)
         m_multiCamera->setWatched(m_watched);
     m_view->setWatched(m_watched);
@@ -2767,7 +2891,6 @@ void MainWindow::refreshWatched()
 void MainWindow::clearWatchAlerts()
 {
     m_alerted.clear();
-    m_cameraSeen.clear();
     m_alertCount = 0;
     m_alertFaceId = -1;
     m_alertBar->hide();
@@ -2817,50 +2940,30 @@ void MainWindow::showWatchAlert(const FaceItem &face, const QImage &crop)
 
 void MainWindow::noteCameraFaces(const QImage &frame, const QList<FaceItem> &faces)
 {
-    // مربعات الوجوه للتسجيل، بإحداثيات نسبية لأن الإطار المعروض قد يكون مصغراً
-    if (m_recorder->isRecording() && !frame.isNull()) {
-        QList<CameraRecorder::OverlayBox> boxes;
-        for (const FaceItem &face : faces) {
-            const QRectF box(face.box.x() / frame.width(), face.box.y() / frame.height(), face.box.width() / frame.width(),
-                             face.box.height() / frame.height());
-            const bool watched = face.match.status == MatchStatus::Confirmed && m_watched.contains(face.match.personId);
-            boxes.append({box, matchLabel(face.match), watched ? QColor(0xff, 0x5c, 0x5c) : matchColor(face.match.status)});
-        }
-        m_recorder->setOverlay(boxes);
-    }
-
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // بصمة الوجه وصورته الأوضح من بطاقته (متوسط إطارات مساره كلها)، فهي أثبت من الإطار وحده
+    QList<CameraWatch::Face> watched;
     for (const FaceItem &face : faces) {
-        if (face.match.status != MatchStatus::Confirmed || face.match.personId.isEmpty())
-            continue;
-        const QString personId = face.match.personId;
-        const qint64 last = m_cameraSeen.value(personId, -1);
-        m_cameraSeen.insert(personId, now);
-        // ما دام ظاهراً (أو غاب أقل من ReappearMs) فهو الظهور نفسه
-        if (last >= 0 && now - last < CameraReappearMs)
-            continue;
-        // أوضح صورة للوجه من بطاقته، وإلا من الإطار نفسه
+        CameraWatch::Face item;
+        item.box = face.box;
+        item.match = face.match;
+        item.quality = face.quality;
+        item.track = face.id;
         const int row = m_faceRows.value(face.id, -1);
-        QImage crop;
-        if (row >= 0 && row < m_faces.size() && m_faces.at(row).id == face.id)
-            crop = ImageIO::faceCrop(m_faces.at(row));
-        if (crop.isNull())
-            crop = frame.copy(face.box.adjusted(-face.box.width() * 0.3, -face.box.height() * 0.3, face.box.width() * 0.3,
-                                                face.box.height() * 0.3).toAlignedRect().intersected(frame.rect()));
-        const QString snapshot = saveSightingSnapshot(frame, face.box, face.match.name);
-        // موضع الظهور في التسجيل الجاري، قبله بثانيتين ليظهر الشخص داخلاً
-        const CameraRecorder::Position position = m_recorder->position();
-        m_database.addCameraSighting(personId, m_videoSource, position.path,
-                                     position.ms >= 0 ? std::max<qint64>(0, position.ms - 2000) : -1, face.match.score, crop,
-                                     snapshot);
-        if (m_watched.contains(personId))
-            showWatchAlert(face, crop);
+        if (row >= 0 && row < m_faces.size() && m_faces.at(row).id == face.id) {
+            const FaceItem &card = m_faces.at(row);
+            item.embedding = card.embedding;
+            item.quality = std::max(item.quality, card.quality);
+            if (face.match.status != MatchStatus::Possible)
+                item.crop = ImageIO::faceCrop(card);
+        }
+        watched.append(item);
     }
-}
-
-QString MainWindow::saveSightingSnapshot(const QImage &frame, const QRectF &box, const QString &name)
-{
-    return CameraRecorder::saveSnapshot(frame, box, name);
+    // مربعات الوجوه للتسجيل، بإحداثيات نسبية لأن الإطار المعروض قد يكون مصغراً
+    if (m_recorder->isRecording() && !frame.isNull())
+        m_recorder->setOverlay(m_cameraWatch->overlay(frame.size(), watched));
+    m_cameraWatch->setThreshold(threshold());
+    m_cameraFaces = faces;
+    m_cameraWatch->process(frame, watched);
 }
 
 void MainWindow::showAlertLog()
@@ -2875,6 +2978,66 @@ void MainWindow::showAlertLog()
         m_navGroup->button(0)->click();
         m_lastDirectory = QFileInfo(path).absolutePath();
         openSighting(path, positionMs);
+    });
+    dialog.exec();
+}
+
+void MainWindow::addRecordsMenu(QMenu *menu)
+{
+    const auto icon = [](Icons::Name name) { return Icons::icon(name, Theme::Text, 18); };
+    menu->addAction(icon(Icons::Name::Alert), QStringLiteral("سجل التنبيهات…"), this, [this] {
+        showFromTray();
+        showAlertLog();
+    });
+    menu->addAction(icon(Icons::Name::Users), QStringLiteral("الزوار المجهولون…"), this, [this] {
+        showFromTray();
+        showVisitors();
+    });
+    menu->addAction(icon(Icons::Name::Film), QStringLiteral("تسجيلات الكاميرات (يوم بيوم)…"), this, [this] {
+        showFromTray();
+        showRecordings();
+    });
+    menu->addAction(icon(Icons::Name::Export), QStringLiteral("تقرير يومي…"), this, [this] {
+        showFromTray();
+        showDailyReport();
+    });
+    menu->addSeparator();
+    menu->addAction(icon(Icons::Name::Info), QStringLiteral("سجل الأحداث (الانقطاع والتسجيل والأعطال)…"), this, [] {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(AppLog::folder()));
+    });
+}
+
+void MainWindow::showVisitors()
+{
+    VisitorsDialog dialog(&m_database, this);
+    connect(&dialog, &VisitorsDialog::openFileRequested, this, [this](const QString &path, qint64 positionMs) {
+        if (!m_ready || m_videoRunning || m_analyzing) {
+            Toast::show(this, QStringLiteral("انتظر حتى ينتهي التحليل الحالي (أو أوقف الكاميرا)"), Toast::Kind::Warning);
+            return;
+        }
+        m_navGroup->button(0)->click();
+        m_lastDirectory = QFileInfo(path).absolutePath();
+        openSighting(path, positionMs);
+    });
+    connect(&dialog, &VisitorsDialog::assignRequested, this, [this, &dialog](qint64 visitorId) {
+        const Visitor visitor = m_database.visitor(visitorId);
+        std::vector<float> embedding = m_database.visitorEmbedding(visitorId);
+        if (visitor.id <= 0 || embedding.size() != FaceEngine::EmbeddingSize) {
+            Toast::show(&dialog, QStringLiteral("تعذر قراءة بصمة الزائر"), Toast::Kind::Warning);
+            return;
+        }
+        const QString personId = choosePerson(QString());
+        if (personId.isEmpty())
+            return;
+        // البصمة متوسط كل إطارات ظهوره، فهي أثبت من صورة واحدة
+        if (!m_database.assignVisitor(visitorId, personId, visitor.image, {embedding}, visitor.quality)) {
+            Toast::show(&dialog, QStringLiteral("تعذر نقل الزائر إلى الشخص"), Toast::Kind::Warning);
+            return;
+        }
+        Toast::show(&dialog, QStringLiteral("أصبح الزائر #%1 «%2»، وانتقل ظهوره إلى سجله")
+                                 .arg(visitorId)
+                                 .arg(m_database.person(personId).name));
+        dialog.reload();
     });
     dialog.exec();
 }
@@ -4045,4 +4208,12 @@ void MainWindow::saveVideoFrame(qint64 positionMs)
         Toast::show(this, QStringLiteral("تم حفظ الإطار"));
     else
         Toast::show(this, QStringLiteral("تعذر حفظ الإطار"), Toast::Kind::Warning);
+}
+
+void MainWindow::showRecordings()
+{
+}
+
+void MainWindow::showDailyReport()
+{
 }

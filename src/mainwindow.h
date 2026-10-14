@@ -30,6 +30,7 @@ class QListView;
 class PersonListModel;
 class QTimer;
 class CameraRecorder;
+class CameraWatch;
 class MultiCameraWindow;
 class QProgressBar;
 class QSlider;
@@ -61,6 +62,10 @@ public:
     void openFile(const QString &path); // صورة أو فيديو
     // فُتح البرنامج مع ويندوز: يبقى بجانب الساعة دون نافذة إن أمكن
     bool startHidden() const;
+    // طلب من نسخة ثانية فُتحت: "show" أو "open:<مسار>" أو "startup" (لا شيء، البرنامج يعمل أصلاً)
+    void activateFromOtherInstance(const QString &message);
+    // لم يُغلق البرنامج إغلاقاً طبيعياً في التشغيل السابق (يُعرض تنبيه بعد تحميل النماذج)
+    void setPreviousCrash(const QDateTime &started) { m_previousCrash = started; }
 
     // العمل في الخلفية لمراقبة الكاميرا
     static bool keepRunningInTray();
@@ -70,6 +75,8 @@ public:
 signals:
     // تنبيه مراقبة (لإشعار ويندوز حين تكون النافذة مخفية)؛ camera فارغ للملفات
     void watchAlert(const QString &name, const QString &camera);
+    // عطل يحتاج انتباه المستخدم (كاميرا منقطعة طويلاً، توقف التسجيل)؛ يُكتب في السجل ويصل إشعاراً
+    void systemAlert(const QString &title, const QString &text);
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -125,10 +132,14 @@ private:
     void showWatchAlert(const FaceItem &face, const QImage &crop);
     // الكاميرا: ظهور شخص معروف بعد غياب يُسجَّل (مع موضعه في التسجيل وصورة الإطار) وينبَّه عنه إن كان مراقَباً
     void noteCameraFaces(const QImage &frame, const QList<FaceItem> &faces);
-    QString saveSightingSnapshot(const QImage &frame, const QRectF &box, const QString &name);
     void clearWatchAlerts();
     void toggleWatch();
     void showAlertLog();
+    void showVisitors();
+    void showRecordings();
+    void showDailyReport();
+    // السجلات والتقارير: التنبيهات، الزوار المجهولون، التسجيلات، تقرير اليوم، سجل الأحداث
+    void addRecordsMenu(QMenu *parent);
     // يفتح الملف الذي ظهر فيه شخص، والفيديو من لحظة ظهوره
     void openSighting(const QString &path, qint64 positionMs);
     void importPersons();
@@ -203,6 +214,10 @@ private:
     MatchPage *m_matchPage = nullptr;
     FaceDatabase m_database;
     bool m_ready = false;
+    QDateTime m_previousCrash;
+    qint64 m_cameraLostAt = 0;      // بداية انقطاع الكاميرا الجارية
+    bool m_cameraOfflineAlerted = false;
+    QTimer *m_cameraRetryTimer = nullptr; // إعادة تشغيل الكاميرا الموصولة إن انقطعت ولم تعد
     QFutureWatcher<QString> m_loadWatcher; // تحميل النماذج في الخلفية حتى تظهر النافذة فوراً
     QString m_databaseError;
     QString m_pendingFile;
@@ -304,7 +319,8 @@ private:
     // قائمة المراقبة: تنبيه فور ظهور شخص مراقَب
     QSet<QString> m_watched;
     QSet<QString> m_alerted; // من نُبِّه عنه في الصورة أو الفيديو الحالي
-    QHash<QString, qint64> m_cameraSeen; // آخر ظهور لكل شخص أمام الكاميرا الجارية (مللي ثانية منذ 1970)
+    CameraWatch *m_cameraWatch = nullptr; // ظهور الأشخاص والزوار المجهولين أمام الكاميرا الجارية
+    QList<FaceItem> m_cameraFaces;         // وجوه آخر إطار من الكاميرا (لربط التنبيه بوجهه)
     QFrame *m_alertBar = nullptr;
     QLabel *m_alertAvatar = nullptr;
     QLabel *m_alertText = nullptr;

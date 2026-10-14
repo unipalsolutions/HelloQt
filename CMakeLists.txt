@@ -5,6 +5,9 @@ project(Malamih VERSION 3.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# رقم الإصدار الكامل؛ CI يمرر رقم البناء (3.0.N) فيظهر داخل البرنامج ومعلومات الملف والمثبّت معاً
+set(MALAMIH_VERSION "${PROJECT_VERSION}" CACHE STRING "Version shown in the app and the Windows file properties")
+
 set(DEPS_DIR "${CMAKE_BINARY_DIR}/_deps" CACHE PATH "Folder for downloaded dependencies (ONNX Runtime, face models)")
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Sql Network)
@@ -17,6 +20,12 @@ qt_standard_project_setup()
 
 qt_add_executable(Malamih
     src/main.cpp
+    src/applog.h
+    src/applog.cpp
+    src/camerawatch.h
+    src/camerawatch.cpp
+    src/visitorsdialog.h
+    src/visitorsdialog.cpp
     src/mainwindow.h
     src/mainwindow.cpp
     src/faceengine.h
@@ -86,8 +95,12 @@ qt_add_executable(Malamih
 
 # أيقونة التطبيق: داخل الملف التنفيذي على Windows وللنافذة عبر موارد Qt
 if(WIN32)
-    target_sources(Malamih PRIVATE resources/app.rc)
+    string(REPLACE "." "," MALAMIH_VERSION_COMMAS "${MALAMIH_VERSION}")
+    set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.ico")
+    configure_file(resources/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
+    target_sources(Malamih PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
 endif()
+target_compile_definitions(Malamih PRIVATE MALAMIH_VERSION="${MALAMIH_VERSION}")
 qt_add_resources(Malamih app_resources
     PREFIX "/"
     FILES resources/app-256.png resources/app-512.png
@@ -107,7 +120,7 @@ if(MSVC)
     target_compile_options(Malamih PRIVATE /utf-8)
 endif()
 if(WIN32)
-    target_link_libraries(Malamih PRIVATE psapi strmiids ole32 oleaut32 crypt32 mfplat mf mfuuid dxgi)
+    target_link_libraries(Malamih PRIVATE psapi strmiids ole32 oleaut32 crypt32 mfplat mf mfuuid dxgi dbghelp)
 endif()
 
 set_target_properties(Malamih PROPERTIES

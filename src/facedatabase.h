@@ -8,6 +8,7 @@
 #include <QImage>
 #include <QList>
 #include <QSet>
+#include <QStringList>
 #include <QObject>
 #include <QSqlDatabase>
 #include <QString>
@@ -42,6 +43,24 @@ struct SightingEntry
     QString personId;
     QString name;
     QString tags;
+};
+
+// زائر مجهول: وجه غير مسجل تكرر ظهوره أمام الكاميرات، يُعرف ببصمته حتى يُسمّى
+struct Visitor
+{
+    qint64 id = 0;
+    QDateTime firstSeen;
+    QDateTime lastSeen;
+    int seenCount = 0;
+    QImage image;        // أوضح صورة لوجهه
+    float quality = 0.0f;
+    QStringList cameras; // الكاميرات التي ظهر أمامها ("camera:…")
+};
+
+struct VisitorSighting
+{
+    qint64 visitorId = 0;
+    Sighting sighting;
 };
 
 struct Person
@@ -137,6 +156,26 @@ public:
     // أحدث الظهور لكل الأشخاص منذ since (أو كله إن كان غير صالح)؛ watchedOnly لقائمة المراقبة فقط
     QList<SightingEntry> recentSightings(bool watchedOnly, const QDateTime &since, int limit) const;
 
+    // ظهور أمام الكاميرا في فترة (لمستعرض التسجيلات والتقرير اليومي)؛ personId لشخص واحد أو فارغ للكل
+    QList<SightingEntry> cameraSightingsBetween(const QDateTime &from, const QDateTime &to,
+                                                const QString &personId = QString()) const;
+
+    // الزوار المجهولون: يُضاف الظهور لأقرب زائر سابق ببصمته (تشابه threshold فأكثر) أو لزائر جديد؛
+    // يعيد رقم الزائر أو -1
+    qint64 addVisitorSighting(const std::vector<float> &embedding, float quality, float threshold, const QString &camera,
+                              const QString &recording, qint64 positionMs, const QImage &face, const QString &snapshot,
+                              bool *isNew = nullptr);
+    // الأحدث ظهوراً أولاً؛ minCount لمن تكرر ظهوره
+    QList<Visitor> visitors(const QDateTime &since, int minCount, int limit) const;
+    Visitor visitor(qint64 id) const;
+    std::vector<float> visitorEmbedding(qint64 id) const;
+    QList<Sighting> visitorSightings(qint64 visitorId, int limit = 200) const;
+    QList<VisitorSighting> visitorSightingsBetween(const QDateTime &from, const QDateTime &to) const;
+    bool removeVisitor(qint64 id);
+    // تسمية الزائر: صورته (بصماتها embeddings) تُضاف لصور الشخص، وظهوره كله ينتقل إلى سجل ظهوره
+    bool assignVisitor(qint64 visitorId, const QString &personId, const QImage &crop,
+                       const std::vector<std::vector<float>> &embeddings, float quality);
+
     // يجمع عمليات كثيرة في معاملة واحدة (للاستيراد الكبير)، والإشعارات تُرسل مرة واحدة في النهاية
     void beginBatch();
     bool endBatch();
@@ -155,6 +194,7 @@ signals:
     void changed();                       // أي تغيير (الإحصاءات ونتائج المطابقة)
     void personsReset();                  // إضافة أو حذف أشخاص
     void personUpdated(const QString &id); // تغيّرت بيانات شخص أو صوره
+    void visitorsChanged();
 
 private:
     bool exec(const QString &sql, const QVariantList &values = {}) const;
@@ -164,6 +204,7 @@ private:
     void notify(const QString &personId, bool reset);
     void beginStep();
     void rollbackStep();
+    void loadVisitors() const;
 
     QString m_directory;
     QString m_connection;
@@ -175,4 +216,11 @@ private:
     bool m_batchReset = false;
     bool m_batchChanged = false;
     QSet<QString> m_batchUpdated; // أشخاص تغيروا داخل الدفعة الحالية
+    struct VisitorPrint
+    {
+        std::vector<float> embedding;
+        int samples = 0;
+    };
+    mutable QHash<qint64, VisitorPrint> m_visitorEmbeddings; // تُحمَّل عند أول حاجة
+    mutable bool m_visitorsLoaded = false;
 };

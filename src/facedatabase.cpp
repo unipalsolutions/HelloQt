@@ -41,6 +41,8 @@ constexpr size_t CodeWords = 8; // بصمة ثنائية من 512 بت لكل ش
 constexpr int StoredPhotoSize = 192; // أكبر بُعد لصورة الوجه المحفوظة
 constexpr int StoredPhotoQuality = 88;
 constexpr qsizetype TemplateBytes = qsizetype(sizeof(float) + Dimension);
+constexpr int VisitorKeepDays = 90;
+constexpr int VisitorSamples = 30; // أقصى عدد بصمات يُحسب منها متوسط بصمة الزائر (فتبقى تتكيف)
 
 constexpr quint32 CodesMagic = 0x58494c4d; // "MLIX"
 constexpr quint32 MeansMagic = 0x4e4d4c4d; // "MLMN"
@@ -695,6 +697,16 @@ bool FaceDatabase::open(const QString &directory, QString *error)
                        " seen INTEGER, source TEXT, position_ms INTEGER, score REAL, thumb BLOB)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS sightings_person ON sightings(person_id, id)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS sightings_seen ON sightings(seen)"),
+        // الزوار المجهولون أمام الكاميرات: كل وجه غير مسجل تكرر ظهوره يُجمع تحت رقم واحد ببصمته
+        QStringLiteral("CREATE TABLE IF NOT EXISTS visitors(id INTEGER PRIMARY KEY AUTOINCREMENT, first_seen INTEGER,"
+                       " last_seen INTEGER, seen_count INTEGER NOT NULL DEFAULT 0, quality REAL, image BLOB, embedding BLOB,"
+                       " samples INTEGER NOT NULL DEFAULT 1)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS visitors_last_seen ON visitors(last_seen)"),
+        QStringLiteral("CREATE TABLE IF NOT EXISTS visitor_sightings(id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                       " visitor_id INTEGER NOT NULL, seen INTEGER, camera TEXT, source TEXT, position_ms INTEGER,"
+                       " thumb BLOB, snapshot TEXT)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS visitor_sightings_visitor ON visitor_sightings(visitor_id, id)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS visitor_sightings_seen ON visitor_sightings(seen)"),
         QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES('model', 'insightface-buffalo_l')"),
         QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES('generation', '1')"),
     };
@@ -705,6 +717,14 @@ bool FaceDatabase::open(const QString &directory, QString *error)
 
     if (!upgradeSchema())
         return fail(QStringLiteral("تعذر تحديث قاعدة البيانات: %1").arg(m_db.lastError().text()));
+    // الزوار المجهولون الذين لم يظهروا منذ مدة طويلة يُنسون حتى لا يكبر سجلهم بلا حد
+    {
+        const qint64 limit = QDateTime::currentDateTime().addDays(-VisitorKeepDays).toSecsSinceEpoch();
+        exec(QStringLiteral("DELETE FROM visitor_sightings WHERE visitor_id IN (SELECT id FROM visitors WHERE last_seen < ?)"), {limit});
+        exec(QStringLiteral("DELETE FROM visitors WHERE last_seen < ?"), {limit});
+    }
+    m_visitorEmbeddings.clear();
+    m_visitorsLoaded = false;
 
     if (fresh && QFile::exists(QDir(directory).filePath(QString::fromLatin1(LegacyFile))) && !migrateLegacy(error)) {
         close();
@@ -1610,6 +1630,306 @@ QList<SightingEntry> FaceDatabase::recentSightings(bool watchedOnly, const QDate
         entry.sighting.thumbnail.loadFromData(query.value(5).toByteArray(), "JPG");
         entry.personId = query.value(6).toString();
         entry.name = query.value(7).toString();
+        entry.sighting.camera = query.value(9).toString();
+        entry.sighting.snapshot = query.value(10).toString();
+        list.append(entry);
+    }
+    return list;
+}
+
+namespace {
+
+QByteArray thumbnailOf(const QImage &face, int side = 96)
+{
+    QByteArray thumb;
+    if (!face.isNull()) {
+        QBuffer buffer(&thumb);
+        buffer.open(QIODevice::WriteOnly);
+        face.scaled(side, side, Qt::KeepAspectRatio, Qt::SmoothTransformation).save(&buffer, "JPG", 85);
+    }
+    return thumb;
+}
+
+QByteArray floatsToBytes(const std::vector<float> &values)
+{
+    return QByteArray(reinterpret_cast<const char *>(values.data()), qsizetype(values.size() * sizeof(float)));
+}
+
+std::vector<float> bytesToFloats(const QByteArray &data)
+{
+    std::vector<float> values(size_t(data.size()) / sizeof(float));
+    if (!values.empty())
+        memcpy(values.data(), data.constData(), values.size() * sizeof(float));
+    return values;
+}
+
+Sighting visitorSightingFromQuery(const QSqlQuery &query, int first)
+{
+    Sighting sighting;
+    sighting.id = query.value(first).toLongLong();
+    sighting.seen = QDateTime::fromSecsSinceEpoch(query.value(first + 1).toLongLong());
+    sighting.camera = query.value(first + 2).toString();
+    sighting.source = query.value(first + 3).toString();
+    sighting.positionMs = query.value(first + 4).toLongLong();
+    sighting.thumbnail.loadFromData(query.value(first + 5).toByteArray(), "JPG");
+    sighting.snapshot = query.value(first + 6).toString();
+    return sighting;
+}
+
+} // namespace
+
+void FaceDatabase::loadVisitors() const
+{
+    if (m_visitorsLoaded || !m_db.isOpen())
+        return;
+    m_visitorEmbeddings.clear();
+    QSqlQuery query(m_db);
+    query.setForwardOnly(true);
+    if (query.exec(QStringLiteral("SELECT id, embedding, samples FROM visitors"))) {
+        while (query.next()) {
+            std::vector<float> embedding = bytesToFloats(query.value(1).toByteArray());
+            if (embedding.size() == Dimension)
+                m_visitorEmbeddings.insert(query.value(0).toLongLong(), {std::move(embedding), query.value(2).toInt()});
+        }
+    }
+    m_visitorsLoaded = true;
+}
+
+qint64 FaceDatabase::addVisitorSighting(const std::vector<float> &embedding, float quality, float threshold, const QString &camera,
+                                        const QString &recording, qint64 positionMs, const QImage &face, const QString &snapshot,
+                                        bool *isNew)
+{
+    if (isNew)
+        *isNew = false;
+    if (!m_db.isOpen() || embedding.size() != Dimension)
+        return -1;
+    loadVisitors();
+    std::vector<float> normalized = embedding;
+    FaceEngine::normalize(normalized);
+    // أقرب زائر سابق ببصمته؛ وإلا زائر جديد
+    qint64 best = -1;
+    float bestScore = threshold;
+    for (auto it = m_visitorEmbeddings.cbegin(); it != m_visitorEmbeddings.cend(); ++it) {
+        const float score = FaceEngine::dot(it->embedding.data(), normalized.data(), Dimension);
+        if (score >= bestScore) {
+            bestScore = score;
+            best = it.key();
+        }
+    }
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    const QByteArray image = thumbnailOf(face, 160);
+    beginBatch();
+    bool ok = true;
+    if (best < 0) {
+        ok = exec(QStringLiteral("INSERT INTO visitors(first_seen, last_seen, seen_count, quality, image, embedding, samples)"
+                                 " VALUES(?, ?, 1, ?, ?, ?, 1)"),
+                  {now, now, double(quality), image, floatsToBytes(normalized)});
+        if (ok) {
+            QSqlQuery id(m_db);
+            id.exec(QStringLiteral("SELECT last_insert_rowid()"));
+            best = id.next() ? id.value(0).toLongLong() : -1;
+            ok = best > 0;
+            if (ok)
+                m_visitorEmbeddings.insert(best, {normalized, 1});
+            if (isNew)
+                *isNew = ok;
+        }
+    } else {
+        // متوسط متحرك للبصمة، فيبقى الزائر يُعرف مع تغير الإضاءة والزاوية
+        VisitorPrint &print = m_visitorEmbeddings[best];
+        const int samples = std::min(print.samples, VisitorSamples);
+        for (size_t i = 0; i < Dimension; ++i)
+            print.embedding[i] = (print.embedding[i] * float(samples) + normalized[i]) / float(samples + 1);
+        FaceEngine::normalize(print.embedding);
+        print.samples = samples + 1;
+        ok = exec(QStringLiteral("UPDATE visitors SET last_seen = ?, seen_count = seen_count + 1, embedding = ?, samples = ? WHERE id = ?"),
+                  {now, floatsToBytes(print.embedding), print.samples, best});
+        // صورة أوضح تحل محل الصورة الممثلة للزائر
+        if (ok && !image.isEmpty())
+            ok = exec(QStringLiteral("UPDATE visitors SET quality = ?, image = ? WHERE id = ? AND (quality IS NULL OR quality < ?)"),
+                      {double(quality), image, best, double(quality)});
+    }
+    if (ok)
+        ok = exec(QStringLiteral("INSERT INTO visitor_sightings(visitor_id, seen, camera, source, position_ms, thumb, snapshot)"
+                                 " VALUES(?, ?, ?, ?, ?, ?, ?)"),
+                  {best, now, camera, recording.isEmpty() ? camera : recording, recording.isEmpty() ? qint64(-1) : positionMs,
+                   thumbnailOf(face), snapshot});
+    if (!endBatch() || !ok) {
+        m_visitorsLoaded = false; // يُعاد تحميلها من القاعدة لتطابقها
+        return -1;
+    }
+    emit visitorsChanged();
+    return best;
+}
+
+QList<Visitor> FaceDatabase::visitors(const QDateTime &since, int minCount, int limit) const
+{
+    QList<Visitor> list;
+    if (!m_db.isOpen())
+        return list;
+    QSqlQuery query(m_db);
+    query.setForwardOnly(true);
+    query.prepare(QStringLiteral("SELECT v.id, v.first_seen, v.last_seen, v.seen_count, v.image,"
+                                 " (SELECT GROUP_CONCAT(DISTINCT camera) FROM visitor_sightings WHERE visitor_id = v.id)"
+                                 " FROM visitors v WHERE v.last_seen >= ? AND v.seen_count >= ?"
+                                 " ORDER BY v.last_seen DESC, v.id DESC LIMIT ?"));
+    query.addBindValue(since.isValid() ? since.toSecsSinceEpoch() : qint64(0));
+    query.addBindValue(std::max(1, minCount));
+    query.addBindValue(limit);
+    if (!query.exec())
+        return list;
+    while (query.next()) {
+        Visitor visitor;
+        visitor.id = query.value(0).toLongLong();
+        visitor.firstSeen = QDateTime::fromSecsSinceEpoch(query.value(1).toLongLong());
+        visitor.lastSeen = QDateTime::fromSecsSinceEpoch(query.value(2).toLongLong());
+        visitor.seenCount = query.value(3).toInt();
+        visitor.image.loadFromData(query.value(4).toByteArray(), "JPG");
+        visitor.cameras = query.value(5).toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
+        list.append(visitor);
+    }
+    return list;
+}
+
+Visitor FaceDatabase::visitor(qint64 id) const
+{
+    Visitor visitor;
+    if (!m_db.isOpen())
+        return visitor;
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT id, first_seen, last_seen, seen_count, image, quality FROM visitors WHERE id = ?"));
+    query.addBindValue(id);
+    if (query.exec() && query.next()) {
+        visitor.id = query.value(0).toLongLong();
+        visitor.firstSeen = QDateTime::fromSecsSinceEpoch(query.value(1).toLongLong());
+        visitor.lastSeen = QDateTime::fromSecsSinceEpoch(query.value(2).toLongLong());
+        visitor.seenCount = query.value(3).toInt();
+        visitor.image.loadFromData(query.value(4).toByteArray(), "JPG");
+        visitor.quality = query.value(5).toFloat();
+    }
+    return visitor;
+}
+
+std::vector<float> FaceDatabase::visitorEmbedding(qint64 id) const
+{
+    loadVisitors();
+    return m_visitorEmbeddings.value(id).embedding;
+}
+
+QList<Sighting> FaceDatabase::visitorSightings(qint64 visitorId, int limit) const
+{
+    QList<Sighting> list;
+    if (!m_db.isOpen())
+        return list;
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT id, seen, camera, source, position_ms, thumb, snapshot FROM visitor_sightings"
+                                 " WHERE visitor_id = ? ORDER BY id DESC LIMIT ?"));
+    query.addBindValue(visitorId);
+    query.addBindValue(limit);
+    if (!query.exec())
+        return list;
+    while (query.next())
+        list.append(visitorSightingFromQuery(query, 0));
+    return list;
+}
+
+QList<VisitorSighting> FaceDatabase::visitorSightingsBetween(const QDateTime &from, const QDateTime &to) const
+{
+    QList<VisitorSighting> list;
+    if (!m_db.isOpen())
+        return list;
+    QSqlQuery query(m_db);
+    query.setForwardOnly(true);
+    query.prepare(QStringLiteral("SELECT visitor_id, id, seen, camera, source, position_ms, thumb, snapshot FROM visitor_sightings"
+                                 " WHERE seen >= ? AND seen < ? ORDER BY seen, id"));
+    query.addBindValue(from.toSecsSinceEpoch());
+    query.addBindValue(to.toSecsSinceEpoch());
+    if (!query.exec())
+        return list;
+    while (query.next())
+        list.append({query.value(0).toLongLong(), visitorSightingFromQuery(query, 1)});
+    return list;
+}
+
+bool FaceDatabase::removeVisitor(qint64 id)
+{
+    if (!m_db.isOpen())
+        return false;
+    beginBatch();
+    const bool ok = exec(QStringLiteral("DELETE FROM visitor_sightings WHERE visitor_id = ?"), {id})
+        && exec(QStringLiteral("DELETE FROM visitors WHERE id = ?"), {id});
+    if (ok)
+        m_visitorEmbeddings.remove(id);
+    const bool done = endBatch() && ok;
+    emit visitorsChanged();
+    return done;
+}
+
+bool FaceDatabase::assignVisitor(qint64 visitorId, const QString &personId, const QImage &crop,
+                                 const std::vector<std::vector<float>> &embeddings, float quality)
+{
+    const qint64 person = personId.toLongLong();
+    if (!m_db.isOpen() || person <= 0)
+        return false;
+    beginBatch();
+    beginStep();
+    bool ok = embeddings.empty() || addPhoto(personId, crop, embeddings, quality);
+    // ظهوره مجهولاً يصبح ظهوراً في سجل الشخص (بموضعه في التسجيلات ولقطاته)
+    ok = ok
+        && exec(QStringLiteral("INSERT INTO sightings(person_id, seen, source, position_ms, score, thumb, camera, snapshot)"
+                               " SELECT ?, seen, source, position_ms, 0, thumb, camera, snapshot FROM visitor_sightings"
+                               " WHERE visitor_id = ? ORDER BY id"),
+                {person, visitorId})
+        && exec(QStringLiteral("UPDATE persons SET seen_count = (SELECT COUNT(*) FROM sightings WHERE person_id = ?),"
+                               " last_seen = MAX(last_seen, COALESCE((SELECT MAX(seen) FROM sightings WHERE person_id = ?), 0))"
+                               " WHERE id = ?"),
+                {person, person, person})
+        && exec(QStringLiteral("DELETE FROM visitor_sightings WHERE visitor_id = ?"), {visitorId})
+        && exec(QStringLiteral("DELETE FROM visitors WHERE id = ?"), {visitorId});
+    if (ok) {
+        exec(QStringLiteral("RELEASE step"));
+        m_visitorEmbeddings.remove(visitorId);
+        notify(personId, false);
+    } else {
+        rollbackStep();
+        m_visitorsLoaded = false;
+    }
+    const bool done = endBatch() && ok;
+    emit visitorsChanged();
+    return done;
+}
+
+QList<SightingEntry> FaceDatabase::cameraSightingsBetween(const QDateTime &from, const QDateTime &to, const QString &personId) const
+{
+    QList<SightingEntry> list;
+    if (!m_db.isOpen())
+        return list;
+    QString sql = QStringLiteral("SELECT s.id, s.seen, s.source, s.position_ms, s.score, s.thumb, p.id, p.name, p.tags,"
+                                 " s.camera, s.snapshot FROM sightings s JOIN persons p ON p.id = s.person_id"
+                                 " WHERE s.seen >= ? AND s.seen < ? AND s.camera IS NOT NULL AND s.camera <> ''");
+    if (!personId.isEmpty())
+        sql += QStringLiteral(" AND s.person_id = ?");
+    sql += QStringLiteral(" ORDER BY s.seen, s.id");
+    QSqlQuery query(m_db);
+    query.setForwardOnly(true);
+    query.prepare(sql);
+    query.addBindValue(from.toSecsSinceEpoch());
+    query.addBindValue(to.toSecsSinceEpoch());
+    if (!personId.isEmpty())
+        query.addBindValue(personId.toLongLong());
+    if (!query.exec())
+        return list;
+    while (query.next()) {
+        SightingEntry entry;
+        entry.sighting.id = query.value(0).toLongLong();
+        entry.sighting.seen = QDateTime::fromSecsSinceEpoch(query.value(1).toLongLong());
+        entry.sighting.source = query.value(2).toString();
+        entry.sighting.positionMs = query.value(3).toLongLong();
+        entry.sighting.score = query.value(4).toFloat();
+        entry.sighting.thumbnail.loadFromData(query.value(5).toByteArray(), "JPG");
+        entry.personId = query.value(6).toString();
+        entry.name = query.value(7).toString();
+        entry.tags = query.value(8).toString();
         entry.sighting.camera = query.value(9).toString();
         entry.sighting.snapshot = query.value(10).toString();
         list.append(entry);

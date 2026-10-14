@@ -21,6 +21,7 @@
 #include <vector>
 
 class CameraRecorder;
+class CameraWatch;
 class FaceDatabase;
 class FaceEngine;
 class Gallery;
@@ -38,8 +39,8 @@ class MultiCameraWindow : public QWidget
     Q_OBJECT
 
 public:
-    // يُكتب الظهور من جديد إن عاد الشخص أمام الكاميرا نفسها بعد غياب هذه المدة
-    static constexpr qint64 ReappearMs = 5 * 60 * 1000;
+    // تنبيه عام إن بقيت كاميرا منقطعة هذه المدة
+    static constexpr qint64 OfflineAlertMs = 2 * 60 * 1000;
 
     MultiCameraWindow(FaceEngine *engine, FaceDatabase *database, std::function<float()> threshold, QWidget *parent = nullptr);
     ~MultiCameraWindow() override;
@@ -54,11 +55,13 @@ public:
     void stop();
     bool isRunning() const { return !m_feeds.empty(); }
     bool isRecording() const;
-    void setWatched(const QSet<QString> &ids) { m_watched = ids; }
+    void setWatched(const QSet<QString> &ids);
     void setGallery(std::shared_ptr<Gallery> gallery);
 
 signals:
     void watchAlert(const QString &name, const QString &camera);
+    // انقطاع كاميرا طويلاً أو عودتها أو توقف تسجيلها (للسجل وإشعار النظام)
+    void systemAlert(const QString &title, const QString &text);
     void stopped();
 
 protected:
@@ -70,6 +73,8 @@ private:
     {
         QRectF box; // بإحداثيات الإطار المحلَّل
         MatchResult match;
+        std::vector<float> embedding;
+        float quality = 0.0f;
     };
 
     struct Opened
@@ -84,12 +89,15 @@ private:
         QString source;
         std::shared_ptr<Cameras::LiveReader> reader;
         CameraRecorder *recorder = nullptr;
+        CameraWatch *watch = nullptr; // تأكيد الظهور وسجله والزوار المجهولون لهذه الكاميرا
         bool opening = false;
         QFuture<void> pending;           // فتح الكاميرا جارٍ في الخلفية
         std::shared_ptr<Opened> opened;
         int attempts = 0;
         qint64 retryAt = 0;
         QString error;
+        qint64 lostAt = 0;          // بداية الانقطاع (أو أول فشل في الاتصال)، 0 ما دامت متصلة
+        bool offlineAlerted = false;
 
         // يتشاركه خيط الواجهة (يضع أحدث إطار) وخيط التحليل (يأخذه)
         std::mutex mutex;
@@ -104,7 +112,6 @@ private:
         QList<Face> faces;
         QSize facesSize;
         qint64 facesAt = 0;
-        QHash<QString, qint64> seen; // آخر ظهور لكل شخص أمام هذه الكاميرا
         qint64 alertUntil = 0;       // إطار أحمر حول البلاطة بعد التنبيه
         int frames = 0;
         qint64 fpsSince = 0;
@@ -121,7 +128,8 @@ private:
     void toggleRecording();
     void startRecording(Feed &feed);
     void updateRecordButton();
-    void showAlert(Feed &feed, const Face &face, const QImage &crop);
+    void showAlert(Feed &feed, const QString &name, float score, const QImage &crop);
+    void noteLost(Feed &feed, qint64 now);
     // رسالة مؤقتة في شريط الحالة (خطأ تسجيل)
     void notice(const QString &text);
 

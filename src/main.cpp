@@ -1,3 +1,4 @@
+#include "applog.h"
 #include "diagnostics.h"
 #include "mainwindow.h"
 #include "performance.h"
@@ -8,9 +9,13 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QIcon>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QLockFile>
 #include <QScreen>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QRegularExpression>
 #include <QStyle>
 
 namespace {
@@ -27,6 +32,28 @@ void migrateLegacyData()
         QDir().rename(legacy, current);
 }
 
+// اسم قناة النسخة الأولى للمستخدم الحالي (نسخة كل مستخدم في ويندوز مستقلة)
+QString instanceName()
+{
+    QString user = qEnvironmentVariable("USERNAME", qEnvironmentVariable("USER"));
+    user.remove(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]")));
+    return QStringLiteral("malamih-instance-%1").arg(user.isEmpty() ? QStringLiteral("user") : user);
+}
+
+// يرسل الطلب إلى النسخة العاملة: إظهار نافذتها، أو فتح ملف فيها
+bool sendToRunningInstance(const QString &message)
+{
+    QLocalSocket socket;
+    socket.connectToServer(instanceName());
+    if (!socket.waitForConnected(1000))
+        return false;
+    socket.write(message.toUtf8() + '\n');
+    socket.flush();
+    socket.waitForBytesWritten(1000);
+    socket.disconnectFromServer();
+    return true;
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -39,7 +66,7 @@ int main(int argc, char *argv[])
     // بلا اسم منظمة لا يحفظ سجل ويندوز أي إعداد، وملف INI يعمل كما على لينكس
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QApplication::setApplicationDisplayName(QStringLiteral("ملامح"));
-    QApplication::setApplicationVersion(QStringLiteral("3.0.0"));
+    QApplication::setApplicationVersion(QStringLiteral(MALAMIH_VERSION));
     QIcon appIcon;
     appIcon.addFile(QStringLiteral(":/resources/app-256.png"));
     appIcon.addFile(QStringLiteral(":/resources/app-512.png"));
@@ -63,7 +90,43 @@ int main(int argc, char *argv[])
     if (diagnostics >= 0)
         return diagnostics;
 
+    // نسخة واحدة فقط: فتح البرنامج مرة ثانية (أو مع ويندوز وهو مفتوح) يُظهر النسخة العاملة بدل أن
+    // تكتب نسختان في القاعدة نفسها وتسجّلا الكاميرا نفسها
+    const QString openPath = args.size() == 2 && QFile::exists(args.at(1)) ? QFileInfo(args.at(1)).absoluteFilePath() : QString();
+    const QString request = startup ? QStringLiteral("startup") : openPath.isEmpty() ? QStringLiteral("show") : QStringLiteral("open:") + openPath;
+    QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+    QLockFile lock(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/instance.lock"));
+    if (!lock.tryLock(0)) {
+        // النسخة الأولى قد تكون في أول تشغيلها ولم تفتح قناتها بعد
+        for (int attempt = 0; attempt < 10 && !lock.isLocked(); ++attempt) {
+            if (sendToRunningInstance(request))
+                return 0;
+            lock.tryLock(300);
+        }
+        // نسخة عاملة لا ترد: لا تُفتح ثانية فوقها
+        if (!lock.isLocked())
+            return 0;
+    }
+    QLocalServer::removeServer(instanceName());
+    QLocalServer server;
+    server.listen(instanceName());
+
+    const QDateTime unclean = AppLog::start();
+
     MainWindow window;
+    if (unclean.isValid())
+        window.setPreviousCrash(unclean);
+    QObject::connect(&server, &QLocalServer::newConnection, &window, [&server, &window] {
+        while (QLocalSocket *socket = server.nextPendingConnection()) {
+            QObject::connect(socket, &QLocalSocket::disconnected, socket, &QObject::deleteLater);
+            QObject::connect(socket, &QLocalSocket::readyRead, &window, [socket, &window] {
+                while (socket->canReadLine()) {
+                    const QString message = QString::fromUtf8(socket->readLine()).trimmed();
+                    window.activateFromOtherInstance(message);
+                }
+            });
+        }
+    });
     const QRect available = app.primaryScreen()->availableGeometry();
     window.setMinimumSize(QSize(760, 520).boundedTo(available.size()));
     if (window.startHidden()) {
@@ -80,5 +143,7 @@ int main(int argc, char *argv[])
     if (args.size() == 2 && QFile::exists(args.at(1)))
         window.openFile(args.at(1));
 
-    return app.exec();
+    const int result = app.exec();
+    AppLog::finish();
+    return result;
 }
