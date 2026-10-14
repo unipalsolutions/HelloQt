@@ -1,6 +1,7 @@
 #include "videoexport.h"
 
 #include "imageio.h"
+#include "videofilters.h"
 
 #include <QDir>
 #include <QFile>
@@ -14,7 +15,8 @@
 
 namespace VideoExport {
 
-QString exportSegments(const QString &source, QList<QPair<qint64, qint64>> segments, const QString &target, Progress *progress)
+QString exportSegments(const QString &source, QList<QPair<qint64, qint64>> segments, const QString &target, Progress *progress,
+                       bool filtered)
 {
     cv::VideoCapture capture;
     if (!ImageIO::openVideo(capture, source))
@@ -22,9 +24,12 @@ QString exportSegments(const QString &source, QList<QPair<qint64, qint64>> segme
     double fps = capture.get(cv::CAP_PROP_FPS);
     if (!(fps > 1.0 && fps < 240.0))
         fps = 25.0;
-    const cv::Size size(int(capture.get(cv::CAP_PROP_FRAME_WIDTH)), int(capture.get(cv::CAP_PROP_FRAME_HEIGHT)));
-    if (size.width <= 0 || size.height <= 0)
+    const cv::Size sourceSize(int(capture.get(cv::CAP_PROP_FRAME_WIDTH)), int(capture.get(cv::CAP_PROP_FRAME_HEIGHT)));
+    if (sourceSize.width <= 0 || sourceSize.height <= 0)
         return QStringLiteral("تعذر قراءة أبعاد الفيديو");
+    const VideoFilters::Settings filters = filtered ? VideoFilters::current() : VideoFilters::Settings();
+    // التدوير يبدّل العرض والارتفاع
+    const cv::Size size = filters.quarterTurns % 2 == 1 ? cv::Size(sourceSize.height, sourceSize.width) : sourceSize;
 
     std::sort(segments.begin(), segments.end());
     qint64 total = 0;
@@ -57,8 +62,10 @@ QString exportSegments(const QString &source, QList<QPair<qint64, qint64>> segme
                 continue; // القفز قد يقف قبل الموضع المطلوب بقليل
             if (position > segment.second)
                 break;
-            if (frame.size() != size)
-                cv::resize(frame, frame, size);
+            if (frame.size() != sourceSize)
+                cv::resize(frame, frame, sourceSize);
+            if (!filters.isIdentity())
+                frame = VideoFilters::apply(frame, filters);
             writer.write(frame);
             if (progress)
                 progress->done = written + std::clamp<qint64>(position - segment.first, 0, segment.second - segment.first);
@@ -78,7 +85,7 @@ QString exportSegments(const QString &source, QList<QPair<qint64, qint64>> segme
     return {};
 }
 
-cv::Mat frameAt(const QString &source, qint64 positionMs)
+cv::Mat frameAt(const QString &source, qint64 positionMs, bool filtered)
 {
     cv::VideoCapture capture;
     cv::Mat frame;
@@ -86,7 +93,7 @@ cv::Mat frameAt(const QString &source, qint64 positionMs)
         return frame;
     capture.set(cv::CAP_PROP_POS_MSEC, double(positionMs));
     capture.read(frame);
-    return frame;
+    return filtered ? VideoFilters::apply(frame) : frame;
 }
 
 } // namespace VideoExport

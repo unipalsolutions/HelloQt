@@ -62,6 +62,10 @@ qt_add_executable(Malamih
     src/performance.cpp
     src/videoexport.h
     src/videoexport.cpp
+    src/videofilters.h
+    src/videofilters.cpp
+    src/videofiltersdialog.h
+    src/videofiltersdialog.cpp
     src/imagelab.h
     src/imagelab.cpp
     src/enhancedialog.h

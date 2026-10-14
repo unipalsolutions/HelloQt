@@ -5,6 +5,8 @@
 #include "faceengine.h"
 #include "imageio.h"
 #include "report.h"
+#include "videoexport.h"
+#include "videofilters.h"
 #include "videoworker.h"
 
 #include <QDir>
@@ -948,6 +950,127 @@ int backupTest(const QString &directory, QTextStream &out)
                : 1;
 }
 
+// معالجات الفيديو: فيديو مولَّد من صورة وجه مدار 90 درجة، يُحلَّل بلا معالجة ثم بتصحيح الاتجاه،
+// ومع حد أصغر وجه كبير، ومع تخطي الساكن؛ ثم يُصدَّر مقطع بعد المعالجة وتُفحص أبعاده
+int filtersTest(const QString &imagePath, const QString &directory, QTextStream &out)
+{
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    const cv::Mat image = ImageIO::loadImage(imagePath);
+    if (image.empty()) {
+        out << "error=cannot read image\n";
+        return 1;
+    }
+    const VideoFilters::Settings saved = VideoFilters::current();
+    VideoFilters::setCurrent(VideoFilters::Settings());
+
+    // وحدات المعالجة نفسها
+    VideoFilters::Settings rotate;
+    rotate.quarterTurns = 1;
+    const cv::Mat rotated = VideoFilters::apply(image, rotate);
+    VideoFilters::Settings tone = VideoFilters::preset(VideoFilters::Preset::Night, rotate);
+    const cv::Mat toned = VideoFilters::apply(image, tone);
+    const bool units = VideoFilters::apply(image, VideoFilters::Settings()).data == image.data && rotated.cols == image.rows
+        && rotated.rows == image.cols && toned.size() == rotated.size() && tone.quarterTurns == 1 && tone.autoLevels
+        && VideoFilters::preset(VideoFilters::Preset::Night, tone) == tone && tone.activeCount() == 5
+        && !tone.summary().isEmpty() && VideoFilters::Settings().summary().isEmpty();
+    out << "units=" << units << "\n";
+
+    // فيديو الوجه المائل: ثانية ونصف
+    QDir().mkpath(directory);
+    const QString video = QDir(directory).filePath(QStringLiteral("sideways.avi"));
+    cv::Mat sideways;
+    cv::rotate(image, sideways, cv::ROTATE_90_COUNTERCLOCKWISE);
+    cv::Mat padded;
+    const int side = std::max(sideways.cols, sideways.rows) * 2;
+    cv::copyMakeBorder(sideways, padded, (side - sideways.rows) / 2, (side - sideways.rows + 1) / 2, (side - sideways.cols) / 2,
+                       (side - sideways.cols + 1) / 2, cv::BORDER_CONSTANT, cv::Scalar(40, 40, 40));
+    cv::resize(padded, padded, cv::Size(480, 480));
+    {
+        cv::VideoWriter writer(QFile::encodeName(video).toStdString(), cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 25.0, padded.size());
+        if (!writer.isOpened()) {
+            out << "error=cannot write video\n";
+            VideoFilters::setCurrent(saved);
+            return 1;
+        }
+        for (int i = 0; i < 40; ++i)
+            writer.write(padded);
+    }
+
+    std::vector<float> reference;
+    {
+        const std::vector<AnalyzedFace> faces = engine.analyze(image, true);
+        if (!faces.empty())
+            reference = faces.front().embedding;
+    }
+    float bestSimilarity = 0.0f;
+    auto analyze = [&](const VideoFilters::Settings &filters, int *analyzedFaces) {
+        VideoFilters::setCurrent(filters);
+        VideoWorker worker(&engine);
+        worker.setFrameStep(1);
+        QSet<int> people;
+        int faces = 0;
+        QObject::connect(&worker, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &items, qint64, double) {
+            faces += int(items.size());
+            worker.frameShown();
+        });
+        QObject::connect(&worker, &VideoWorker::trackUpdated, [&](const FaceItem &track) {
+            people.insert(track.id);
+            if (!reference.empty())
+                bestSimilarity = std::max(bestSimilarity, FaceEngine::cosine(reference, track.embedding));
+        });
+        QObject::connect(&worker, &VideoWorker::identitiesMerged, [&](int, int removedId) { people.remove(removedId); });
+        worker.process(video);
+        if (analyzedFaces)
+            *analyzedFaces = faces;
+        return int(people.size());
+    };
+    // بعد تصحيح الاتجاه يُكشف الوجه في الإطارات كلها تقريباً وبصمته بصمة الصورة الأصلية
+    int rawFaces = 0, fixedFaces = 0, stillFaces = 0;
+    const int raw = analyze(VideoFilters::Settings(), &rawFaces);
+    bestSimilarity = 0.0f;
+    const int fixed = analyze(rotate, &fixedFaces);
+    const float fixedSimilarity = bestSimilarity;
+    VideoFilters::Settings tooSmall = rotate;
+    tooSmall.minFaceSize = 400;
+    const int ignored = analyze(tooSmall, nullptr);
+    VideoFilters::Settings still = rotate;
+    still.skipStill = true;
+    const int stillPeople = analyze(still, &stillFaces);
+    out << "raw_people=" << raw << "\nraw_faces=" << rawFaces << "\nfixed_people=" << fixed << "\nfixed_faces=" << fixedFaces
+        << "\nfixed_similarity=" << fixedSimilarity << "\nmin_face_people=" << ignored << "\nskip_still_people=" << stillPeople << "\nskip_still_faces=" << stillFaces << "\n";
+
+    // تصدير مقطع بعد المعالجة: الأبعاد تتبدل مع التدوير
+    VideoFilters::Settings portrait;
+    portrait.quarterTurns = 1;
+    VideoFilters::setCurrent(portrait);
+    cv::Mat wide;
+    cv::resize(padded, wide, cv::Size(640, 360));
+    // (الأبعاد الأصلية 640×360 تصبح 360×640 بعد التدوير)
+    const QString wideVideo = QDir(directory).filePath(QStringLiteral("wide.avi"));
+    {
+        cv::VideoWriter writer(QFile::encodeName(wideVideo).toStdString(), cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 25.0, wide.size());
+        for (int i = 0; i < 50; ++i)
+            writer.write(wide);
+    }
+    const QString exported = QDir(directory).filePath(QStringLiteral("exported.mp4"));
+    const QString exportError = VideoExport::exportSegments(wideVideo, {{0, 1500}}, exported, nullptr, true);
+    cv::VideoCapture check;
+    const bool exportOk = exportError.isEmpty() && ImageIO::openVideo(check, exported)
+        && int(check.get(cv::CAP_PROP_FRAME_WIDTH)) == 360 && int(check.get(cv::CAP_PROP_FRAME_HEIGHT)) == 640;
+    const cv::Mat frame = VideoExport::frameAt(wideVideo, 500);
+    const cv::Mat original = VideoExport::frameAt(wideVideo, 500, false);
+    const bool frameOk = frame.cols == 360 && frame.rows == 640 && original.cols == 640;
+    out << "export_rotated=" << exportOk << " " << exportError << "\nframe_at=" << frameOk << "\n";
+
+    VideoFilters::setCurrent(saved);
+    return units && fixed >= 1 && fixedFaces >= 30 && fixedSimilarity > 0.6f && ignored == 0 && stillPeople >= 1
+                   && stillFaces >= 30 && exportOk && frameOk
+               ? 0
+               : 1;
+}
+
 } // namespace
 
 int run(const QStringList &args)
@@ -959,7 +1082,7 @@ int run(const QStringList &args)
         && command != QLatin1String("--db-test") && command != QLatin1String("--enhance-test")
         && command != QLatin1String("--embed-dump") && command != QLatin1String("--stress-test")
         && command != QLatin1String("--pair-matrix") && command != QLatin1String("--report-test")
-        && command != QLatin1String("--backup-test"))
+        && command != QLatin1String("--backup-test") && command != QLatin1String("--filters-test"))
         return -1;
 
     QFile output(args.last());
@@ -989,6 +1112,9 @@ int run(const QStringList &args)
     // Malamih --backup-test <مجلد مؤقت> <ملف النتائج>
     if (command == QLatin1String("--backup-test") && args.size() == 4)
         return backupTest(args.at(2), out);
+    // Malamih --filters-test <صورة وجه> <مجلد مؤقت> <ملف النتائج>
+    if (command == QLatin1String("--filters-test") && args.size() == 5)
+        return filtersTest(args.at(2), args.at(3), out);
     // Malamih --report-test <صورة> <تقرير.html> <ملف النتائج>
     if (command == QLatin1String("--report-test") && args.size() == 5)
         return reportTest(args.at(2), args.at(3), out);

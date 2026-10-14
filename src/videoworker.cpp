@@ -2,6 +2,7 @@
 
 #include "faceengine.h"
 #include "imageio.h"
+#include "videofilters.h"
 
 #include <QElapsedTimer>
 #include <QMutexLocker>
@@ -44,6 +45,8 @@ constexpr int TrackPhotoSize = 192;
 constexpr double AutoAnalysisRate = 10.0; // إطارات محللة لكل ثانية من الفيديو في الوضع التلقائي
 constexpr double IdleAnalysisRate = 2.0;  // عند خلو المشهد من الوجوه يُفحص أقل، ويعود للمعدل الكامل فور ظهور وجه
 constexpr int IdleAfter = 20;             // إطارات محللة متتالية بلا وجوه قبل خفض المعدل
+constexpr double StillDifference = 1.6;   // متوسط تغيّر البكسل (من 255) الذي يُعد دونه الإطار ساكناً
+constexpr int MaxStillSkips = 50;         // إطار ساكن يُفحص رغم ذلك بعد هذا العدد، احتياطاً للتغير البطيء جداً
 
 struct Exemplar
 {
@@ -358,6 +361,9 @@ void VideoWorker::process(const QString &source)
     int nextId = 1;
     int processed = 0;
     double workScale = 1.0;
+    cv::Size filteredSize;
+    cv::Mat stillReference; // آخر إطار فُحص فعلاً، مصغراً ورمادياً
+    int stillSkips = 0;
     cv::Mat frame;
 
     GalleryPtr gallery;
@@ -526,6 +532,16 @@ void VideoWorker::process(const QString &source)
             together.erase(pairKey(keepId, removedId));
         }
 
+        // معالجات الفيديو (التدوير والإضاءة وغيرها) تسبق كل شيء، فالإطار المعالَج هو الذي يُحلَّل ويُعرض
+        const VideoFilters::Settings filters = VideoFilters::current();
+        if (!filters.isIdentity())
+            frame = VideoFilters::apply(frame, filters);
+        if (frame.size() != filteredSize) {
+            tracks.clear(); // تغيّر اتجاه الإطار أو أبعاده
+            stillReference.release();
+            filteredSize = frame.size();
+        }
+
         // الإطار المحسّن (إن طُلب) هو الذي يُحلَّل ويُعرض، وقد يكون أكبر من الأصلي
         const cv::Mat work = enhance ? ImageIO::enhance(frame) : frame;
         const double scale = double(work.cols) / double(frame.cols);
@@ -546,8 +562,32 @@ void VideoWorker::process(const QString &source)
                 area = clipped;
         }
         const bool cropped = area.width != work.cols || area.height != work.rows;
+
+        // تخطي الساكن: كاميرات المراقبة تصوّر مكاناً فارغاً أغلب الوقت، فلا يُبحث عن وجوه في إطار لم
+        // يتغير عن آخر إطار فُحص ما دام لا يوجد وجه متتبَّع؛ أي حركة تعيد الفحص فوراً
+        bool still = false;
+        if (filters.skipStill) {
+            cv::Mat small, gray;
+            cv::resize(frame, small, cv::Size(96, std::max(1, 96 * frame.rows / std::max(1, frame.cols))), 0, 0, cv::INTER_AREA);
+            cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
+            const bool tracking = std::any_of(tracks.begin(), tracks.end(), [&](const Track &t) {
+                return !t.closed && processed - t.lastSeen <= MaxTrackGap;
+            });
+            if (!tracking && !stillReference.empty() && stillReference.size() == gray.size() && stillSkips < MaxStillSkips)
+                still = cv::norm(gray, stillReference, cv::NORM_L1) / double(gray.total()) < StillDifference;
+            if (still) {
+                ++stillSkips;
+            } else {
+                stillReference = gray;
+                stillSkips = 0;
+            }
+        }
+
         std::vector<Detection> detections;
-        for (DetectedFace face : m_engine->detect(cropped ? work(area) : work, false)) {
+        const double minFace = filters.minFaceSize * scale;
+        for (DetectedFace face : still ? std::vector<DetectedFace>() : m_engine->detect(cropped ? work(area) : work, false)) {
+            if (minFace > 0 && std::min(face.box.width, face.box.height) < minFace)
+                continue;
             face.box.x += float(area.x);
             face.box.y += float(area.y);
             for (cv::Point2f &point : face.landmarks)

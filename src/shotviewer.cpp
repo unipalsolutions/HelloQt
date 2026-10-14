@@ -1,6 +1,7 @@
 #include "shotviewer.h"
 
 #include "enhancedialog.h"
+#include "videofilters.h"
 #include "videoexport.h"
 
 #include "carddelegates.h"
@@ -57,6 +58,7 @@ ShotFrame readShotFrame(cv::VideoCapture &capture, qint64 positionMs, double fps
             return result;
         }
     }
+    frame = VideoFilters::apply(frame); // نفس معالجات التحليل، فتطابق مواضع الوجوه
     cv::Mat image = frame;
     std::vector<AnalyzedFace> faces;
     if (enhance) {

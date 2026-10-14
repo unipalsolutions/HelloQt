@@ -20,6 +20,8 @@
 #include "performance.h"
 #include "theme.h"
 #include "videoexport.h"
+#include "videofilters.h"
+#include "videofiltersdialog.h"
 #include "videoworker.h"
 #include "widgets.h"
 
@@ -867,6 +869,9 @@ QWidget *MainWindow::createRecognitionPage()
         updateVideoOptions();
     });
     connect(m_reanalyzeButton, &QAbstractButton::clicked, this, &MainWindow::reanalyzeVideo);
+    m_filtersButton = new FancyButton(Icons::Name::Sliders, QStringLiteral("معالجات"), FancyButton::Kind::Secondary, settings);
+    connect(m_filtersButton, &QAbstractButton::clicked, this, &MainWindow::openVideoFilters);
+    updateFiltersButton();
 
     settingsLayout->addWidget(group({new QLabel(QStringLiteral("حد التعرف"), settings), m_thresholdSlider, m_thresholdValue, m_thresholdWarning}));
     settingsLayout->addWidget(m_thoroughSwitch);
@@ -874,7 +879,7 @@ QWidget *MainWindow::createRecognitionPage()
     QWidget *frameStepGroup = group({new QLabel(QStringLiteral("إطار من كل"), settings), m_frameStepSpin});
     QWidget *rangeGroup = group({new QLabel(QStringLiteral("الجزء: من"), settings), m_rangeStart,
                                  new QLabel(QStringLiteral("إلى"), settings), m_rangeEnd});
-    QWidget *regionGroup = group({m_regionButton, m_clearRegionButton, m_reanalyzeButton});
+    QWidget *regionGroup = group({m_filtersButton, m_regionButton, m_clearRegionButton, m_reanalyzeButton});
     m_videoSettings = {frameStepGroup, rangeGroup, regionGroup};
     settingsLayout->addWidget(frameStepGroup);
     settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo}));
@@ -1565,7 +1570,9 @@ void MainWindow::startVideo(const QString &source)
                                                                        : QStringLiteral("جارٍ فتح الفيديو"));
     m_progress->setRange(0, 0);
     m_progress->setVisible(true);
-    statusBar()->showMessage(QStringLiteral("جارٍ التحليل…"));
+    const QString filters = VideoFilters::current().summary();
+    statusBar()->showMessage(filters.isEmpty() ? QStringLiteral("جارٍ التحليل…")
+                                               : QStringLiteral("جارٍ التحليل… · معالجات الفيديو: %1").arg(filters));
     setBusy(true);
 
     m_videoWorker->setFrameStep(m_frameStepSpin->value());
@@ -3222,6 +3229,41 @@ void MainWindow::enhanceVideoFrame(qint64 positionMs)
     }
 }
 
+void MainWindow::openVideoFilters()
+{
+    const bool fileVideo = m_videoMode && !m_videoSource.isEmpty() && !m_videoSource.startsWith(QStringLiteral("camera:"));
+    cv::Mat frame;
+    if (fileVideo) {
+        const QString source = m_videoSource;
+        const qint64 position = m_videoRunning ? m_videoPositionMs : std::max<qint64>(0, m_timeline->position());
+        frame = runResponsive([source, position] { return VideoExport::frameAt(source, position, false); });
+    }
+    const VideoFilters::Settings before = VideoFilters::current();
+    VideoFiltersDialog dialog(frame, this);
+    connect(&dialog, &VideoFiltersDialog::changed, this, &MainWindow::updateFiltersButton);
+    dialog.exec();
+    const VideoFilters::Settings after = VideoFilters::current();
+    if (after == before)
+        return;
+    if (fileVideo && !m_videoRunning) {
+        loadVideoFrame(std::max<qint64>(0, m_timeline->position()));
+        Toast::show(this, QStringLiteral("تغيّرت معالجات الفيديو · «إعادة التحليل» يطبقها على الفيديو كله"), Toast::Kind::Info);
+    } else if (m_videoRunning) {
+        Toast::show(this, QStringLiteral("تُطبَّق المعالجات الجديدة على بقية الفيديو"), Toast::Kind::Info);
+    }
+}
+
+void MainWindow::updateFiltersButton()
+{
+    const VideoFilters::Settings filters = VideoFilters::current();
+    const int count = filters.activeCount();
+    m_filtersButton->setText(count > 0 ? QStringLiteral("معالجات (%1)").arg(count) : QStringLiteral("معالجات"));
+    const QString summary = filters.summary();
+    m_filtersButton->setToolTip(QStringLiteral("معالجات الفيديو وخيارات التحليل: تدوير، مرآة، إضاءة، تباين، تشويش، حدة،\n"
+                                               "إزالة التشابك، أصغر وجه، وتخطي الإطارات الساكنة")
+                                + (summary.isEmpty() ? QString() : QStringLiteral("\n\nالمفعّل: ") + summary));
+}
+
 void MainWindow::setTrimRange(qint64 startMs, qint64 endMs)
 {
     const QSignalBlocker blockStart(m_rangeStart), blockEnd(m_rangeEnd);
@@ -3272,6 +3314,7 @@ void MainWindow::showTimelineMenu(const QPoint &globalPos, qint64 positionMs, in
                                                                                ImageIO::formatTime(last).remove(QLatin1Char(':'))));
                    });
     menu.addAction(icon(Icons::Name::Image), QStringLiteral("حفظ الإطار هنا كصورة…"), this, [this, positionMs] { saveVideoFrame(positionMs); });
+    menu.addAction(icon(Icons::Name::Sliders), QStringLiteral("معالجات الفيديو…"), this, &MainWindow::openVideoFilters);
     menu.addAction(icon(Icons::Name::Sparkle), QStringLiteral("تحسين هذا الإطار وتوضيحه…"), this, [this, positionMs] { enhanceVideoFrame(positionMs); })
         ->setEnabled(m_ready);
 
@@ -3315,6 +3358,21 @@ void MainWindow::exportClip(const QList<QPair<qint64, qint64>> &segments, const 
                                                       QStringLiteral("فيديو MP4 (*.mp4)"));
     if (path.isEmpty())
         return;
+    bool filtered = false;
+    if (!VideoFilters::current().isIdentity()) {
+        QMessageBox ask(QMessageBox::Question, QStringLiteral("تصدير مقطع"),
+                        QStringLiteral("معالجات الفيديو مفعّلة (%1).\nهل يُصدَّر المقطع بعد المعالجة أم كما في الملف الأصلي؟")
+                            .arg(VideoFilters::current().summary(false)),
+                        QMessageBox::NoButton, this);
+        QPushButton *processed = ask.addButton(QStringLiteral("بعد المعالجة"), QMessageBox::AcceptRole);
+        ask.addButton(QStringLiteral("الأصلي"), QMessageBox::RejectRole);
+        QPushButton *cancel = ask.addButton(QStringLiteral("إلغاء"), QMessageBox::DestructiveRole);
+        ask.setDefaultButton(processed);
+        ask.exec();
+        if (ask.clickedButton() == cancel)
+            return;
+        filtered = ask.clickedButton() == processed;
+    }
     auto progress = std::make_shared<VideoExport::Progress>();
     QProgressDialog dialog(QStringLiteral("جارٍ تصدير المقطع… (الصوت لا يُنسخ)"), QStringLiteral("إلغاء"), 0, 1000, this);
     dialog.setWindowTitle(QStringLiteral("تصدير مقطع"));
@@ -3329,8 +3387,8 @@ void MainWindow::exportClip(const QList<QPair<qint64, qint64>> &segments, const 
     QEventLoop loop;
     connect(&watcher, &QFutureWatcherBase::finished, &loop, &QEventLoop::quit);
     const QString source = m_videoSource;
-    watcher.setFuture(QtConcurrent::run([source, segments, path, progress] {
-        return VideoExport::exportSegments(source, segments, path, progress.get());
+    watcher.setFuture(QtConcurrent::run([source, segments, path, progress, filtered] {
+        return VideoExport::exportSegments(source, segments, path, progress.get(), filtered);
     }));
     timer.start(150);
     loop.exec();

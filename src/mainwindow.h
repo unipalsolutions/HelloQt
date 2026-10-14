@@ -123,6 +123,8 @@ private:
     bool faceMatchesFilter(const FaceItem &face) const;
     void rebuildFaceRows();
     void updateVideoOptions();
+    void openVideoFilters();
+    void updateFiltersButton();
     void selectFace(int id);
     void showFaceDetails();
     QString candidatesHtml(const FaceItem &face) const;
@@ -245,6 +247,7 @@ private:
     FancyButton *m_regionButton = nullptr;
     FancyButton *m_clearRegionButton = nullptr;
     FancyButton *m_reanalyzeButton = nullptr;
+    FancyButton *m_filtersButton = nullptr;
     QLineEdit *m_faceFilter = nullptr;
     QComboBox *m_faceStatusFilter = nullptr;
     QComboBox *m_faceSort = nullptr;

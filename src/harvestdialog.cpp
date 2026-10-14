@@ -2,6 +2,7 @@
 
 #include "faceengine.h"
 #include "imageio.h"
+#include "videofilters.h"
 #include "theme.h"
 #include "widgets.h"
 
@@ -60,6 +61,7 @@ QList<HarvestShot> scanVideo(const FaceEngine *engine, const QString &path, cons
     // داخل فترات الظهور نعرف أن الوجه له، فيُقبل تشابه أقل؛ أما في الفيديو كله فنشترط حد التأكيد
     const float accept = ranges.isEmpty() ? threshold : std::max(0.25f, threshold - 0.08f);
     QList<Candidate> candidates;
+    const VideoFilters::Settings filters = VideoFilters::current(); // الفيديو المقلوب أو المظلم يُعالج كما في التحليل
     qint64 currentFrame = -1;
     cv::Mat frame;
     for (int i = 0; i < times.size() && !progress->cancel; ++i) {
@@ -79,6 +81,7 @@ QList<HarvestShot> scanVideo(const FaceEngine *engine, const QString &path, cons
         progress->done = i + 1;
         if (!ok || frame.empty())
             continue;
+        frame = VideoFilters::apply(frame, filters);
         const std::vector<AnalyzedFace> faces = engine->analyze(frame, false);
         for (const AnalyzedFace &face : faces) {
             const float similarity = FaceEngine::cosine(target, face.embedding);

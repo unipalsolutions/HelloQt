@@ -18,10 +18,11 @@ struct Progress
 };
 
 // ينسخ فترات من الفيديو (بالترتيب) إلى ملف MP4 جديد. الصوت لا يُنسخ.
-// يعيد رسالة خطأ، أو نصاً فارغاً عند النجاح
-QString exportSegments(const QString &source, QList<QPair<qint64, qint64>> segments, const QString &target, Progress *progress);
+// filtered: تُطبَّق معالجات الفيديو الحالية على الإطارات. يعيد رسالة خطأ، أو نصاً فارغاً عند النجاح
+QString exportSegments(const QString &source, QList<QPair<qint64, qint64>> segments, const QString &target, Progress *progress,
+                       bool filtered = false);
 
-// إطار واحد عند موضع معيّن
-cv::Mat frameAt(const QString &source, qint64 positionMs);
+// إطار واحد عند موضع معيّن، بعد معالجات الفيديو الحالية ما لم يكن filtered = false
+cv::Mat frameAt(const QString &source, qint64 positionMs, bool filtered = true);
 
 } // namespace VideoExport
