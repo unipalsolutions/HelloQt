@@ -3,6 +3,11 @@ name: Build Windows
 on:
   push:
   workflow_dispatch:
+    inputs:
+      worst_conditions:
+        description: 'تشغيل فحص التعرف في أسوأ الظروف (حوالي 35 دقيقة)'
+        type: boolean
+        default: true
 
 env:
   OPENCV_VERSION: '4.10.0'
@@ -190,6 +195,7 @@ jobs:
         shell: pwsh
 
       - name: Worst-conditions recognition test
+        if: github.event_name == 'workflow_dispatch' && inputs.worst_conditions
         run: |
           $base = "https://raw.githubusercontent.com/ageitgey/face_recognition/master"
           $files = @{
