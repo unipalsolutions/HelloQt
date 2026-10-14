@@ -15,6 +15,7 @@
 #include "icons.h"
 #include "imageio.h"
 #include "imageview.h"
+#include "multicamera.h"
 #include "persondialog.h"
 #include "recorder.h"
 #include "shotviewer.h"
@@ -365,7 +366,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_videoWorker->moveToThread(m_videoThread);
     m_videoWorker->setGallery(m_database.gallery());
     // الاسترجاع يفتح القاعدة من جديد بمعرض جديد؛ بدونه يبقى التحليل الحي على أشخاص النسخة القديمة
-    connect(&m_database, &FaceDatabase::personsReset, this, [this] { m_videoWorker->setGallery(m_database.gallery()); });
+    connect(&m_database, &FaceDatabase::personsReset, this, [this] {
+        m_videoWorker->setGallery(m_database.gallery());
+        if (m_multiCamera)
+            m_multiCamera->setGallery(m_database.gallery());
+    });
     m_videoWorker->setThreshold(threshold());
     // التسجيل يتسلم الإطارات من خيط قراءة الكاميرا مباشرة، فيسجّل كل إطار ولو كان التحليل أبطأ أو متوقفاً
     m_recorder = new CameraRecorder(this);
@@ -569,7 +574,8 @@ void MainWindow::saveSettings() const
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     // إغلاق النافذة أثناء تشغيل الكاميرا يبقيها تعمل بجانب الساعة (المراقبة والتسجيل والتنبيهات)
-    const bool camera = m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:"));
+    const bool multi = m_multiCamera && m_multiCamera->isRunning();
+    const bool camera = (m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:"))) || multi;
     if (!m_quitting && camera && m_tray && QSystemTrayIcon::isSystemTrayAvailable() && keepRunningInTray()) {
         event->ignore();
         hide();
@@ -578,12 +584,17 @@ void MainWindow::closeEvent(QCloseEvent *event)
             m_tray->showMessage(QStringLiteral("ملامح يعمل في الخلفية"),
                                 QStringLiteral("تستمر مراقبة الكاميرا «%1»%2. انقر الأيقونة بجانب الساعة لإظهار النافذة، "
                                                "أو اختر «خروج» من قائمتها لإغلاق البرنامج.")
-                                    .arg(m_cameraName, m_recorder->isRecording() ? QStringLiteral(" وتسجيلها") : QString()),
+                                    .arg(multi ? QStringLiteral("عدة كاميرات") : m_cameraName,
+                                         m_recorder->isRecording() || (multi && m_multiCamera->isRecording())
+                                             ? QStringLiteral(" وتسجيلها")
+                                             : QString()),
                                 QSystemTrayIcon::Information, 8000);
         }
         return;
     }
     saveSettings();
+    if (m_multiCamera)
+        m_multiCamera->stop();
     if (m_tray)
         m_tray->hide();
     QMainWindow::closeEvent(event);
@@ -632,6 +643,7 @@ void MainWindow::setupTray()
         if (m_cameraButton->isEnabled())
             startLastCamera();
     });
+    menu->addAction(QStringLiteral("عدة كاميرات معاً"), this, [this] { openMultiCamera(); });
     QAction *stop = menu->addAction(QStringLiteral("إيقاف الكاميرا"), this, [this] { stopVideo(); });
     QAction *record = menu->addAction(QStringLiteral("تسجيل"), this, [this] { toggleRecording(); });
     menu->addSeparator();
@@ -1809,6 +1821,7 @@ void MainWindow::openCamera()
     if (!anyLocal && devices.isEmpty())
         addCamera(QStringLiteral("camera:0"), QStringLiteral("كاميرا الجهاز"), QString(), Icons::Name::Camera);
     menu.addSeparator();
+    menu.addAction(icon(Icons::Name::Users), QStringLiteral("عدة كاميرات معاً (شبكة مراقبة)…"), this, [this] { openMultiCamera(); });
     menu.addAction(icon(Icons::Name::Sliders), QStringLiteral("إدارة الكاميرات وإضافة كاميرا شبكة…"), this, [this] { manageCameras(); });
     addBackgroundMenu(&menu);
     menu.exec(m_cameraButton->mapToGlobal(QPoint(0, m_cameraButton->height())));
@@ -1823,6 +1836,34 @@ void MainWindow::startLastCamera()
         return;
     }
     startVideo(source);
+}
+
+void MainWindow::openMultiCamera()
+{
+    if (!m_ready) {
+        statusBar()->showMessage(QStringLiteral("انتظر حتى يجهز محرك التعرف"), 5000);
+        return;
+    }
+    showFromTray();
+    if (!m_multiCamera) {
+        m_multiCamera = new MultiCameraWindow(&m_engine, &m_database, [this] { return threshold(); }, this);
+        m_multiCamera->setAttribute(Qt::WA_DeleteOnClose, false);
+        connect(m_multiCamera, &MultiCameraWindow::watchAlert, this, &MainWindow::watchAlert);
+    }
+    m_multiCamera->setGallery(m_database.gallery());
+    m_multiCamera->setWatched(m_watched);
+    if (!m_multiCamera->isRunning()) {
+        const QStringList sources = m_multiCamera->chooseCameras();
+        if (sources.isEmpty())
+            return;
+        // الكاميرا الموصولة بالجهاز لا تُفتح مرتين: عرض الكاميرا الواحدة يتوقف أولاً
+        if (m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:")))
+            stopVideo();
+        m_multiCamera->start(sources);
+    }
+    m_multiCamera->show();
+    m_multiCamera->raise();
+    m_multiCamera->activateWindow();
 }
 
 void MainWindow::manageCameras(const QString &selectId)
@@ -2713,6 +2754,8 @@ void MainWindow::showFaceDetails()
 void MainWindow::refreshWatched()
 {
     m_watched = m_database.watchedIds();
+    if (m_multiCamera)
+        m_multiCamera->setWatched(m_watched);
     m_view->setWatched(m_watched);
     // إضافة شخص إلى المراقبة أثناء عرض صورة أو فيديو تنبّه عنه فوراً إن كان ظاهراً
     for (const FaceItem &face : std::as_const(m_faces))
@@ -2817,31 +2860,7 @@ void MainWindow::noteCameraFaces(const QImage &frame, const QList<FaceItem> &fac
 
 QString MainWindow::saveSightingSnapshot(const QImage &frame, const QRectF &box, const QString &name)
 {
-    if (frame.isNull())
-        return {};
-    const QDateTime now = QDateTime::currentDateTime();
-    const QString folder = QDir(CameraRecorder::savedFolder())
-                               .filePath(QStringLiteral("لقطات الظهور/%1").arg(now.toString(QStringLiteral("yyyy-MM-dd"))));
-    if (!QDir().mkpath(folder))
-        return {};
-    QString safe = name;
-    for (QChar &c : safe) {
-        if (QStringLiteral("\\/:*?\"<>|").contains(c) || c.unicode() < 32)
-            c = QLatin1Char('_');
-    }
-    QString path = QDir(folder).filePath(QStringLiteral("%1 %2.jpg").arg(safe.simplified(), now.toString(QStringLiteral("HH-mm-ss"))));
-    for (int n = 2; QFile::exists(path); ++n)
-        path = QDir(folder).filePath(QStringLiteral("%1 %2 (%3).jpg").arg(safe.simplified(), now.toString(QStringLiteral("HH-mm-ss"))).arg(n));
-    // الإطار كاملاً مع مربع حول الشخص؛ الحفظ في الخلفية فلا يتأخر عرض الكاميرا
-    QImage image = frame.convertToFormat(QImage::Format_RGB32);
-    {
-        QPainter painter(&image);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(QColor(0xff, 0x5c, 0x5c), std::max(2.0, image.height() / 300.0)));
-        painter.drawRect(box);
-    }
-    (void)QtConcurrent::run([image, path] { image.save(path, "JPG", 88); });
-    return path;
+    return CameraRecorder::saveSnapshot(frame, box, name);
 }
 
 void MainWindow::showAlertLog()

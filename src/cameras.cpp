@@ -1153,6 +1153,12 @@ void LiveReader::run()
     }
 }
 
+bool LiveReader::failed()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_failed;
+}
+
 bool LiveReader::read(cv::Mat &frame, int timeoutMs)
 {
     std::unique_lock<std::mutex> lock(m_mutex);

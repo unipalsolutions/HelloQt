@@ -10,6 +10,7 @@
 #include <QFutureWatcher>
 #include <QList>
 #include <QMainWindow>
+#include <QPointer>
 #include <QRectF>
 #include <QSet>
 
@@ -29,6 +30,7 @@ class QListView;
 class PersonListModel;
 class QTimer;
 class CameraRecorder;
+class MultiCameraWindow;
 class QProgressBar;
 class QSlider;
 class QSpinBox;
@@ -92,6 +94,7 @@ private:
     void openVideo();
     void openCamera();          // قائمة الكاميرات المحفوظة والموصولة
     void startLastCamera();     // آخر كاميرا استُخدمت (Ctrl+Shift+C)
+    void openMultiCamera();     // عرض عدة كاميرات معاً ومراقبتها
     void manageCameras(const QString &selectId = QString());
     void startVideo(const QString &source);
     void stopVideo();
@@ -246,6 +249,7 @@ private:
     QWidget *m_recordGroup = nullptr; // مجلد التسجيلات والتسجيل التلقائي، للكاميرا فقط
     ToggleSwitch *m_autoRecordSwitch = nullptr;
     QSystemTrayIcon *m_tray = nullptr;
+    QPointer<MultiCameraWindow> m_multiCamera;
     bool m_quitting = false;
     bool m_trayHintShown = false;
     QElapsedTimer m_pauseClock;

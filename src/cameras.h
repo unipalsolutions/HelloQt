@@ -155,6 +155,8 @@ public:
     // ينتظر إطاراً أحدث من آخر ما أُعطي؛ false إذا انقطعت الكاميرا
     bool read(cv::Mat &frame, int timeoutMs = 12000);
     double fps() const { return m_fps; }
+    // انقطعت الكاميرا (لا يصل منها شيء بعد الآن)
+    bool failed();
 
 private:
     void run();

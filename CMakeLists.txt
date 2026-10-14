@@ -72,6 +72,8 @@ qt_add_executable(Malamih
     src/cameradialog.cpp
     src/recorder.h
     src/recorder.cpp
+    src/multicamera.h
+    src/multicamera.cpp
     src/imagelab.h
     src/imagelab.cpp
     src/enhancedialog.h

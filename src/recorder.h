@@ -8,6 +8,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "videofilters.h"
+
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 
@@ -35,6 +37,9 @@ public:
         bool motionOnly = false;
         // مربعات الوجوه وأسماؤها تُرسم في التسجيل (فلا يصلح التسجيل حينها لإعادة التحليل بدقة)
         bool overlay = false;
+        // معالجات خاصة بهذه الكاميرا (نافذة عدة كاميرات)؛ وإلا تُطبَّق المعالجات الحالية في البرنامج
+        bool ownFilters = false;
+        VideoFilters::Settings filters;
     };
 
     // مربع وجه بإحداثيات نسبية من 0 إلى 1 من الإطار بعد المعالجات
@@ -89,6 +94,9 @@ public:
     static bool freeSpace(const QString &folder, qint64 needBytes);
     // كل ملف حفظه البرنامج يُضاف إلى قائمته، فالحذف التلقائي لا يمس ملفات أخرى في المجلد
     static void rememberFile(const QString &path);
+    // يحفظ الإطار كاملاً مع مربع حول الشخص في «لقطات الظهور/التاريخ» داخل مجلد التسجيلات (في الخلفية)؛
+    // يعيد مسار الملف أو فارغاً إن تعذر
+    static QString saveSnapshot(const QImage &frame, const QRectF &box, const QString &name);
 
 signals:
     void fileSaved(const QString &path);

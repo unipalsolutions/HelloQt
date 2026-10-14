@@ -11,6 +11,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStorageInfo>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QUuid>
 
 #include <opencv2/imgproc.hpp>
@@ -344,7 +345,7 @@ void CameraRecorder::handle(const Pending &item)
 cv::Mat CameraRecorder::prepare(const Pending &item)
 {
     cv::Mat frame = item.frame;
-    const VideoFilters::Settings filters = VideoFilters::current();
+    const VideoFilters::Settings filters = m_options.ownFilters ? m_options.filters : VideoFilters::current();
     if (!filters.isIdentity())
         frame = VideoFilters::apply(frame, filters);
     if (frame.channels() == 1)
@@ -618,4 +619,33 @@ bool CameraRecorder::freeSpace(const QString &folder, qint64 needBytes)
     writeManifest(paths);
     storage.refresh();
     return storage.bytesAvailable() >= needBytes;
+}
+
+QString CameraRecorder::saveSnapshot(const QImage &frame, const QRectF &box, const QString &name)
+{
+    if (frame.isNull())
+        return {};
+    const QDateTime now = QDateTime::currentDateTime();
+    const QString folder = QDir(CameraRecorder::savedFolder())
+                               .filePath(QStringLiteral("لقطات الظهور/%1").arg(now.toString(QStringLiteral("yyyy-MM-dd"))));
+    if (!QDir().mkpath(folder))
+        return {};
+    QString safe = name;
+    for (QChar &c : safe) {
+        if (QStringLiteral("\\/:*?\"<>|").contains(c) || c.unicode() < 32)
+            c = QLatin1Char('_');
+    }
+    QString path = QDir(folder).filePath(QStringLiteral("%1 %2.jpg").arg(safe.simplified(), now.toString(QStringLiteral("HH-mm-ss"))));
+    for (int n = 2; QFile::exists(path); ++n)
+        path = QDir(folder).filePath(QStringLiteral("%1 %2 (%3).jpg").arg(safe.simplified(), now.toString(QStringLiteral("HH-mm-ss"))).arg(n));
+    // الإطار كاملاً مع مربع حول الشخص؛ الحفظ في الخلفية فلا يتأخر عرض الكاميرا
+    QImage image = frame.convertToFormat(QImage::Format_RGB32);
+    {
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(QColor(0xff, 0x5c, 0x5c), std::max(2.0, image.height() / 300.0)));
+        painter.drawRect(box);
+    }
+    (void)QtConcurrent::run([image, path] { image.save(path, "JPG", 88); });
+    return path;
 }
