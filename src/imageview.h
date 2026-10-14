@@ -31,10 +31,29 @@ public:
     void setSelectingRegion(bool selecting);
     bool isSelectingRegion() const { return m_selecting; }
 
+    // التكبير والتحريك: عجلة الفأرة تكبّر حول المؤشر، والسحب يحرّك الصورة المكبّرة
+    double zoom() const { return m_zoom; }
+    void zoomBy(double factor, const QPointF &anchor = QPointF(-1, -1));
+    void resetZoom();
+    void zoomToFace(int id);
+    int faceAt(const QPointF &pos) const { return boxAt(pos); }
+
+    // إظهار أسماء الوجوه فوق المربعات أو إخفاؤها في الصور المزدحمة
+    void setLabelsVisible(bool visible);
+    bool labelsVisible() const { return m_showLabels; }
+
+    // التنقل بين صور المجلد: سهمان على جانبي الصورة وعنوان صغير بالموضع
+    void setNavigation(bool canPrevious, bool canNext, const QString &caption);
+
+    // الصورة كما تظهر مع مربعات الوجوه وأسمائها، لحفظها أو نسخها
+    QImage annotatedImage() const;
+
 signals:
     void faceClicked(int id);
     void faceDoubleClicked(int id);
     void regionSelected(const QRectF &region);
+    void navigateRequested(int step); // -1 السابقة، 1 التالية
+    void zoomChanged(double zoom);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -42,7 +61,9 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
     void leaveEvent(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     struct Box
@@ -58,7 +79,13 @@ private:
     void tick();
     void startTicking();
     int boxAt(const QPointF &pos) const;
-    QRectF imageRect(const QImage &image) const;
+    QRectF fitRect(const QImage &image) const;
+    QRectF imageRect() const;
+    void setZoom(double zoom, const QPointF &anchor);
+    void clampPan();
+    QRectF navButton(int step) const;
+    void paintNavigation(QPainter &p);
+    void paintZoomBadge(QPainter &p);
     QRectF mapToView(const QRectF &rect) const;
     void paintEmpty(QPainter &p, double t);
     void paintBusy(QPainter &p, double t);
@@ -79,6 +106,16 @@ private:
     QPointF m_dragStart;
     QPointF m_dragEnd;
     QString m_busyText;
+    double m_zoom = 1.0;
+    QPointF m_pan; // إزاحة مركز الصورة المكبّرة عن مركز العرض
+    bool m_panning = false;
+    QPointF m_panStart;
+    QPointF m_panOrigin;
+    bool m_showLabels = true;
+    bool m_canPrevious = false;
+    bool m_canNext = false;
+    QString m_caption;
+    int m_navHover = 0;
     QTimer m_timer;
     QElapsedTimer m_clock;
 };

@@ -84,6 +84,12 @@ private:
     void onTrackUpdated(const FaceItem &track);
     void onVideoFinished(const QString &error);
     void saveFaces();
+    void updateFolderNavigation();
+    void navigateImage(int step);
+    void showViewMenu(const QPoint &pos);
+    void saveAnnotatedImage();
+    void assignFace(int faceId, const QString &personId);
+    void setVideoSettingsVisible(bool visible);
     void addSelectedFaceToDatabase();
     void addFaceToDatabase(const FaceItem &face);
     void onIdentitiesMerged(int keepId, int removedId);
@@ -111,6 +117,7 @@ private:
     void updateVideoOptions();
     void selectFace(int id);
     void showFaceDetails();
+    QString candidatesHtml(const FaceItem &face) const;
     void refreshMatches();
     void refreshFaceList();
     void updateFaceListItem(QListWidgetItem *listItem, const FaceItem &face);
@@ -155,6 +162,9 @@ private:
     QString m_pendingFile;
     QString m_currentImagePath;
     QString m_lastDirectory;
+    QStringList m_folderImages; // صور مجلد الصورة الحالية للتنقل بينها
+    QString m_folderPath;
+    int m_folderIndex = -1;
 
     QList<FaceItem> m_faces; // وجوه الصورة الحالية، أو مسارات الوجوه في الفيديو
     QHash<int, int> m_faceRows; // رقم الوجه ← موضعه، حتى يبقى التحديث سريعاً مع آلاف الأشخاص
@@ -230,6 +240,7 @@ private:
     QComboBox *m_faceStatusFilter = nullptr;
     QComboBox *m_faceSort = nullptr;
     FancyButton *m_viewShotButton = nullptr;
+    QList<QWidget *> m_videoSettings; // إعدادات تخص الفيديو فقط فتختفي عند عرض صورة
 
     QLabel *m_databaseSubtitle = nullptr;
     QLineEdit *m_personFilter = nullptr;

@@ -24,6 +24,7 @@
 #include <QApplication>
 #include <QButtonGroup>
 #include <QClipboard>
+#include <QCollator>
 #include <QComboBox>
 #include <QMenu>
 #include <QScrollArea>
@@ -429,6 +430,34 @@ void MainWindow::setupShortcuts()
             analyzeImage(m_currentImagePath);
     });
     add(QKeySequence(Qt::CTRL | Qt::Key_E), [this] { m_enhanceSwitch->toggle(); });
+    // التنقل بين صور المجلد والتكبير في صفحة التعرف
+    const auto onRecognition = [this] { return m_pages->currentIndex() == 0; };
+    for (const QKeySequence &key : {QKeySequence(Qt::Key_PageDown), QKeySequence(Qt::ALT | Qt::Key_Left)})
+        add(key, [this, onRecognition] {
+            if (onRecognition())
+                navigateImage(1);
+        });
+    for (const QKeySequence &key : {QKeySequence(Qt::Key_PageUp), QKeySequence(Qt::ALT | Qt::Key_Right)})
+        add(key, [this, onRecognition] {
+            if (onRecognition())
+                navigateImage(-1);
+        });
+    add(QKeySequence(Qt::CTRL | Qt::Key_Equal), [this, onRecognition] {
+        if (onRecognition())
+            m_view->zoomBy(1.25);
+    });
+    add(QKeySequence(Qt::CTRL | Qt::Key_Minus), [this, onRecognition] {
+        if (onRecognition())
+            m_view->zoomBy(0.8);
+    });
+    add(QKeySequence(Qt::CTRL | Qt::Key_0), [this, onRecognition] {
+        if (onRecognition())
+            m_view->resetZoom();
+    });
+    add(QKeySequence(Qt::Key_L), [this, onRecognition] {
+        if (onRecognition())
+            m_view->setLabelsVisible(!m_view->labelsVisible());
+    });
     add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_E), [this] {
         if (m_enhanceImageButton->isEnabled())
             openEnhancer();
@@ -833,11 +862,15 @@ QWidget *MainWindow::createRecognitionPage()
     settingsLayout->addWidget(group({new QLabel(QStringLiteral("حد التعرف"), settings), m_thresholdSlider, m_thresholdValue, m_thresholdWarning}));
     settingsLayout->addWidget(m_thoroughSwitch);
     settingsLayout->addWidget(m_enhanceSwitch);
-    settingsLayout->addWidget(group({new QLabel(QStringLiteral("إطار من كل"), settings), m_frameStepSpin}));
+    QWidget *frameStepGroup = group({new QLabel(QStringLiteral("إطار من كل"), settings), m_frameStepSpin});
+    QWidget *rangeGroup = group({new QLabel(QStringLiteral("الجزء: من"), settings), m_rangeStart,
+                                 new QLabel(QStringLiteral("إلى"), settings), m_rangeEnd});
+    QWidget *regionGroup = group({m_regionButton, m_clearRegionButton, m_reanalyzeButton});
+    m_videoSettings = {frameStepGroup, rangeGroup, regionGroup};
+    settingsLayout->addWidget(frameStepGroup);
     settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo}));
-    settingsLayout->addWidget(group({new QLabel(QStringLiteral("الجزء: من"), settings), m_rangeStart,
-                                     new QLabel(QStringLiteral("إلى"), settings), m_rangeEnd}));
-    settingsLayout->addWidget(group({m_regionButton, m_clearRegionButton, m_reanalyzeButton}));
+    settingsLayout->addWidget(rangeGroup);
+    settingsLayout->addWidget(regionGroup);
     layout->addWidget(settings);
 
     m_progress = new QProgressBar(page);
@@ -863,7 +896,13 @@ QWidget *MainWindow::createRecognitionPage()
     connect(m_view, &ImageView::faceDoubleClicked, this, [this](int id) {
         if (m_videoMode)
             openShotViewer(id);
+        else
+            m_view->zoomToFace(id);
     });
+    connect(m_view, &ImageView::navigateRequested, this, &MainWindow::navigateImage);
+    m_view->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_view, &QWidget::customContextMenuRequested, this, &MainWindow::showViewMenu);
+    m_view->setToolTip(QString());
     connect(m_view, &ImageView::regionSelected, this, [this](const QRectF &region) {
         m_videoWorker->setRegion(region);
         m_regionButton->setChecked(false);
@@ -926,14 +965,16 @@ QWidget *MainWindow::createRecognitionPage()
     m_faceList->setMinimumHeight(90);
     m_faceList->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_faceList->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_faceList->setToolTip(QStringLiteral("انقر نقراً مزدوجاً لعرض لقطات الوجه في الفيديو · Ctrl أو Shift لتحديد عدة وجوه ثم زر الفأرة الأيمن للدمج أو الحذف"));
+    m_faceList->setToolTip(QStringLiteral("نقر مزدوج: تكبير الوجه في الصورة، أو عرض لقطاته في الفيديو\n"
+                                          "Ctrl أو Shift لتحديد عدة وجوه ثم زر الفأرة الأيمن للدمج أو الحذف"));
     connect(m_faceList, &QListWidget::currentRowChanged, this, &MainWindow::showFaceDetails);
     connect(m_faceList, &QListWidget::customContextMenuRequested, this, &MainWindow::showFaceContextMenu);
     connect(m_faceList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
         if (m_videoMode)
             openShotViewer(item->data(CardRole::Id).toInt());
+        else
+            m_view->zoomToFace(item->data(CardRole::Id).toInt());
     });
-    sideLayout->addWidget(m_faceList, 1);
 
     // التفاصيل تُمرَّر إن طالت حتى تبقى الأزرار ظاهرة على الشاشات القصيرة
     m_faceDetails = new QLabel(side);
@@ -941,15 +982,33 @@ QWidget *MainWindow::createRecognitionPage()
     m_faceDetails->setTextFormat(Qt::RichText);
     m_faceDetails->setAlignment(Qt::AlignTop);
     m_faceDetails->setObjectName(QStringLiteral("muted"));
+    m_faceDetails->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
+    connect(m_faceDetails, &QLabel::linkActivated, this, [this](const QString &link) {
+        const int row = m_faceList->currentRow();
+        if (row < 0 || row >= m_faces.size() || !m_ready)
+            return;
+        if (link.startsWith(QStringLiteral("assign:")))
+            assignFace(m_faces.at(row).id, link.mid(7));
+        else if (link == QStringLiteral("other"))
+            addFaceToDatabase(m_faces.at(row));
+    });
     auto *detailsScroll = new QScrollArea(side);
     detailsScroll->setWidget(m_faceDetails);
     detailsScroll->setWidgetResizable(true);
     detailsScroll->setFrameShape(QFrame::NoFrame);
     detailsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    detailsScroll->setMinimumHeight(56);
-    detailsScroll->setMaximumHeight(190);
+    detailsScroll->setMinimumHeight(110);
     detailsScroll->setStyleSheet(QStringLiteral("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"));
-    sideLayout->addWidget(detailsScroll);
+    // القائمة والتفاصيل في مقسم حتى يكبّر المستخدم أيهما شاء
+    auto *sideSplitter = new QSplitter(Qt::Vertical, side);
+    sideSplitter->setHandleWidth(8);
+    sideSplitter->setChildrenCollapsible(false);
+    sideSplitter->addWidget(m_faceList);
+    sideSplitter->addWidget(detailsScroll);
+    sideSplitter->setStretchFactor(0, 1);
+    sideSplitter->setStretchFactor(1, 1);
+    sideSplitter->setSizes({190, 290});
+    sideLayout->addWidget(sideSplitter, 1);
 
     m_viewShotButton = new FancyButton(Icons::Name::Film, QStringLiteral("اللقطات"), FancyButton::Kind::Secondary, side);
     m_viewShotButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -1300,7 +1359,11 @@ void MainWindow::analyzeImage(const QString &path)
 {
     m_videoMode = false;
     m_timelineCard->setVisible(false);
+    setVideoSettingsVisible(false);
+    if (path != m_currentImagePath)
+        m_view->resetZoom();
     m_currentImagePath = path;
+    updateFolderNavigation();
     m_faces.clear();
     refreshFaceList();
     m_view->setFaces({});
@@ -1395,6 +1458,10 @@ void MainWindow::startVideo(const QString &source)
     m_videoSource = source;
     m_videoMode = true;
     m_videoRunning = true;
+    m_folderImages.clear();
+    m_folderIndex = -1;
+    m_view->setNavigation(false, false, QString());
+    setVideoSettingsVisible(true);
     m_faces.clear();
     m_hiddenFaces.clear();
     refreshFaceList();
@@ -1644,6 +1711,9 @@ void MainWindow::showFaceContextMenu(const QPoint &pos)
         QAction *view = menu.addAction(Icons::icon(Icons::Name::Film, Theme::Text, 18), QStringLiteral("عرض اللقطة في الفيديو"),
                                        this, [this, id] { openShotViewer(id); });
         view->setEnabled(fileVideo);
+        if (!m_videoMode)
+            menu.addAction(Icons::icon(Icons::Name::ZoomIn, Theme::Text, 18), QStringLiteral("تكبير على الوجه في الصورة"), this,
+                           [this, id] { m_view->zoomToFace(id); });
         menu.addAction(Icons::icon(Icons::Name::UserPlus, Theme::Text, 18), QStringLiteral("إضافة إلى قاعدة البيانات…"), this, [this, id] {
             const int row = m_faceRows.value(id, -1);
             if (row >= 0)
@@ -1976,6 +2046,39 @@ void MainWindow::selectFace(int id)
     }
 }
 
+// أقرب المرشحين في القاعدة مع نسبهم، حتى يرى المستخدم البدائل حين يكون التطابق غير مؤكد ويصحح بنقرة
+QString MainWindow::candidatesHtml(const FaceItem &face) const
+{
+    QString html;
+    if (!face.embedding.empty() && m_database.personCount() > 0) {
+        GalleryPtr gallery = m_database.gallery();
+        const QList<MatchResult> candidates = FaceDatabase::candidates(*gallery, face.embedding, 3, threshold());
+        if (!candidates.isEmpty()) {
+            html += QStringLiteral("<br><br><span style='color:#8aa3c7'>أقرب المرشحين في القاعدة:</span>");
+            html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='2'>");
+            for (const MatchResult &candidate : candidates) {
+                const int percent = std::clamp(qRound(candidate.score * 100), 0, 100);
+                // تصحيح بنقرة: إضافة الوجه إلى صور المرشح فتتحسن مطابقته في المرات القادمة
+                const bool current = face.match.status == MatchStatus::Confirmed && candidate.personId == face.match.personId;
+                const QString action = current
+                    ? QStringLiteral("<span style='color:%1'>✓</span>").arg(matchColor(MatchStatus::Confirmed).name())
+                    : QStringLiteral("<a href='assign:%1' style='color:%2; text-decoration:none'>هذا هو</a>")
+                          .arg(candidate.personId.toHtmlEscaped(), Theme::Accent2.name());
+                html += QStringLiteral("<tr><td style='color:%1'>● <span style='color:#e6f0ff'>%2</span></td>"
+                                       "<td align='left' width='40' style='color:%1'>%3%</td>"
+                                       "<td align='left' width='48'>%4</td></tr>")
+                            .arg(matchColor(candidate.status).name(), candidate.name.toHtmlEscaped())
+                            .arg(percent)
+                            .arg(action);
+            }
+            html += QStringLiteral("</table>");
+            html += QStringLiteral("<a href='other' style='color:%1; text-decoration:none'>ليس أحدهم؟ اختر شخصاً آخر أو أضف شخصاً جديداً…</a>")
+                        .arg(Theme::Accent2.name());
+        }
+    }
+    return html;
+}
+
 void MainWindow::showFaceDetails()
 {
     const int row = m_faceList->currentRow();
@@ -1998,8 +2101,13 @@ void MainWindow::showFaceDetails()
     auto row_ = [](const QString &key, const QString &value) {
         return QStringLiteral("<br><span style='color:#8aa3c7'>%1:</span> <span style='color:#e6f0ff'>%2</span>").arg(key, value.toHtmlEscaped());
     };
-    html += row_(QStringLiteral("درجة التشابه"), QStringLiteral("%1%").arg(qRound(face.match.score * 100)));
-    html += row_(QStringLiteral("جودة الوجه"), QStringLiteral("%1%").arg(qRound(face.quality * 100)));
+    html += QStringLiteral("<br><span style='color:#8aa3c7'>التشابه:</span> <span style='color:#e6f0ff'>%1%</span>"
+                           "&nbsp;&nbsp;·&nbsp;&nbsp;<span style='color:#8aa3c7'>جودة الوجه:</span> <span style='color:#e6f0ff'>%2%</span>")
+                .arg(qRound(face.match.score * 100))
+                .arg(qRound(face.quality * 100));
+    if (face.quality < 0.35f)
+        html += QStringLiteral("<br><span style='color:#93c5fd'>جودة الوجه منخفضة: النتيجة أقل موثوقية</span>");
+    html += candidatesHtml(face);
     if (m_videoMode && face.firstSeenMs >= 0) {
         html += row_(QStringLiteral("أول ظهور"), ImageIO::formatTime(face.firstSeenMs));
         html += row_(QStringLiteral("آخر ظهور"), ImageIO::formatTime(face.lastSeenMs));
@@ -2026,29 +2134,137 @@ void MainWindow::showFaceDetails()
         if (!person.notes.isEmpty())
             html += row_(QStringLiteral("ملاحظات"), person.notes);
     }
-    // أقرب المرشحين في القاعدة مع نسبهم، حتى يرى المستخدم البدائل حين يكون التطابق غير مؤكد
-    if (!face.embedding.empty() && m_database.personCount() > 0) {
-        GalleryPtr gallery = m_database.gallery();
-        const QList<MatchResult> candidates = FaceDatabase::candidates(*gallery, face.embedding, 3, threshold());
-        if (!candidates.isEmpty()) {
-            html += QStringLiteral("<br><br><span style='color:#8aa3c7'>أقرب المرشحين في القاعدة:</span>");
-            html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='2'>");
-            for (const MatchResult &candidate : candidates) {
-                const int percent = std::clamp(qRound(candidate.score * 100), 0, 100);
-                html += QStringLiteral("<tr><td style='color:%1'>%2</td><td width='70'>"
-                                       "<table width='100%' cellspacing='0' cellpadding='0'><tr>"
-                                       "<td width='%3%' style='background:%1' height='5'></td><td style='background:#1c3560'></td>"
-                                       "</tr></table></td><td align='left' width='36' style='color:#e6f0ff'>%4%</td></tr>")
-                            .arg(matchColor(candidate.status).name(), candidate.name.toHtmlEscaped())
-                            .arg(std::max(1, percent))
-                            .arg(percent);
-            }
-            html += QStringLiteral("</table>");
-        }
-    }
-    if (face.quality < 0.35f)
-        html += QStringLiteral("<br><span style='color:#93c5fd'>جودة الوجه منخفضة: النتيجة أقل موثوقية</span>");
     m_faceDetails->setText(html);
+}
+
+void MainWindow::setVideoSettingsVisible(bool visible)
+{
+    for (QWidget *widget : std::as_const(m_videoSettings))
+        widget->setVisible(visible);
+}
+
+// يجهّز قائمة صور المجلد الذي فيه الصورة الحالية، بترتيب طبيعي (2 قبل 10) كما في مستكشف الملفات
+void MainWindow::updateFolderNavigation()
+{
+    const QFileInfo info(m_currentImagePath);
+    if (m_currentImagePath.isEmpty() || info.fileName() == QStringLiteral("malamih-clipboard.png")) {
+        m_folderImages.clear();
+        m_folderPath.clear();
+        m_folderIndex = -1;
+        m_view->setNavigation(false, false, QString());
+        return;
+    }
+    const QString folder = info.absolutePath();
+    if (folder != m_folderPath || !m_folderImages.contains(info.fileName())) {
+        static const QStringList patterns = {QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"), QStringLiteral("*.png"),
+                                             QStringLiteral("*.bmp"), QStringLiteral("*.webp"), QStringLiteral("*.tif"),
+                                             QStringLiteral("*.tiff")};
+        m_folderImages = QDir(folder).entryList(patterns, QDir::Files | QDir::Readable);
+        QCollator collator;
+        collator.setNumericMode(true);
+        collator.setCaseSensitivity(Qt::CaseInsensitive);
+        std::sort(m_folderImages.begin(), m_folderImages.end(), collator);
+        m_folderPath = folder;
+    }
+    m_folderIndex = m_folderImages.indexOf(info.fileName());
+    if (m_folderImages.size() < 2 || m_folderIndex < 0) {
+        m_view->setNavigation(false, false, QString());
+        return;
+    }
+    // \u2066…\u2069 حتى يبقى الرقمان بترتيبهما داخل النص العربي
+    const QString caption = QStringLiteral("\u2066%1 / %2\u2069  ·  \u2068%3\u2069")
+                                .arg(m_folderIndex + 1)
+                                .arg(m_folderImages.size())
+                                .arg(info.fileName());
+    m_view->setNavigation(m_folderIndex > 0, m_folderIndex + 1 < m_folderImages.size(), caption);
+}
+
+void MainWindow::navigateImage(int step)
+{
+    if (m_videoMode || m_folderIndex < 0 || !m_openImageButton->isEnabled())
+        return;
+    const int next = m_folderIndex + step;
+    if (next < 0 || next >= m_folderImages.size())
+        return;
+    analyzeImage(QDir(m_folderPath).filePath(m_folderImages.at(next)));
+}
+
+void MainWindow::showViewMenu(const QPoint &pos)
+{
+    if (!m_view->hasImage())
+        return;
+    const int faceId = m_view->faceAt(pos);
+    QMenu menu(this);
+    if (faceId >= 0) {
+        selectFace(faceId);
+        menu.addAction(Icons::icon(Icons::Name::ZoomIn, Theme::Text, 18), QStringLiteral("تكبير على هذا الوجه"), this,
+                       [this, faceId] { m_view->zoomToFace(faceId); });
+        menu.addAction(Icons::icon(Icons::Name::UserPlus, Theme::Text, 18), QStringLiteral("إضافة الوجه إلى قاعدة البيانات…"), this,
+                       [this, faceId] {
+                           const int row = m_faceRows.value(faceId, -1);
+                           if (row >= 0)
+                               addFaceToDatabase(m_faces.at(row));
+                       })
+            ->setEnabled(m_ready);
+        menu.addSeparator();
+    }
+    if (m_view->zoom() > 1.0)
+        menu.addAction(Icons::icon(Icons::Name::FitWidth, Theme::Text, 18), QStringLiteral("عرض الصورة كاملة (Ctrl+0)"), this,
+                       [this] { m_view->resetZoom(); });
+    QAction *labels = menu.addAction(QStringLiteral("إظهار أسماء الوجوه (L)"), this,
+                                     [this](bool on) { m_view->setLabelsVisible(on); });
+    labels->setCheckable(true);
+    labels->setChecked(m_view->labelsVisible());
+    menu.addSeparator();
+    menu.addAction(Icons::icon(Icons::Name::Save, Theme::Text, 18), QStringLiteral("حفظ الصورة مع أسماء الوجوه…"), this,
+                   &MainWindow::saveAnnotatedImage);
+    menu.addAction(Icons::icon(Icons::Name::Image, Theme::Text, 18), QStringLiteral("نسخ الصورة مع أسماء الوجوه"), this, [this] {
+        QApplication::clipboard()->setImage(m_view->annotatedImage());
+        Toast::show(this, QStringLiteral("نُسخت الصورة، يمكنك لصقها في أي برنامج"));
+    });
+    if (!m_videoMode && !m_currentImagePath.isEmpty()) {
+        menu.addSeparator();
+        menu.addAction(Icons::icon(Icons::Name::Folder, Theme::Text, 18), QStringLiteral("فتح مجلد الصورة"), this, [this] {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_currentImagePath).absolutePath()));
+        });
+        menu.addAction(Icons::icon(Icons::Name::Scan, Theme::Text, 18), QStringLiteral("إعادة التحليل (F5)"), this, [this] {
+            if (m_openImageButton->isEnabled())
+                analyzeImage(m_currentImagePath);
+        })->setEnabled(m_openImageButton->isEnabled());
+    }
+    menu.exec(m_view->mapToGlobal(pos));
+}
+
+void MainWindow::saveAnnotatedImage()
+{
+    const QImage image = m_view->annotatedImage();
+    if (image.isNull())
+        return;
+    const QString base = m_currentImagePath.isEmpty() || m_videoMode ? QStringLiteral("صورة")
+                                                                      : QFileInfo(m_currentImagePath).completeBaseName();
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("حفظ الصورة مع أسماء الوجوه"),
+                                                      QDir(m_lastDirectory).filePath(base + QStringLiteral("-الوجوه.jpg")),
+                                                      QStringLiteral("صور (*.jpg *.png)"));
+    if (path.isEmpty())
+        return;
+    if (image.save(path, nullptr, 92))
+        Toast::show(this, QStringLiteral("تم حفظ الصورة"));
+    else
+        Toast::show(this, QStringLiteral("تعذر حفظ الصورة"), Toast::Kind::Warning);
+}
+
+// تصحيح بنقرة من قائمة المرشحين: الوجه يُضاف إلى صور الشخص، ثم تُعاد المطابقة تلقائياً
+void MainWindow::assignFace(int faceId, const QString &personId)
+{
+    const int row = m_faceRows.value(faceId, -1);
+    if (row < 0 || row >= m_faces.size() || personId.isEmpty())
+        return;
+    const FaceItem face = m_faces.at(row);
+    const QString name = m_database.person(personId).name;
+    if (enrollFace(personId, face))
+        Toast::show(this, QStringLiteral("أُضيف الوجه إلى صور %1، وستتحسن مطابقته من الآن").arg(name));
+    else
+        Toast::show(this, QStringLiteral("تعذر إضافة الوجه"), Toast::Kind::Warning);
 }
 
 void MainWindow::openFolderScan()

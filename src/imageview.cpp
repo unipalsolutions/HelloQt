@@ -7,6 +7,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -49,6 +50,11 @@ void ImageView::setImage(const QImage &image, bool animate)
     } else {
         m_previous = QImage();
         m_fade = 1.0;
+    }
+    // إطارات الفيديو المتتالية تحتفظ بالتكبير، أما صورة بحجم مختلف فتبدأ كاملة
+    if (image.size() != m_image.size()) {
+        m_zoom = 1.0;
+        m_pan = QPointF();
     }
     m_image = image;
     startTicking();
@@ -135,7 +141,7 @@ void ImageView::tick()
         m_timer.stop();
 }
 
-QRectF ImageView::imageRect(const QImage &image) const
+QRectF ImageView::fitRect(const QImage &image) const
 {
     if (image.isNull())
         return {};
@@ -144,9 +150,207 @@ QRectF ImageView::imageRect(const QImage &image) const
     return QRectF(QPointF((width() - size.width()) / 2.0, (height() - size.height()) / 2.0), size);
 }
 
+QRectF ImageView::imageRect() const
+{
+    const QRectF fit = fitRect(m_image);
+    if (fit.isEmpty() || m_zoom <= 1.0)
+        return fit;
+    const QSizeF size = fit.size() * m_zoom;
+    const QPointF center = fit.center() + m_pan;
+    return QRectF(center - QPointF(size.width() / 2, size.height() / 2), size);
+}
+
+void ImageView::setZoom(double zoom, const QPointF &anchor)
+{
+    if (m_image.isNull())
+        return;
+    zoom = std::clamp(zoom, 1.0, 12.0);
+    const QRectF before = imageRect();
+    const QPointF point = anchor.x() < 0 ? QPointF(width() / 2.0, height() / 2.0) : anchor;
+    // النقطة التي تحت المؤشر تبقى تحته بعد التكبير
+    const QPointF fraction((point.x() - before.x()) / before.width(), (point.y() - before.y()) / before.height());
+    const QRectF fit = fitRect(m_image);
+    const QSizeF size = fit.size() * zoom;
+    const QPointF topLeft(point.x() - fraction.x() * size.width(), point.y() - fraction.y() * size.height());
+    m_zoom = zoom;
+    m_pan = topLeft + QPointF(size.width() / 2, size.height() / 2) - fit.center();
+    clampPan();
+    emit zoomChanged(m_zoom);
+    update();
+}
+
+void ImageView::clampPan()
+{
+    const QRectF fit = fitRect(m_image);
+    if (fit.isEmpty() || m_zoom <= 1.0) {
+        m_pan = QPointF();
+        return;
+    }
+    const QSizeF size = fit.size() * m_zoom;
+    const double maxX = std::max(0.0, (size.width() - (width() - 12)) / 2.0);
+    const double maxY = std::max(0.0, (size.height() - (height() - 12)) / 2.0);
+    m_pan.setX(std::clamp(m_pan.x(), -maxX, maxX));
+    m_pan.setY(std::clamp(m_pan.y(), -maxY, maxY));
+}
+
+void ImageView::zoomBy(double factor, const QPointF &anchor)
+{
+    setZoom(m_zoom * factor, anchor);
+}
+
+void ImageView::resetZoom()
+{
+    if (m_zoom == 1.0 && m_pan.isNull())
+        return;
+    m_zoom = 1.0;
+    m_pan = QPointF();
+    emit zoomChanged(m_zoom);
+    update();
+}
+
+void ImageView::zoomToFace(int id)
+{
+    const auto box = std::find_if(m_boxes.cbegin(), m_boxes.cend(), [id](const Box &b) { return b.id == id; });
+    const QRectF fit = fitRect(m_image);
+    if (box == m_boxes.cend() || fit.isEmpty() || box->target.isEmpty())
+        return;
+    // الوجه يملأ نحو 45% من ارتفاع العرض ويتوسطه
+    const double fitScale = fit.width() / m_image.width();
+    m_zoom = std::clamp(0.45 * height() / (box->target.height() * fitScale), 1.0, 8.0);
+    const double scale = fitScale * m_zoom;
+    const QPointF face = box->target.center() - QPointF(m_image.width() / 2.0, m_image.height() / 2.0);
+    m_pan = -face * scale;
+    clampPan();
+    emit zoomChanged(m_zoom);
+    update();
+}
+
+void ImageView::setLabelsVisible(bool visible)
+{
+    m_showLabels = visible;
+    update();
+}
+
+void ImageView::setNavigation(bool canPrevious, bool canNext, const QString &caption)
+{
+    m_canPrevious = canPrevious;
+    m_canNext = canNext;
+    m_caption = caption;
+    update();
+}
+
+QRectF ImageView::navButton(int step) const
+{
+    if (!m_canPrevious && !m_canNext)
+        return {};
+    // في الواجهة العربية تأتي الصورة التالية من اليسار
+    const bool left = (step > 0) == isRightToLeft();
+    const double x = left ? 14 : width() - 14 - 44;
+    return QRectF(x, height() / 2.0 - 22, 44, 44);
+}
+
+void ImageView::paintNavigation(QPainter &p)
+{
+    using namespace Theme;
+    if (!m_canPrevious && !m_canNext)
+        return;
+    p.save();
+    for (int step : {-1, 1}) {
+        const bool enabled = step < 0 ? m_canPrevious : m_canNext;
+        if (!enabled)
+            continue;
+        const QRectF r = navButton(step);
+        const bool hovered = m_navHover == step;
+        p.setPen(QPen(withAlpha(Accent, hovered ? 220 : 90), 1));
+        p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), hovered ? 240 : 170));
+        p.drawEllipse(r);
+        // سهم يشير إلى جهة الصورة
+        const bool pointLeft = r.center().x() < width() / 2.0;
+        const QPointF c = r.center();
+        const double d = pointLeft ? 1 : -1;
+        QPainterPath arrow;
+        arrow.moveTo(c.x() + 4 * d, c.y() - 8);
+        arrow.lineTo(c.x() - 4 * d, c.y());
+        arrow.lineTo(c.x() + 4 * d, c.y() + 8);
+        p.setPen(QPen(withAlpha(Qt::white, hovered ? 255 : 200), 2.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(arrow);
+    }
+    if (!m_caption.isEmpty()) {
+        QFont font = this->font();
+        font.setPointSizeF(9.5);
+        p.setFont(font);
+        const QFontMetricsF metrics(font);
+        const QString text = metrics.elidedText(m_caption, Qt::ElideMiddle, std::max(80, width() - 160));
+        const QSizeF size(metrics.horizontalAdvance(text) + 28, 28);
+        const QRectF pill(QPointF((width() - size.width()) / 2.0, height() - size.height() - 12), size);
+        p.setPen(QPen(withAlpha(Accent, 90), 1));
+        p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 215));
+        p.drawRoundedRect(pill, 14, 14);
+        p.setPen(Text);
+        p.drawText(pill, Qt::AlignCenter, text);
+    }
+    p.restore();
+}
+
+void ImageView::paintZoomBadge(QPainter &p)
+{
+    using namespace Theme;
+    if (m_zoom <= 1.001 || m_image.isNull())
+        return;
+    p.save();
+    QFont font = this->font();
+    font.setPointSizeF(9.5);
+    p.setFont(font);
+    // \u2066…\u2069 تُبقي النسبة بترتيبها الصحيح داخل النص العربي
+    const QString text = QStringLiteral("\u2066%1%\u2069  ·  نقر مزدوج للعرض الكامل").arg(qRound(m_zoom * 100));
+    const QSizeF size(QFontMetricsF(font).horizontalAdvance(text) + 28, 28);
+    const QRectF pill(QPointF(isRightToLeft() ? 12 : width() - size.width() - 12, 12), size);
+    p.setPen(QPen(withAlpha(Accent2, 140), 1));
+    p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 225));
+    p.drawRoundedRect(pill, 14, 14);
+    p.setPen(Text);
+    p.drawText(pill, Qt::AlignCenter, text);
+    p.restore();
+}
+
+QImage ImageView::annotatedImage() const
+{
+    if (m_image.isNull())
+        return {};
+    QImage out = m_image.convertToFormat(QImage::Format_RGB32);
+    QPainter p(&out);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setRenderHint(QPainter::TextAntialiasing);
+    // سماكة الخطوط والخط تتناسب مع حجم الصورة حتى تُقرأ في الصور الكبيرة والصغيرة
+    const double unit = std::max(1.0, std::max(out.width(), out.height()) / 1000.0);
+    QFont font = this->font();
+    font.setPixelSize(int(std::lround(15 * unit)));
+    font.setWeight(QFont::Bold);
+    p.setFont(font);
+    const QFontMetricsF metrics(font);
+    for (const Box &box : m_boxes) {
+        const QRectF r = box.target;
+        p.setPen(QPen(box.color, 3 * unit));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(r, 6 * unit, 6 * unit);
+        const QSizeF size(metrics.horizontalAdvance(box.label) + 18 * unit, metrics.height() + 8 * unit);
+        QRectF pill(QPointF(r.center().x() - size.width() / 2, r.top() - size.height() - 4 * unit), size);
+        if (pill.top() < 0)
+            pill.moveTop(r.bottom() + 4 * unit);
+        pill.moveLeft(std::clamp(pill.left(), 0.0, std::max(0.0, out.width() - pill.width())));
+        p.setPen(Qt::NoPen);
+        p.setBrush(box.color.darker(115));
+        p.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
+        p.setPen(Qt::white);
+        p.drawText(pill, Qt::AlignCenter, box.label);
+    }
+    return out;
+}
+
 QRectF ImageView::mapToView(const QRectF &rect) const
 {
-    const QRectF target = imageRect(m_image);
+    const QRectF target = imageRect();
     const double scale = target.width() / m_image.width();
     return QRectF(target.x() + rect.x() * scale, target.y() + rect.y() * scale,
                   rect.width() * scale, rect.height() * scale);
@@ -177,26 +381,28 @@ void ImageView::paintEvent(QPaintEvent *)
     const double fade = QEasingCurve(QEasingCurve::OutCubic).valueForProgress(m_fade);
     if (!m_previous.isNull() && fade < 1.0) {
         p.setOpacity(1.0 - fade);
-        p.drawImage(imageRect(m_previous), m_previous);
+        p.drawImage(fitRect(m_previous), m_previous);
     }
     p.setOpacity(fade);
-    const QRectF target = imageRect(m_image);
+    const QRectF target = imageRect();
     const double zoom = 1.0 + 0.03 * (1.0 - fade);
     const QRectF zoomed(target.center() - QPointF(target.width() * zoom / 2, target.height() * zoom / 2),
                         target.size() * zoom);
     QPainterPath clip;
-    clip.addRoundedRect(target, 10, 10);
+    clip.addRoundedRect(target.intersected(QRectF(rect()).adjusted(6, 6, -6, -6)), 10, 10);
     p.setClipPath(clip);
     p.drawImage(zoomed, m_image);
-    p.setClipping(false);
     p.setOpacity(1.0);
 
     paintRegion(p);
     for (const Box &box : m_boxes)
         paintBox(p, box, t);
+    p.setClipping(false);
 
     if (m_busy)
         paintBusy(p, t);
+    paintZoomBadge(p);
+    paintNavigation(p);
 }
 
 void ImageView::paintBox(QPainter &p, const Box &box, double t)
@@ -236,7 +442,9 @@ void ImageView::paintBox(QPainter &p, const Box &box, double t)
     corner(r.bottomLeft(), 1, -1);
     corner(r.bottomRight(), -1, -1);
 
-    // بطاقة الاسم
+    // بطاقة الاسم: عند إخفاء الأسماء تظهر للوجه المحدد أو الذي تحت المؤشر فقط
+    if (!m_showLabels && !selected && !hovered)
+        return;
     QFont font = this->font();
     font.setPointSizeF(10);
     font.setWeight(QFont::Bold);
@@ -298,7 +506,7 @@ void ImageView::paintEmpty(QPainter &p, double t)
 void ImageView::paintBusy(QPainter &p, double t)
 {
     using namespace Theme;
-    const QRectF r = imageRect(m_image);
+    const QRectF r = imageRect();
     QPainterPath clip;
     clip.addRoundedRect(r, 10, 10);
     p.save();
@@ -358,7 +566,7 @@ void ImageView::setSelectingRegion(bool selecting)
 
 QPointF ImageView::toImageFraction(const QPointF &pos) const
 {
-    const QRectF target = imageRect(m_image);
+    const QRectF target = imageRect();
     if (target.isEmpty())
         return {};
     return QPointF(std::clamp((pos.x() - target.x()) / target.width(), 0.0, 1.0),
@@ -368,7 +576,7 @@ QPointF ImageView::toImageFraction(const QPointF &pos) const
 void ImageView::paintRegion(QPainter &p)
 {
     using namespace Theme;
-    const QRectF target = imageRect(m_image);
+    const QRectF target = imageRect();
     QRectF fraction = m_region;
     if (m_dragging)
         fraction = QRectF(m_dragStart, m_dragEnd).normalized();
@@ -418,9 +626,25 @@ void ImageView::mousePressEvent(QMouseEvent *event)
         update();
         return;
     }
-    const int id = boxAt(event->position());
+    if (event->button() == Qt::LeftButton) {
+        for (int step : {-1, 1}) {
+            if ((step < 0 ? m_canPrevious : m_canNext) && navButton(step).contains(event->position())) {
+                emit navigateRequested(step);
+                return;
+            }
+        }
+    }
+    const int id = event->button() == Qt::LeftButton ? boxAt(event->position()) : -1;
     if (id >= 0) {
         emit faceClicked(id);
+        return;
+    }
+    // سحب الصورة المكبّرة بالزر الأيسر، أو بالزر الأوسط في أي وقت
+    if (!m_image.isNull() && ((event->button() == Qt::LeftButton && m_zoom > 1.0) || event->button() == Qt::MiddleButton)) {
+        m_panning = true;
+        m_panStart = event->position();
+        m_panOrigin = m_pan;
+        setCursor(Qt::ClosedHandCursor);
         return;
     }
     QWidget::mousePressEvent(event);
@@ -428,6 +652,11 @@ void ImageView::mousePressEvent(QMouseEvent *event)
 
 void ImageView::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_panning) {
+        m_panning = false;
+        setCursor(m_zoom > 1.0 ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        return;
+    }
     if (m_dragging) {
         m_dragging = false;
         m_dragEnd = toImageFraction(event->position());
@@ -448,11 +677,57 @@ void ImageView::mouseDoubleClickEvent(QMouseEvent *event)
         emit faceDoubleClicked(id);
         return;
     }
+    // نقر مزدوج على الصورة: تكبير حول النقطة، ومرة أخرى للعودة إلى العرض الكامل
+    if (!m_selecting && event->button() == Qt::LeftButton && !m_image.isNull() && imageRect().contains(event->position())) {
+        if (m_zoom > 1.0)
+            resetZoom();
+        else
+            setZoom(2.5, event->position());
+        return;
+    }
     QWidget::mouseDoubleClickEvent(event);
+}
+
+void ImageView::wheelEvent(QWheelEvent *event)
+{
+    if (m_image.isNull() || m_selecting) {
+        QWidget::wheelEvent(event);
+        return;
+    }
+    const double steps = event->angleDelta().y() / 120.0;
+    if (steps == 0.0)
+        return;
+    setZoom(m_zoom * std::pow(1.2, steps), event->position());
+    event->accept();
+}
+
+void ImageView::resizeEvent(QResizeEvent *event)
+{
+    clampPan();
+    QWidget::resizeEvent(event);
 }
 
 void ImageView::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_panning) {
+        m_pan = m_panOrigin + (event->position() - m_panStart);
+        clampPan();
+        update();
+        return;
+    }
+    int nav = 0;
+    for (int step : {-1, 1}) {
+        if ((step < 0 ? m_canPrevious : m_canNext) && navButton(step).contains(event->position()))
+            nav = step;
+    }
+    if (nav != m_navHover) {
+        m_navHover = nav;
+        update();
+    }
+    if (nav != 0) {
+        setCursor(Qt::PointingHandCursor);
+        return;
+    }
     if (m_dragging) {
         m_dragEnd = toImageFraction(event->position());
         update();
@@ -465,15 +740,16 @@ void ImageView::mouseMoveEvent(QMouseEvent *event)
     const int id = boxAt(event->position());
     if (id != m_hovered) {
         m_hovered = id;
-        setCursor(id >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
         update();
     }
+    setCursor(id >= 0 ? Qt::PointingHandCursor : m_zoom > 1.0 ? Qt::OpenHandCursor : Qt::ArrowCursor);
     QWidget::mouseMoveEvent(event);
 }
 
 void ImageView::leaveEvent(QEvent *event)
 {
     m_hovered = -1;
+    m_navHover = 0;
     update();
     QWidget::leaveEvent(event);
 }
