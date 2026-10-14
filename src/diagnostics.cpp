@@ -802,6 +802,61 @@ int stressTest(const QString &enrollDir, const QString &probeDir, QTextStream &o
     return totalWrong == 0 ? 0 : 1;
 }
 
+// يقارن كل صورتين في مجلد بعدة طرق ويكتب أدنى تشابه لنفس الشخص وأعلاه لشخصين مختلفين
+// (اسم الصورة قبل __ هو اسم الشخص)، لاختيار طريقة المقارنة الأفضل في أداة "مقارنة صورتين"
+int pairMatrix(const QString &folder, QTextStream &out)
+{
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    struct Item
+    {
+        QString name, person;
+        AnalyzedFace face;
+        std::vector<std::vector<float>> templates;
+    };
+    std::vector<Item> items;
+    const QStringList files = QDir(folder).entryList(QDir::Files, QDir::Name);
+    for (const QString &file : files) {
+        const std::vector<AnalyzedFace> faces = engine.analyzeRobust(ImageIO::loadImage(QDir(folder).filePath(file)));
+        if (faces.empty()) {
+            out << "no_face=" << file << "\n";
+            continue;
+        }
+        const auto largest = std::max_element(faces.begin(), faces.end(), [](const AnalyzedFace &x, const AnalyzedFace &y) {
+            return x.detection.box.area() < y.detection.box.area();
+        });
+        Item item;
+        item.name = file;
+        item.person = file.section(QStringLiteral("__"), 0, 0);
+        item.face = *largest;
+        item.templates = engine.enrollmentEmbeddings(largest->aligned);
+        items.push_back(std::move(item));
+    }
+    const QStringList names{QStringLiteral("plain"), QStringLiteral("compare")};
+    std::vector<float> genuineMin(names.size(), 2.0f), impostorMax(names.size(), -2.0f);
+    for (size_t i = 0; i < items.size(); ++i) {
+        for (size_t j = i + 1; j < items.size(); ++j) {
+            const Item &a = items[i], &b = items[j];
+            const std::array<float, 2> scores{FaceEngine::cosine(a.face.embedding, b.face.embedding),
+                                              engine.compare(a.face, b.face)};
+            const bool same = a.person == b.person;
+            out << (same ? "genuine " : "impostor ") << a.name << " " << b.name;
+            for (int k = 0; k < names.size(); ++k) {
+                out << " " << names[k] << "=" << scores[size_t(k)];
+                if (same)
+                    genuineMin[size_t(k)] = std::min(genuineMin[size_t(k)], scores[size_t(k)]);
+                else
+                    impostorMax[size_t(k)] = std::max(impostorMax[size_t(k)], scores[size_t(k)]);
+            }
+            out << "\n";
+        }
+    }
+    for (int k = 0; k < names.size(); ++k)
+        out << names[k] << "_genuine_min=" << genuineMin[size_t(k)] << " " << names[k] << "_impostor_max=" << impostorMax[size_t(k)] << "\n";
+    return 0;
+}
+
 } // namespace
 
 int run(const QStringList &args)
@@ -811,7 +866,8 @@ int run(const QStringList &args)
     const QString command = args.at(1);
     if (command != QLatin1String("--self-test") && command != QLatin1String("--video-test")
         && command != QLatin1String("--db-test") && command != QLatin1String("--enhance-test")
-        && command != QLatin1String("--embed-dump") && command != QLatin1String("--stress-test"))
+        && command != QLatin1String("--embed-dump") && command != QLatin1String("--stress-test")
+        && command != QLatin1String("--pair-matrix"))
         return -1;
 
     QFile output(args.last());
@@ -837,6 +893,9 @@ int run(const QStringList &args)
     // Malamih --stress-test <مجلد التسجيل> <مجلد صور الاختبار> <ملف النتائج>
     if (command == QLatin1String("--stress-test") && args.size() == 5)
         return stressTest(args.at(2), args.at(3), out);
+    // Malamih --pair-matrix <مجلد صور> <ملف النتائج>
+    if (command == QLatin1String("--pair-matrix") && args.size() == 4)
+        return pairMatrix(args.at(2), out);
     out << "error=invalid arguments\n";
     return 2;
 }
