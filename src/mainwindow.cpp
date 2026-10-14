@@ -11,8 +11,10 @@
 #include "cameras.h"
 #include "camerawatch.h"
 #include "carddelegates.h"
+#include "dailyreport.h"
 #include "enhancedialog.h"
 #include "folderscan.h"
+#include "gpucheck.h"
 #include "report.h"
 #include "icons.h"
 #include "imageio.h"
@@ -20,6 +22,7 @@
 #include "multicamera.h"
 #include "persondialog.h"
 #include "recorder.h"
+#include "recordingsdialog.h"
 #include "shotviewer.h"
 #include "timelineview.h"
 #include "personmodel.h"
@@ -45,6 +48,7 @@
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDir>
+#include <QDateEdit>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QEventLoop>
@@ -1231,7 +1235,34 @@ QWidget *MainWindow::createRecognitionPage()
         Performance::setGpuEnabled(on);
         Toast::show(this, QStringLiteral("يُطبَّق عند إعادة تشغيل البرنامج"), Toast::Kind::Info);
     });
-    settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo, gpuSwitch}));
+    auto *gpuCheck = new FancyButton(Icons::Name::Scan, QStringLiteral("فحص"), FancyButton::Kind::Secondary, settings);
+    gpuCheck->setToolTip(QStringLiteral("قياس سرعة التحليل على كرت الشاشة مقابل المعالج، والتحقق أن نتائجه مطابقة للمعالج"));
+    connect(gpuCheck, &QAbstractButton::clicked, this, [this, gpuCheck, gpuSwitch] {
+        gpuCheck->setEnabled(false);
+        Toast::show(this, QStringLiteral("جارٍ فحص كرت الشاشة والمعالج… (قد يستغرق دقيقة)"), Toast::Kind::Info);
+        auto *watcher = new QFutureWatcher<GpuCheck::Result>(this);
+        connect(watcher, &QFutureWatcher<GpuCheck::Result>::finished, this, [this, watcher, gpuCheck, gpuSwitch] {
+            watcher->deleteLater();
+            gpuCheck->setEnabled(true);
+            const GpuCheck::Result result = watcher->result();
+            AppLog::write(QStringLiteral("فحص كرت الشاشة: %1").arg(result.summary()));
+            QString text = result.summary();
+            const bool unreliable = !result.gpu.isEmpty() && !result.reliable();
+            if (unreliable && Performance::gpuEnabled())
+                text += QStringLiteral("\n\nإيقاف كرت الشاشة والعودة إلى المعالج؟ (يُطبَّق عند إعادة تشغيل البرنامج)");
+            else if (result.reliable() && !Performance::gpuEnabled())
+                text += QStringLiteral("\n\nكرت الشاشة متوقف في الإعدادات؛ فعّله من مفتاح «كرت الشاشة».");
+            if (unreliable && Performance::gpuEnabled()) {
+                if (QMessageBox::warning(this, QStringLiteral("فحص كرت الشاشة"), text, QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes)
+                    gpuSwitch->setChecked(false);
+            } else {
+                QMessageBox::information(this, QStringLiteral("فحص كرت الشاشة"), text);
+            }
+        });
+        // يُفحص بنسخ مستقلة من النماذج، فلا يتأثر التحليل الجاري
+        watcher->setFuture(QtConcurrent::run([] { return GpuCheck::run(FaceEngine::defaultModelsDir(), QString()); }));
+    });
+    settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo, gpuSwitch, gpuCheck}));
     settingsLayout->addWidget(rangeGroup);
     settingsLayout->addWidget(regionGroup);
     settingsLayout->addWidget(m_recordGroup);
@@ -4212,8 +4243,72 @@ void MainWindow::saveVideoFrame(qint64 positionMs)
 
 void MainWindow::showRecordings()
 {
+    RecordingsDialog dialog(&m_database, m_watched, this);
+    connect(&dialog, &RecordingsDialog::openFileRequested, this, [this](const QString &path, qint64 positionMs) {
+        if (!m_ready || m_videoRunning || m_analyzing) {
+            Toast::show(this, QStringLiteral("انتظر حتى ينتهي التحليل الحالي (أو أوقف الكاميرا)"), Toast::Kind::Warning);
+            return;
+        }
+        m_navGroup->button(0)->click();
+        m_lastDirectory = QFileInfo(path).absolutePath();
+        openSighting(path, positionMs);
+    });
+    dialog.exec();
 }
 
 void MainWindow::showDailyReport()
 {
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("تقرير يومي"));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(20, 18, 20, 18);
+    layout->setSpacing(12);
+    auto *hint = new QLabel(QStringLiteral("تقرير يوم من الكاميرات: من ظهر ومتى وأمام أي كاميرا، وتنبيهات المراقبة، والزوار المجهولون، "
+                                           "وساعات التسجيل، وأحداث اليوم (الانقطاع والأعطال). يُحفظ PDF للطباعة والإرسال أو HTML يُفتح في أي متصفح."),
+                            &dialog);
+    hint->setWordWrap(true);
+    hint->setObjectName(QStringLiteral("muted"));
+    layout->addWidget(hint);
+    auto *row = new QHBoxLayout;
+    auto *date = new QDateEdit(QDate::currentDate(), &dialog);
+    date->setCalendarPopup(true);
+    date->setDisplayFormat(QStringLiteral("yyyy/MM/dd"));
+    date->setMaximumDate(QDate::currentDate());
+    row->addWidget(new QLabel(QStringLiteral("اليوم:"), &dialog));
+    row->addWidget(date);
+    row->addStretch(1);
+    layout->addLayout(row);
+    auto *buttons = new QHBoxLayout;
+    auto *pdf = new FancyButton(Icons::Name::Export, QStringLiteral("حفظ PDF…"), FancyButton::Kind::Primary, &dialog);
+    auto *html = new FancyButton(Icons::Name::Export, QStringLiteral("حفظ HTML…"), FancyButton::Kind::Secondary, &dialog);
+    auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, &dialog);
+    buttons->addWidget(pdf);
+    buttons->addWidget(html);
+    buttons->addStretch(1);
+    buttons->addWidget(close);
+    layout->addLayout(buttons);
+    const auto save = [this, &dialog, date](const QString &extension) {
+        const QDate day = date->date();
+        const QString initial = QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
+                                    .filePath(QStringLiteral("تقرير-الكاميرات-%1.%2").arg(day.toString(Qt::ISODate), extension));
+        const QString path = QFileDialog::getSaveFileName(&dialog, QStringLiteral("حفظ التقرير"), initial,
+                                                          extension == QLatin1String("pdf") ? QStringLiteral("PDF (*.pdf)")
+                                                                                            : QStringLiteral("HTML (*.html)"));
+        if (path.isEmpty())
+            return;
+        QString error;
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        const bool ok = DailyReport::write(path, m_database, m_watched, day, &error);
+        QApplication::restoreOverrideCursor();
+        if (!ok) {
+            Toast::show(&dialog, QStringLiteral("تعذر حفظ التقرير: %1").arg(error), Toast::Kind::Warning);
+            return;
+        }
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+        dialog.accept();
+    };
+    connect(pdf, &QAbstractButton::clicked, &dialog, [save] { save(QStringLiteral("pdf")); });
+    connect(html, &QAbstractButton::clicked, &dialog, [save] { save(QStringLiteral("html")); });
+    connect(close, &QAbstractButton::clicked, &dialog, &QDialog::reject);
+    dialog.exec();
 }

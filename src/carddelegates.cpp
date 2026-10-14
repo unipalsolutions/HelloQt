@@ -133,7 +133,11 @@ void FaceCardDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, co
     p->drawText(QRectF(l.text.left(), l.text.top() + 24, l.text.width(), 18), startAlign(l.rtl) | Qt::AlignVCenter,
                 index.data(CardRole::Subtitle).toString());
 
-    // شريط التشابه
+    // شريط التشابه (بطاقة بلا تشابه، كالزائر المجهول، لا شريط لها)
+    if (!index.data(CardRole::Score).isValid()) {
+        p->restore();
+        return;
+    }
     const double score = std::clamp(index.data(CardRole::Score).toDouble(), 0.0, 1.0);
     const QString percent = QStringLiteral("%1%").arg(qRound(score * 100));
     const double percentWidth = smallMetrics.horizontalAdvance(percent) + 6;

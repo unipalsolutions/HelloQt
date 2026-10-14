@@ -10,6 +10,7 @@
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QRegularExpression>
 #include <QStorageInfo>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QUuid>
@@ -566,6 +567,44 @@ void CameraRecorder::rememberFile(const QString &path)
         paths << absolute;
         writeManifest(paths);
     }
+}
+
+QString CameraRecorder::fileCameraName(const QString &cameraName)
+{
+    return safeName(cameraName);
+}
+
+QList<CameraRecorder::RecordingFile> CameraRecorder::recordings(const QDateTime &from, const QDateTime &to)
+{
+    QStringList paths;
+    {
+        std::lock_guard<std::mutex> lock(manifestMutex());
+        paths = readManifest();
+    }
+    static const QRegularExpression pattern(QStringLiteral("^(.*) (\\d{4}-\\d{2}-\\d{2} \\d{2}-\\d{2}-\\d{2})(?: \\(\\d+\\))?$"));
+    QList<RecordingFile> list;
+    for (const QString &path : std::as_const(paths)) {
+        const QFileInfo info(path);
+        if (!info.exists())
+            continue;
+        const QRegularExpressionMatch match = pattern.match(info.completeBaseName());
+        if (!match.hasMatch())
+            continue;
+        RecordingFile file;
+        file.path = info.absoluteFilePath();
+        file.camera = match.captured(1);
+        file.start = QDateTime::fromString(match.captured(2), QStringLiteral("yyyy-MM-dd HH-mm-ss"));
+        file.end = info.lastModified();
+        if (!file.start.isValid())
+            continue;
+        if (file.end < file.start)
+            file.end = file.start;
+        if (file.end < from || file.start >= to)
+            continue;
+        list.append(file);
+    }
+    std::sort(list.begin(), list.end(), [](const RecordingFile &a, const RecordingFile &b) { return a.start < b.start; });
+    return list;
 }
 
 int CameraRecorder::removeExpired()

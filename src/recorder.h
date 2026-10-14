@@ -94,6 +94,19 @@ public:
     static bool freeSpace(const QString &folder, qint64 needBytes);
     // كل ملف حفظه البرنامج يُضاف إلى قائمته، فالحذف التلقائي لا يمس ملفات أخرى في المجلد
     static void rememberFile(const QString &path);
+
+    // تسجيلات البرنامج الموجودة (من قائمته) التي تتقاطع مع الفترة، مرتبة بالبداية.
+    // البداية من اسم الملف («الكاميرا yyyy-MM-dd HH-mm-ss.mp4») والنهاية آخر تعديل له
+    struct RecordingFile
+    {
+        QString path;
+        QString camera; // اسم الكاميرا كما في اسم الملف
+        QDateTime start;
+        QDateTime end;
+    };
+    static QList<RecordingFile> recordings(const QDateTime &from, const QDateTime &to);
+    // اسم الكاميرا كما يُكتب في أسماء ملفات تسجيلها
+    static QString fileCameraName(const QString &cameraName);
     // يحفظ الإطار كاملاً مع مربع حول الشخص في «لقطات الظهور/التاريخ» داخل مجلد التسجيلات (في الخلفية)؛
     // يعيد مسار الملف أو فارغاً إن تعذر
     static QString saveSnapshot(const QImage &frame, const QRectF &box, const QString &name);

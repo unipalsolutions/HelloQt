@@ -26,6 +26,12 @@ qt_add_executable(Malamih
     src/camerawatch.cpp
     src/visitorsdialog.h
     src/visitorsdialog.cpp
+    src/recordingsdialog.h
+    src/recordingsdialog.cpp
+    src/dailyreport.h
+    src/dailyreport.cpp
+    src/gpucheck.h
+    src/gpucheck.cpp
     src/mainwindow.h
     src/mainwindow.cpp
     src/faceengine.h

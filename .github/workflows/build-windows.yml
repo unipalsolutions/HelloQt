@@ -155,6 +155,26 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "Camera watch test failed" }
         shell: pwsh
 
+      - name: Daily report test
+        timeout-minutes: 3
+        run: |
+          # تقرير اليوم بصيغتي HTML وPDF
+          $out = Join-Path $PWD "daily.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--daily-report-test', (Join-Path $PWD "dailytest"), $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "Daily report test failed" }
+        shell: pwsh
+
+      - name: GPU check test
+        timeout-minutes: 5
+        run: |
+          # فحص كرت الشاشة: المعالج يعمل دائماً، وإن وُجد كرت فنتائجه تطابق المعالج
+          $out = Join-Path $PWD "gpu.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--gpu-test', 'testdata\obama.jpg', $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "GPU check test failed" }
+        shell: pwsh
+
       - name: Recording test
         timeout-minutes: 5
         run: |

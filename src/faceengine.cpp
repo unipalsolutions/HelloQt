@@ -337,7 +337,7 @@ QString FaceEngine::defaultModelsDir()
     return QCoreApplication::applicationDirPath() + QStringLiteral("/models");
 }
 
-bool FaceEngine::load(const QString &modelsDir, QString *error)
+bool FaceEngine::load(const QString &modelsDir, QString *error, Device device)
 {
     const QString detectorPath = QDir(modelsDir).filePath(QString::fromLatin1(DetectorFile));
     // نموذج تعرّف بديل لأدوات التشخيص فقط (مقارنة نماذج على نفس الصور)
@@ -364,7 +364,9 @@ bool FaceEngine::load(const QString &modelsDir, QString *error)
         d->recognizer.reset();
 #ifdef MALAMIH_DIRECTML
         // كرت الشاشة أولاً إن وُجد وسُمح به؛ أي فشل فيه يعيد التحميل على المعالج
-        const GpuAdapter adapter = Performance::gpuEnabled() ? findGpu() : GpuAdapter();
+        const bool tryGpu = device == Device::Gpu || (device == Device::Auto && Performance::gpuEnabled());
+        const GpuAdapter adapter = tryGpu ? findGpu() : GpuAdapter();
+        QString gpuError = adapter.index < 0 ? QStringLiteral("لا يوجد كرت شاشة يدعم DirectX 12") : QString();
         if (adapter.index >= 0) {
             try {
                 Ort::SessionOptions gpuOptions;
@@ -378,11 +380,23 @@ bool FaceEngine::load(const QString &modelsDir, QString *error)
                 d->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(detectorPath).c_str(), gpuOptions);
                 d->recognizer = std::make_unique<Ort::Session>(d->env, toOrtPath(recognizerPath).c_str(), gpuOptions);
                 d->gpu = adapter.name.isEmpty() ? QStringLiteral("كرت الشاشة") : adapter.name;
-            } catch (const std::exception &) {
+            } catch (const std::exception &e) {
                 d->detector.reset();
                 d->recognizer.reset();
                 d->gpu.clear();
+                gpuError = QString::fromLocal8Bit(e.what());
             }
+        }
+        if (device == Device::Gpu && d->gpu.isEmpty()) {
+            if (error)
+                *error = QStringLiteral("تعذر التشغيل على كرت الشاشة: %1").arg(gpuError);
+            return false;
+        }
+#else
+        if (device == Device::Gpu) {
+            if (error)
+                *error = QStringLiteral("هذه النسخة تعمل على المعالج فقط");
+            return false;
         }
 #endif
         if (!d->detector || !d->recognizer) {

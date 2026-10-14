@@ -34,7 +34,10 @@ public:
 
     static QString defaultModelsDir();
 
-    bool load(const QString &modelsDir, QString *error = nullptr);
+    // Auto: كرت الشاشة إن سُمح به في الإعدادات ثم المعالج إن فشل؛ Cpu: المعالج وحده؛
+    // Gpu: كرت الشاشة وحده (يفشل إن تعذر، لفحص كرت الشاشة)
+    enum class Device { Auto, Cpu, Gpu };
+    bool load(const QString &modelsDir, QString *error = nullptr, Device device = Device::Auto);
     bool isLoaded() const;
     // أين تعمل النماذج: اسم كرت الشاشة، أو فارغ للمعالج
     QString gpuName() const;

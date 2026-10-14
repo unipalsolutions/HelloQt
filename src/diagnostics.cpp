@@ -1,11 +1,13 @@
 #include "diagnostics.h"
 
 #include "cameras.h"
+#include "dailyreport.h"
 #include "camerawatch.h"
 #include "facedatabase.h"
 #include "importdialog.h"
 #include "recorder.h"
 #include "faceengine.h"
+#include "gpucheck.h"
 #include "imageio.h"
 #include "report.h"
 #include "videoexport.h"
@@ -16,6 +18,7 @@
 #include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QPainter>
 #include <QProcess>
 #include <QSettings>
@@ -1465,7 +1468,7 @@ int watchTest(const QString &directory, QTextStream &out)
     std::mt19937 random(7);
     std::normal_distribution<float> gauss(0.0f, 1.0f);
     const auto randomPrint = [&] {
-        std::vector<float> print(size_t(FaceEngine::EmbeddingSize));
+        std::vector<float> print(static_cast<size_t>(FaceEngine::EmbeddingSize));
         for (float &value : print)
             value = gauss(random);
         FaceEngine::normalize(print);
@@ -1577,6 +1580,63 @@ int watchTest(const QString &directory, QTextStream &out)
     return confirmOk && clusterOk && assignOk ? 0 : 1;
 }
 
+
+// التقرير اليومي من قاعدة فيها ظهور أمام الكاميرا وزائر مجهول: HTML وPDF
+int dailyReportTest(const QString &directory, QTextStream &out)
+{
+    QDir(directory).removeRecursively();
+    FaceDatabase database;
+    QString error;
+    if (!database.open(QDir(directory).filePath(QStringLiteral("db")), &error)) {
+        out << "error=" << error << "\n";
+        return 1;
+    }
+    QImage face(96, 96, QImage::Format_RGB32);
+    face.fill(QColor(200, 160, 120));
+    Person watched;
+    watched.name = QStringLiteral("مراقَب التقرير");
+    watched.tags = FaceDatabase::withWatchTag(QString(), true);
+    const QString watchedId = database.addPerson(watched);
+    Person known;
+    known.name = QStringLiteral("معروف التقرير");
+    const QString knownId = database.addPerson(known);
+    database.addCameraSighting(watchedId, QStringLiteral("camera:0"), QString(), -1, 0.7f, face, QString());
+    database.addCameraSighting(knownId, QStringLiteral("camera:0"), QString(), -1, 0.6f, face, QString());
+    database.addCameraSighting(knownId, QStringLiteral("camera:1"), QString(), -1, 0.6f, face, QString());
+    std::vector<float> print(size_t(FaceEngine::EmbeddingSize), 0.0f);
+    print[0] = 1.0f;
+    database.addVisitorSighting(print, 0.8f, 0.5f, QStringLiteral("camera:1"), QString(), -1, face, QString());
+
+    const QString html = QDir(directory).filePath(QStringLiteral("تقرير.html"));
+    const QString pdf = QDir(directory).filePath(QStringLiteral("تقرير.pdf"));
+    const QSet<QString> ids = database.watchedIds();
+    const bool htmlOk = DailyReport::write(html, database, ids, QDate::currentDate(), &error);
+    const bool pdfOk = DailyReport::write(pdf, database, ids, QDate::currentDate(), &error);
+    QFile file(html);
+    const QString text = file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+    const bool content = text.contains(watched.name) && text.contains(known.name) && text.contains(QStringLiteral("#1"))
+        && text.contains(QStringLiteral("class=\"watched\"")) && text.contains(QStringLiteral("data:image/jpeg"));
+    QFile pdfFile(pdf);
+    const QByteArray pdfHead = pdfFile.open(QIODevice::ReadOnly) ? pdfFile.read(5) : QByteArray();
+    const qint64 pdfSize = QFileInfo(pdf).size();
+    out << "html=" << htmlOk << "\nhtml_content=" << content << "\npdf=" << pdfOk << "\npdf_size=" << pdfSize << "\n" << error << "\n";
+    return htmlOk && content && pdfOk && pdfHead == "%PDF-" && pdfSize > 2000 ? 0 : 1;
+}
+
+
+// فحص كرت الشاشة: سرعته مقابل المعالج وتطابق البصمات. على جهاز بلا كرت مناسب ينجح إن عمل المعالج
+int gpuTest(const QString &image, QTextStream &out)
+{
+    const GpuCheck::Result result = GpuCheck::run(FaceEngine::defaultModelsDir(), image == QLatin1String("-") ? QString() : image);
+    out << "gpu=" << result.gpu << "\ncpu_ok=" << result.cpuOk << "\ngpu_ok=" << result.gpuOk
+        << "\ncpu_ms=" << result.cpuMs << "\ngpu_ms=" << result.gpuMs << "\nfaces=" << result.faces
+        << "\ngpu_faces=" << result.gpuFaces << "\nsimilarity=" << result.similarity << "\nreliable=" << result.reliable()
+        << "\nerror=" << result.error << "\nsummary=" << result.summary() << "\n";
+    if (!result.cpuOk)
+        return 1;
+    return result.gpu.isEmpty() || result.reliable() ? 0 : 1;
+}
+
 } // namespace
 
 int run(const QStringList &args)
@@ -1590,7 +1650,8 @@ int run(const QStringList &args)
         && command != QLatin1String("--pair-matrix") && command != QLatin1String("--report-test")
         && command != QLatin1String("--backup-test") && command != QLatin1String("--filters-test")
         && command != QLatin1String("--camera-test") && command != QLatin1String("--record-test")
-        && command != QLatin1String("--watch-test"))
+        && command != QLatin1String("--watch-test") && command != QLatin1String("--daily-report-test")
+        && command != QLatin1String("--gpu-test"))
         return -1;
 
     QFile output(args.last());
@@ -1629,6 +1690,12 @@ int run(const QStringList &args)
     // Malamih --record-test <مجلد مؤقت> <ملف النتائج>
     if (command == QLatin1String("--record-test") && args.size() == 4)
         return recordTest(args.at(2), out);
+    // Malamih --gpu-test <صورة فيها وجوه أو -> <ملف النتائج>
+    if (command == QLatin1String("--gpu-test") && args.size() == 4)
+        return gpuTest(args.at(2), out);
+    // Malamih --daily-report-test <مجلد مؤقت> <ملف النتائج>
+    if (command == QLatin1String("--daily-report-test") && args.size() == 4)
+        return dailyReportTest(args.at(2), out);
     // Malamih --watch-test <مجلد مؤقت> <ملف النتائج>
     if (command == QLatin1String("--watch-test") && args.size() == 4)
         return watchTest(args.at(2), out);
