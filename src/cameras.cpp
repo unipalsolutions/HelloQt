@@ -14,6 +14,9 @@
 #include <chrono>
 
 #ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <dpapi.h>
 #include <dshow.h>
