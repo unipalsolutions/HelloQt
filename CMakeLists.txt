@@ -56,6 +56,8 @@ qt_add_executable(Malamih
     src/harvestdialog.cpp
     src/alertlog.h
     src/alertlog.cpp
+    src/importdialog.h
+    src/importdialog.cpp
     src/performance.h
     src/performance.cpp
     src/videoexport.h

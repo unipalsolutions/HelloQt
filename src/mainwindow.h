@@ -95,6 +95,7 @@ private:
     void clearWatchAlerts();
     void toggleWatch();
     void showAlertLog();
+    void importPersons();
     void addRecentFile(const QString &path);
     void showRecentMenu();
     void addSelectedFaceToDatabase();
@@ -235,6 +236,7 @@ private:
     QComboBox *m_performanceCombo = nullptr;
     FancyButton *m_enhanceImageButton = nullptr;
     FancyButton *m_folderScanButton = nullptr;
+    FancyButton *m_importButton = nullptr;
     class EnhanceDialog *m_studio = nullptr; // صفحة تحسين الصور
     QProgressBar *m_progress = nullptr;
     QLabel *m_thresholdWarning = nullptr;

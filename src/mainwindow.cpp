@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 
 #include "alertlog.h"
+#include "importdialog.h"
 #include "harvestdialog.h"
 #include "matchpage.h"
 #include "personprofile.h"
@@ -1170,6 +1171,10 @@ QWidget *MainWindow::createDatabasePage()
     auto *alertLogButton = new FancyButton(Icons::Name::Alert, QStringLiteral("سجل التنبيهات"), FancyButton::Kind::Secondary, page);
     alertLogButton->setToolTip(QStringLiteral("كل مرات ظهور الأشخاص المراقَبين في الصور والفيديوهات والكاميرا"));
     connect(alertLogButton, &QAbstractButton::clicked, this, &MainWindow::showAlertLog);
+    m_importButton = new FancyButton(Icons::Name::Collect, QStringLiteral("استيراد"), FancyButton::Kind::Secondary, page);
+    m_importButton->setToolTip(QStringLiteral("إضافة أشخاص كثيرين دفعة واحدة من مجلد: كل مجلد فرعي شخص وفيه صوره"));
+    m_importButton->setEnabled(false);
+    connect(m_importButton, &QAbstractButton::clicked, this, &MainWindow::importPersons);
     auto *backupButton = new FancyButton(Icons::Name::Save, QStringLiteral("نسخ احتياطي"), FancyButton::Kind::Secondary, page);
     backupButton->setToolTip(QStringLiteral("حفظ نسخة احتياطية من القاعدة كلها في ملف واحد، أو استعادتها"));
     connect(backupButton, &QAbstractButton::clicked, this, [this, backupButton] {
@@ -1190,10 +1195,11 @@ QWidget *MainWindow::createDatabasePage()
     m_subtitles << m_databaseSubtitle;
     header->addLayout(titles, 1);
     header->addWidget(addPersonButton);
+    header->addWidget(m_importButton);
     header->addWidget(alertLogButton);
     header->addWidget(backupButton);
     header->addWidget(openFolderButton);
-    m_headerButtons << addPersonButton << backupButton << openFolderButton;
+    m_headerButtons << addPersonButton << m_importButton << alertLogButton << backupButton << openFolderButton;
     layout->addLayout(header);
 
     // قائمة الأشخاص
@@ -1385,6 +1391,7 @@ void MainWindow::setBusy(bool busy)
     m_openVideoButton->setEnabled(idle);
     m_cameraButton->setEnabled(idle);
     m_folderScanButton->setEnabled(m_ready);
+    m_importButton->setEnabled(m_ready);
     m_stopButton->setEnabled(m_videoRunning);
     m_pauseButton->setEnabled(m_videoRunning);
     m_pauseButton->setVisible(m_videoRunning);
@@ -2494,6 +2501,20 @@ void MainWindow::openFolderScan()
     });
     dialog->show();
     QTimer::singleShot(0, dialog, &FolderScanDialog::chooseFolder);
+}
+
+void MainWindow::importPersons()
+{
+    if (!m_ready)
+        return;
+    ImportDialog dialog(&m_engine, &m_database, threshold(), m_lastDirectory, this);
+    connect(&dialog, &ImportDialog::showPersonRequested, this, [this](const QString &id) {
+        QTimer::singleShot(0, this, [this, id] { showPerson(id); });
+    });
+    QTimer::singleShot(0, &dialog, &ImportDialog::chooseFolder);
+    dialog.exec();
+    if (!dialog.lastDirectory().isEmpty())
+        m_lastDirectory = dialog.lastDirectory();
 }
 
 void MainWindow::saveFaces()

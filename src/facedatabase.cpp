@@ -687,6 +687,7 @@ bool FaceDatabase::open(const QString &directory, QString *error)
                        " photo_count INTEGER NOT NULL DEFAULT 0, cover_photo INTEGER NOT NULL DEFAULT 0)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS persons_national_id ON persons(national_id)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS persons_phone ON persons(phone)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS persons_name ON persons(name)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS photos(id INTEGER PRIMARY KEY AUTOINCREMENT, person_id INTEGER NOT NULL,"
                        " quality REAL, added INTEGER, image BLOB, templates BLOB)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS photos_person ON photos(person_id)"),
@@ -1108,6 +1109,25 @@ void FaceDatabase::notify(const QString &personId, bool reset)
     else if (!personId.isEmpty())
         emit personUpdated(personId);
     emit changed();
+}
+
+QString FaceDatabase::findPersonId(const QString &name, const QString &nationalId) const
+{
+    if (!m_db.isOpen())
+        return {};
+    QSqlQuery query(m_db);
+    if (!nationalId.isEmpty()) {
+        query.prepare(QStringLiteral("SELECT id FROM persons WHERE national_id = ? LIMIT 1"));
+        query.addBindValue(nationalId);
+        if (query.exec() && query.next())
+            return query.value(0).toString();
+        return {}; // رقم هوية جديد: شخص جديد حتى لو تشابه الاسم
+    }
+    if (name.isEmpty())
+        return {};
+    query.prepare(QStringLiteral("SELECT id FROM persons WHERE name = ? LIMIT 1"));
+    query.addBindValue(name);
+    return query.exec() && query.next() ? query.value(0).toString() : QString();
 }
 
 QString FaceDatabase::addPerson(Person person)

@@ -108,6 +108,8 @@ public:
     static QString withWatchTag(const QString &tags, bool watched);
     QSet<QString> watchedIds() const;
 
+    // الشخص المسجل برقم الهوية هذا، أو بالاسم نفسه تماماً إن لم يُعطَ رقم هوية
+    QString findPersonId(const QString &name, const QString &nationalId) const;
     QString addPerson(Person person);
     bool updatePerson(const Person &person);
     bool removePerson(const QString &id);

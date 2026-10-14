@@ -1,6 +1,7 @@
 #include "diagnostics.h"
 
 #include "facedatabase.h"
+#include "importdialog.h"
 #include "faceengine.h"
 #include "imageio.h"
 #include "report.h"
@@ -926,9 +927,23 @@ int backupTest(const QString &directory, QTextStream &out)
     const qsizetype logAll = database.recentSightings(false, QDateTime(), 100).size();
     const qsizetype logFuture = database.recentSightings(false, QDateTime::currentDateTime().addDays(1), 100).size();
     const bool alertLog = logWatched == 1 && logAll == all.size() && logFuture == 0;
-    out << "\nwatch_tags=" << watchTags << "\nwatched_after_restore=" << watched << "\nalert_log=" << alertLog << "\n" << error;
+    // الاستيراد من مجلد: اسم الشخص ورقم هويته من اسم المجلد أو الصورة، والبحث عنه بالاسم أو الرقم
+    auto parsed = [](const QString &text, bool fromFile) {
+        QString name, nationalId;
+        ImportDialog::parseName(text, fromFile, &name, &nationalId);
+        return name + QLatin1Char('|') + nationalId;
+    };
+    const bool importNames = parsed(QStringLiteral("أحمد علي (2)"), true) == QStringLiteral("أحمد علي|")
+        && parsed(QStringLiteral("أحمد_علي 3"), true) == QStringLiteral("أحمد علي|")
+        && parsed(QStringLiteral("أحمد علي - 123456789"), false) == QStringLiteral("أحمد علي|123456789")
+        && parsed(QStringLiteral("123456789 - سارة"), true) == QStringLiteral("سارة|123456789")
+        && parsed(QStringLiteral("فريق 2024"), false) == QStringLiteral("فريق 2024|")
+        && database.findPersonId(all.first().name, QString()) == all.first().id
+        && database.findPersonId(QStringLiteral("غير موجود"), QString()).isEmpty();
+    out << "\nwatch_tags=" << watchTags << "\nwatched_after_restore=" << watched << "\nalert_log=" << alertLog
+        << "\nimport_names=" << importNames << "\n" << error;
     return saved && inspected.first == 3 && before == 5 && restored && after == 3 && invalid && watchTags && watched == 1
-                   && alertLog
+                   && alertLog && importNames
                ? 0
                : 1;
 }
