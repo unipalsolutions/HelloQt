@@ -66,6 +66,7 @@ signals:
     void connectionRestored();
 
 private:
+    void run(const QString &source);
     const FaceEngine *m_engine;
     CameraRecorder *m_recorder = nullptr;
     QMutex m_mutex;

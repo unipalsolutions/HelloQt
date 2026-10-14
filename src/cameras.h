@@ -141,6 +141,8 @@ QString probeLocal();
 bool cameraBlocked();
 // صورة واحدة للاختبار؛ info مثل «1280×720 · 25 إطاراً/ث»
 cv::Mat snapshot(const Camera &camera, QString *error, QString *info = nullptr);
+// يحوّل إطار الكاميرا إلى BGR بثماني بتات (رمادي، أربع قنوات، YUY2، 16 بت)، false إن تعذر
+bool normalizeFrame(cv::Mat &frame);
 
 // يقرأ الكاميرا في خيط خاص ويحتفظ بأحدث إطار فقط، فلا يتأخر التحليل عن البث الحي
 // ولا تتراكم الإطارات عندما يكون التحليل أبطأ من الكاميرا
@@ -160,6 +162,7 @@ public:
 
 private:
     void run();
+    void loop();
 
     Camera m_camera;
     CameraRecorder *m_recorder = nullptr;

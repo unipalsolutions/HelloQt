@@ -86,6 +86,8 @@ protected:
 
 private:
     void onEngineLoaded();
+    // فحص كرت الشاشة في عملية منفصلة؛ interactive: نتيجته في رسالة، وإلا إشعار قصير
+    void verifyGpu(bool interactive);
     void setupShortcuts();
     void loadSettings();
     void saveSettings() const;
@@ -263,6 +265,9 @@ private:
     FancyButton *m_recordButton = nullptr;
     QWidget *m_recordGroup = nullptr; // مجلد التسجيلات والتسجيل التلقائي، للكاميرا فقط
     ToggleSwitch *m_autoRecordSwitch = nullptr;
+    ToggleSwitch *m_gpuSwitch = nullptr;
+    FancyButton *m_gpuCheckButton = nullptr;
+    bool m_gpuChecking = false;
     QSystemTrayIcon *m_tray = nullptr;
     QPointer<MultiCameraWindow> m_multiCamera;
     bool m_quitting = false;

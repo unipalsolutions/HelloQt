@@ -504,6 +504,51 @@ MainWindow::MainWindow(QWidget *parent)
     });
 }
 
+void MainWindow::verifyGpu(bool interactive)
+{
+    if (m_gpuChecking)
+        return;
+    m_gpuChecking = true;
+    if (m_gpuCheckButton)
+        m_gpuCheckButton->setEnabled(false);
+    if (interactive)
+        Toast::show(this, QStringLiteral("جارٍ فحص كرت الشاشة والمعالج… (قد يستغرق دقيقة)"), Toast::Kind::Info);
+    else
+        Toast::show(this, QStringLiteral("جارٍ فحص كرت الشاشة في الخلفية قبل استخدامه…"), Toast::Kind::Info);
+    // في عملية منفصلة: إن انهار تعريف الكرت يسقط الفحص وحده ويبقى البرنامج يعمل على المعالج
+    GpuCheck::runIsolated(this, [this, interactive](const GpuCheck::Result &result, bool crashed) {
+        m_gpuChecking = false;
+        if (m_gpuCheckButton)
+            m_gpuCheckButton->setEnabled(true);
+        const QString gpu = FaceEngine::availableGpu();
+        const bool reliable = !crashed && result.reliable();
+        if (!gpu.isEmpty())
+            Performance::setGpuVerified(gpu, reliable);
+        AppLog::write(QStringLiteral("فحص كرت الشاشة: %1").arg(crashed ? result.error : result.summary()));
+        // كرت لا يصلح يُطفأ مفتاحه، فلا يُعاد فحصه في كل تشغيل؛ تفعيله يدوياً يعيد الفحص
+        if (!gpu.isEmpty() && !reliable && Performance::gpuEnabled()) {
+            const QSignalBlocker blocker(m_gpuSwitch);
+            m_gpuSwitch->setChecked(false);
+            Performance::setGpuEnabled(false);
+        }
+        QString text = crashed ? result.error : result.summary();
+        if (!gpu.isEmpty() && !reliable)
+            text += QStringLiteral("\n\nأُوقف كرت الشاشة ويبقى التحليل على المعالج.");
+        else if (reliable && Performance::gpuEnabled() && m_engine.gpuName().isEmpty())
+            text += QStringLiteral("\n\nاجتاز كرت الشاشة الفحص، ويُستخدم من التشغيل القادم للبرنامج.");
+        else if (reliable && !Performance::gpuEnabled())
+            text += QStringLiteral("\n\nكرت الشاشة متوقف في الإعدادات؛ فعّله من مفتاح «كرت الشاشة».");
+        if (interactive) {
+            if (!gpu.isEmpty() && !reliable)
+                QMessageBox::warning(this, QStringLiteral("فحص كرت الشاشة"), text);
+            else
+                QMessageBox::information(this, QStringLiteral("فحص كرت الشاشة"), text);
+        } else {
+            Toast::show(this, text.simplified(), reliable ? Toast::Kind::Info : Toast::Kind::Warning);
+        }
+    });
+}
+
 void MainWindow::onEngineLoaded()
 {
     m_view->setBusy(false);
@@ -524,6 +569,11 @@ void MainWindow::onEngineLoaded()
                                             "النافذة أو الصق صورة بـ Ctrl+V")
                                  .arg(device));
     AppLog::write(QStringLiteral("جاهز — التحليل على %1، والقاعدة فيها %2 شخصاً").arg(device).arg(m_database.personCount()));
+    Performance::setLastRunOnGpu(!m_engine.gpuName().isEmpty());
+    // كرت مفعّل لم يجتز الفحص بعد على هذه النسخة: يُفحص في الخلفية، والتحليل الآن على المعالج
+    if (Performance::gpuEnabled() && !FaceEngine::availableGpu().isEmpty()
+        && !Performance::gpuVerified(FaceEngine::availableGpu()))
+        verifyGpu(false);
     if (m_previousCrash.isValid()) {
         Toast::show(this,
                     QStringLiteral("لم يُغلق البرنامج إغلاقاً طبيعياً في المرة السابقة (بدأت %1). التفاصيل في «سجل الأحداث» من قائمة "
@@ -1223,45 +1273,26 @@ QWidget *MainWindow::createRecognitionPage()
     m_recordGroup = group({new QLabel(QStringLiteral("تسجيل الكاميرا"), settings), m_autoRecordSwitch, recordFolderButton});
     m_videoSettings = {frameStepGroup, rangeGroup, regionGroup};
     settingsLayout->addWidget(frameStepGroup);
-    auto *gpuSwitch = new ToggleSwitch(QStringLiteral("كرت الشاشة"), settings);
+    m_gpuSwitch = new ToggleSwitch(QStringLiteral("كرت الشاشة"), settings);
     const QString gpu = FaceEngine::availableGpu();
-    gpuSwitch->setChecked(Performance::gpuEnabled() && !gpu.isEmpty());
-    gpuSwitch->setEnabled(!gpu.isEmpty());
-    gpuSwitch->setToolTip(gpu.isEmpty() ? QStringLiteral("لا يوجد كرت شاشة يدعم DirectX 12 في هذا الجهاز؛ التحليل على المعالج")
-                                        : QStringLiteral("تحليل الوجوه على %1 بدل المعالج: أسرع عادةً بعدة مرات، ويبقى المعالج "
-                                                         "متاحاً لبقية البرامج. يُطبَّق عند إعادة تشغيل البرنامج")
-                                              .arg(gpu));
-    connect(gpuSwitch, &QAbstractButton::toggled, this, [this](bool on) {
+    m_gpuSwitch->setChecked(Performance::gpuEnabled() && !gpu.isEmpty());
+    m_gpuSwitch->setEnabled(!gpu.isEmpty());
+    m_gpuSwitch->setToolTip(gpu.isEmpty() ? QStringLiteral("لا يوجد كرت شاشة يدعم DirectX 12 في هذا الجهاز؛ التحليل على المعالج")
+                                          : QStringLiteral("تحليل الوجوه على %1 بدل المعالج: أسرع عادةً بعدة مرات، ويبقى المعالج "
+                                                           "متاحاً لبقية البرامج. يُفحص الكرت أولاً، ويُطبَّق عند إعادة تشغيل البرنامج")
+                                                .arg(gpu));
+    connect(m_gpuSwitch, &QAbstractButton::toggled, this, [this](bool on) {
         Performance::setGpuEnabled(on);
-        Toast::show(this, QStringLiteral("يُطبَّق عند إعادة تشغيل البرنامج"), Toast::Kind::Info);
+        if (on && !Performance::gpuVerified(FaceEngine::availableGpu()))
+            verifyGpu(false);
+        else
+            Toast::show(this, QStringLiteral("يُطبَّق عند إعادة تشغيل البرنامج"), Toast::Kind::Info);
     });
-    auto *gpuCheck = new FancyButton(Icons::Name::Scan, QStringLiteral("فحص"), FancyButton::Kind::Secondary, settings);
-    gpuCheck->setToolTip(QStringLiteral("قياس سرعة التحليل على كرت الشاشة مقابل المعالج، والتحقق أن نتائجه مطابقة للمعالج"));
-    connect(gpuCheck, &QAbstractButton::clicked, this, [this, gpuCheck, gpuSwitch] {
-        gpuCheck->setEnabled(false);
-        Toast::show(this, QStringLiteral("جارٍ فحص كرت الشاشة والمعالج… (قد يستغرق دقيقة)"), Toast::Kind::Info);
-        auto *watcher = new QFutureWatcher<GpuCheck::Result>(this);
-        connect(watcher, &QFutureWatcher<GpuCheck::Result>::finished, this, [this, watcher, gpuCheck, gpuSwitch] {
-            watcher->deleteLater();
-            gpuCheck->setEnabled(true);
-            const GpuCheck::Result result = watcher->result();
-            AppLog::write(QStringLiteral("فحص كرت الشاشة: %1").arg(result.summary()));
-            QString text = result.summary();
-            const bool unreliable = !result.gpu.isEmpty() && !result.reliable();
-            if (unreliable && Performance::gpuEnabled())
-                text += QStringLiteral("\n\nإيقاف كرت الشاشة والعودة إلى المعالج؟ (يُطبَّق عند إعادة تشغيل البرنامج)");
-            else if (result.reliable() && !Performance::gpuEnabled())
-                text += QStringLiteral("\n\nكرت الشاشة متوقف في الإعدادات؛ فعّله من مفتاح «كرت الشاشة».");
-            if (unreliable && Performance::gpuEnabled()) {
-                if (QMessageBox::warning(this, QStringLiteral("فحص كرت الشاشة"), text, QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes)
-                    gpuSwitch->setChecked(false);
-            } else {
-                QMessageBox::information(this, QStringLiteral("فحص كرت الشاشة"), text);
-            }
-        });
-        // يُفحص بنسخ مستقلة من النماذج، فلا يتأثر التحليل الجاري
-        watcher->setFuture(QtConcurrent::run([] { return GpuCheck::run(FaceEngine::defaultModelsDir(), QString()); }));
-    });
+    m_gpuCheckButton = new FancyButton(Icons::Name::Scan, QStringLiteral("فحص"), FancyButton::Kind::Secondary, settings);
+    m_gpuCheckButton->setToolTip(QStringLiteral("قياس سرعة التحليل على كرت الشاشة مقابل المعالج، والتحقق أن نتائجه مطابقة للمعالج"));
+    connect(m_gpuCheckButton, &QAbstractButton::clicked, this, [this] { verifyGpu(true); });
+    auto *gpuCheck = m_gpuCheckButton;
+    auto *gpuSwitch = m_gpuSwitch;
     settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo, gpuSwitch, gpuCheck}));
     settingsLayout->addWidget(rangeGroup);
     settingsLayout->addWidget(regionGroup);

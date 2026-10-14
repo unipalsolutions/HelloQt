@@ -306,6 +306,21 @@ cv::Mat VideoWorker::lastCameraFrame()
 
 void VideoWorker::process(const QString &source)
 {
+    // خطأ غير متوقع في القراءة أو المعالجات أو النماذج (إطار بصيغة غريبة من كاميرا، تعطل كرت الشاشة…)
+    // ينهي التحليل برسالة ويُكتب في سجل الأحداث، بدل أن يُغلق البرنامج كله فجأة
+    try {
+        run(source);
+    } catch (const std::exception &e) {
+        qCritical("توقف التحليل بخطأ في «%s»: %s", qUtf8Printable(source), e.what());
+        emit finished(QStringLiteral("توقف التحليل بسبب خطأ غير متوقع: %1").arg(QString::fromLocal8Bit(e.what())));
+    } catch (...) {
+        qCritical("توقف التحليل بخطأ غير معروف في «%s»", qUtf8Printable(source));
+        emit finished(QStringLiteral("توقف التحليل بسبب خطأ غير متوقع"));
+    }
+}
+
+void VideoWorker::run(const QString &source)
+{
     m_paused = false;
     m_pendingFrames = 0;
     {

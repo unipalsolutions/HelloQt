@@ -288,8 +288,19 @@ void CameraRecorder::run()
         const Pending item = std::move(m_queue.front());
         m_queue.pop_front();
         lock.unlock();
-        if (m_recording || m_stop)
-            handle(item);
+        if (m_recording || m_stop) {
+            // خيط مستقل: خطأ في الكتابة أو الترميز يوقف التسجيل برسالة لا البرنامج كله
+            try {
+                handle(item);
+            } catch (const std::exception &e) {
+                qCritical("خطأ في تسجيل الكاميرا: %s", e.what());
+                try {
+                    closeSegment();
+                } catch (const std::exception &) {
+                }
+                fail(QStringLiteral("توقف التسجيل بسبب خطأ: %1").arg(QString::fromLocal8Bit(e.what())));
+            }
+        }
         lock.lock();
     }
     lock.unlock();

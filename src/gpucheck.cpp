@@ -3,12 +3,22 @@
 #include "faceengine.h"
 #include "imageio.h"
 
+#include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QPointer>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QTimer>
 
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <memory>
 #include <random>
+#include <utility>
 
 namespace GpuCheck {
 
@@ -150,6 +160,80 @@ Result run(const QString &modelsDir, const QString &image)
         result.error = QString::fromLocal8Bit(e.what());
     }
     return result;
+}
+
+void runIsolated(QObject *context, std::function<void(const Result &result, bool crashed)> done)
+{
+    auto *folder = new QTemporaryDir;
+    const QString output = folder->filePath(QStringLiteral("gpucheck.txt"));
+    auto *process = new QProcess;
+    process->setProgram(QCoreApplication::applicationFilePath());
+    process->setArguments({QStringLiteral("--gpu-test"), QStringLiteral("-"), output});
+    QPointer<QObject> guard(context);
+    auto finish = [process, folder, output, guard, done](bool ok) {
+        Result result;
+        bool crashed = !ok || process->exitStatus() != QProcess::NormalExit;
+        QFile file(output);
+        if (!crashed && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            bool any = false;
+            for (const QString &line : QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+                const qsizetype eq = line.indexOf(QLatin1Char('='));
+                if (eq <= 0)
+                    continue;
+                any = true;
+                const QString key = line.left(eq);
+                const QString value = line.mid(eq + 1);
+                if (key == QLatin1String("gpu"))
+                    result.gpu = value;
+                else if (key == QLatin1String("error"))
+                    result.error = value;
+                else if (key == QLatin1String("cpu_ok"))
+                    result.cpuOk = value == QLatin1String("1");
+                else if (key == QLatin1String("gpu_ok"))
+                    result.gpuOk = value == QLatin1String("1");
+                else if (key == QLatin1String("cpu_ms"))
+                    result.cpuMs = value.toDouble();
+                else if (key == QLatin1String("gpu_ms"))
+                    result.gpuMs = value.toDouble();
+                else if (key == QLatin1String("similarity"))
+                    result.similarity = value.toFloat();
+                else if (key == QLatin1String("faces"))
+                    result.faces = value.toInt();
+                else if (key == QLatin1String("gpu_faces"))
+                    result.gpuFaces = value.toInt();
+            }
+            crashed = !any;
+        } else {
+            crashed = true;
+        }
+        if (crashed) {
+            result.gpuOk = false;
+            result.error = QStringLiteral("انهار تشغيل النماذج على كرت الشاشة (غالباً بسبب تعريفه)");
+        }
+        process->deleteLater();
+        delete folder;
+        if (guard)
+            done(result, crashed);
+    };
+    // ضمان ألا يُستدعى done مرتين (انتهاء ثم مهلة أو العكس)
+    auto finished = std::make_shared<bool>(false);
+    QObject::connect(process, &QProcess::finished, process, [finish, finished](int, QProcess::ExitStatus) {
+        if (!std::exchange(*finished, true))
+            finish(true);
+    });
+    QObject::connect(process, &QProcess::errorOccurred, process, [finish, finished](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart && !std::exchange(*finished, true))
+            finish(false);
+    });
+    // تعريف معلّق لا ينتهي أبداً يُعامل كفشل
+    QTimer::singleShot(3 * 60 * 1000, process, [process, finish, finished] {
+        if (std::exchange(*finished, true))
+            return;
+        process->kill();
+        process->waitForFinished(3000);
+        finish(false);
+    });
+    process->start();
 }
 
 } // namespace GpuCheck

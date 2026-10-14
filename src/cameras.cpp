@@ -2,6 +2,8 @@
 
 #include "recorder.h"
 
+#include <opencv2/imgproc.hpp>
+
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -1082,7 +1084,7 @@ cv::Mat snapshot(const Camera &camera, QString *error, QString *info)
     const int frames = camera.kind == Kind::Local ? 8 : 2;
     cv::Mat frame, last;
     for (int i = 0; i < frames; ++i) {
-        if (!capture.read(frame) || frame.empty())
+        if (!capture.read(frame) || !normalizeFrame(frame))
             break;
         last = frame.clone();
     }
@@ -1098,6 +1100,28 @@ cv::Mat snapshot(const Camera &camera, QString *error, QString *info)
             *info += QStringLiteral(" · %1 إطاراً/ث").arg(qRound(fps));
     }
     return last;
+}
+
+bool normalizeFrame(cv::Mat &frame)
+{
+    if (frame.empty())
+        return false;
+    if (frame.depth() != CV_8U) {
+        cv::Mat converted;
+        frame.convertTo(converted, CV_8U, frame.depth() == CV_16U ? 1.0 / 256.0 : 1.0);
+        frame = converted;
+    }
+    if (frame.channels() == 1)
+        cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR);
+    else if (frame.channels() == 4)
+        cv::cvtColor(frame, frame, cv::COLOR_BGRA2BGR);
+    else if (frame.channels() == 2)
+        cv::cvtColor(frame, frame, cv::COLOR_YUV2BGR_YUY2);
+    if (frame.channels() != 3)
+        return false;
+    if (!frame.isContinuous())
+        frame = frame.clone();
+    return true;
 }
 
 LiveReader::LiveReader(const Camera &camera, CameraRecorder *recorder)
@@ -1127,10 +1151,27 @@ bool LiveReader::open(QString *error)
 
 void LiveReader::run()
 {
+    // خيط مستقل: أي خطأ فيه دون التقاط يُغلق البرنامج كله، فيُعامل كانقطاع للكاميرا
+    try {
+        loop();
+    } catch (const std::exception &e) {
+        qCritical("خطأ في قراءة الكاميرا «%s»: %s", qUtf8Printable(m_camera.name), e.what());
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_failed = true;
+        m_ready.notify_all();
+    }
+}
+
+void LiveReader::loop()
+{
     int failures = 0;
     while (!m_stop) {
         cv::Mat frame;
-        const bool ok = m_capture.read(frame) && !frame.empty();
+        bool ok = m_capture.read(frame) && !frame.empty();
+        // بعض بطاقات الالتقاط والكاميرات (الأشعة تحت الحمراء، YUY2 دون تحويل) ترسل إطاراً رمادياً
+        // أو بأربع قنوات أو بعمق 16 بت، والتحليل والتسجيل يتوقعان BGR بثماني بتات
+        if (ok)
+            ok = normalizeFrame(frame);
         if (m_stop)
             break;
         if (!ok) {

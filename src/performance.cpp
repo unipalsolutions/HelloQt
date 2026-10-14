@@ -1,5 +1,6 @@
 #include "performance.h"
 
+#include <QCoreApplication>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QThread>
@@ -55,6 +56,36 @@ bool gpuEnabled()
 void setGpuEnabled(bool enabled)
 {
     QSettings(settingsFile(), QSettings::IniFormat).setValue(QStringLiteral("useGpu"), enabled);
+}
+
+namespace {
+
+QString verificationKey(const QString &gpu)
+{
+    return gpu + QStringLiteral("|") + QCoreApplication::applicationVersion();
+}
+
+} // namespace
+
+bool gpuVerified(const QString &gpu)
+{
+    return !gpu.isEmpty()
+        && QSettings(settingsFile(), QSettings::IniFormat).value(QStringLiteral("gpuVerified")).toString() == verificationKey(gpu);
+}
+
+void setGpuVerified(const QString &gpu, bool verified)
+{
+    QSettings(settingsFile(), QSettings::IniFormat).setValue(QStringLiteral("gpuVerified"), verified ? verificationKey(gpu) : QString());
+}
+
+bool lastRunOnGpu()
+{
+    return QSettings(settingsFile(), QSettings::IniFormat).value(QStringLiteral("lastRunOnGpu"), false).toBool();
+}
+
+void setLastRunOnGpu(bool onGpu)
+{
+    QSettings(settingsFile(), QSettings::IniFormat).setValue(QStringLiteral("lastRunOnGpu"), onGpu);
 }
 
 void forceCpu()

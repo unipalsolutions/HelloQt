@@ -112,6 +112,12 @@ int main(int argc, char *argv[])
     server.listen(instanceName());
 
     const QDateTime unclean = AppLog::start();
+    // انهار التشغيل السابق وهو يحلل على كرت الشاشة: لا يُستخدم الكرت حتى يجتاز الفحص من جديد
+    if (unclean.isValid() && Performance::lastRunOnGpu()) {
+        Performance::setGpuVerified(QString(), false);
+        Performance::setLastRunOnGpu(false);
+        AppLog::write(QStringLiteral("[تحذير] انهار التشغيل السابق أثناء التحليل على كرت الشاشة؛ يعود التحليل إلى المعالج حتى يُفحص الكرت"));
+    }
 
     MainWindow window;
     if (unclean.isValid())

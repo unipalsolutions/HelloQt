@@ -2,6 +2,10 @@
 
 #include <QString>
 
+#include <functional>
+
+class QObject;
+
 // فحص كرت الشاشة: يحمّل النماذج مرة على المعالج ومرة على كرت الشاشة، ويقيس سرعة كل منهما
 // على الصور نفسها، ويتحقق أن البصمات متطابقة (كرت شاشة بتعريف معطوب قد يعطي بصمات خاطئة
 // فيفشل التعرف بصمت). يعمل دون الواجهة، فيُستدعى في الخلفية
@@ -26,5 +30,10 @@ struct Result
 
 // image: صورة فيها وجوه (أو فارغ لصورة صناعية تقيس السرعة والتطابق فقط)
 Result run(const QString &modelsDir, const QString &image);
+
+// الفحص نفسه في عملية منفصلة من البرنامج (--gpu-test): تعريف كرت شاشة معطوب قد يُسقط العملية
+// كلها بدل أن يعيد خطأ، فيسقط الفحص وحده ويبقى البرنامج. crashed: انتهت العملية دون نتيجة.
+// done يُستدعى في خيط الواجهة ما دام context قائماً
+void runIsolated(QObject *context, std::function<void(const Result &result, bool crashed)> done);
 
 } // namespace GpuCheck
