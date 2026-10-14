@@ -105,7 +105,7 @@ if(MSVC)
     target_compile_options(Malamih PRIVATE /utf-8)
 endif()
 if(WIN32)
-    target_link_libraries(Malamih PRIVATE psapi strmiids ole32 oleaut32 crypt32 mfplat mf mfuuid)
+    target_link_libraries(Malamih PRIVATE psapi strmiids ole32 oleaut32 crypt32 mfplat mf mfuuid dxgi)
 endif()
 
 set_target_properties(Malamih PROPERTIES
@@ -124,9 +124,9 @@ add_custom_command(TARGET Malamih POST_BUILD
 # نسخ مكتبات OpenCV و ONNX Runtime بجانب الملف التنفيذي على Windows
 if(WIN32)
     file(GLOB EXTRA_RUNTIME_DLLS
-        "${ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll"
         "${OpenCV_DIR}/../bin/opencv_videoio_ffmpeg*.dll"
     )
+    list(APPEND EXTRA_RUNTIME_DLLS ${ONNXRUNTIME_EXTRA_DLLS})
     add_custom_command(TARGET Malamih POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_RUNTIME_DLLS:Malamih> ${EXTRA_RUNTIME_DLLS}

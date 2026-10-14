@@ -4,6 +4,58 @@
 set(ONNXRUNTIME_VERSION 1.20.1)
 set(ONNXRUNTIME_ROOT "" CACHE PATH "Folder of an extracted ONNX Runtime release (contains include/ and lib/)")
 
+# على Windows: نسخة DirectML من ONNX Runtime تشغّل النماذج على كرت الشاشة (أي كرت يدعم DirectX 12)،
+# وتعمل على المعالج كالنسخة العادية إن لم يوجد كرت مناسب. إن تعذر تنزيلها تُستخدم النسخة العادية
+option(MALAMIH_DIRECTML "Use the DirectML build of ONNX Runtime on Windows (GPU acceleration)" ON)
+set(MALAMIH_DIRECTML_READY OFF)
+set(DIRECTML_DLL "")
+set(DIRECTML_VERSION 1.15.2)
+
+function(_malamih_nuget package version folder)
+    set(_dir "${DEPS_DIR}/${folder}")
+    if(NOT EXISTS "${_dir}/.extracted")
+        set(_file "${DEPS_DIR}/${folder}.nupkg")
+        set(_url "https://www.nuget.org/api/v2/package/${package}/${version}")
+        message(STATUS "Downloading ${_url}")
+        file(DOWNLOAD "${_url}" "${_file}" STATUS _status)
+        list(GET _status 0 _code)
+        if(NOT _code EQUAL 0)
+            message(WARNING "Failed to download ${package}: ${_status}")
+            return()
+        endif()
+        file(MAKE_DIRECTORY "${_dir}")
+        file(ARCHIVE_EXTRACT INPUT "${_file}" DESTINATION "${_dir}")
+        file(WRITE "${_dir}/.extracted" "${version}")
+    endif()
+endfunction()
+
+if(WIN32 AND MALAMIH_DIRECTML AND NOT ONNXRUNTIME_ROOT)
+    _malamih_nuget(Microsoft.ML.OnnxRuntime.DirectML ${ONNXRUNTIME_VERSION} "ort-directml-${ONNXRUNTIME_VERSION}")
+    _malamih_nuget(Microsoft.AI.DirectML ${DIRECTML_VERSION} "directml-${DIRECTML_VERSION}")
+    set(_ort_dml "${DEPS_DIR}/ort-directml-${ONNXRUNTIME_VERSION}")
+    # تخطيط الحزمة قد يختلف بين الإصدارات، فيُبحث عن الملفات بأسمائها
+    file(GLOB_RECURSE _dml_header "${_ort_dml}/*/onnxruntime_cxx_api.h")
+    file(GLOB_RECURSE _dml_libs "${_ort_dml}/*/onnxruntime.lib")
+    file(GLOB_RECURSE _dml_dlls "${_ort_dml}/*/onnxruntime.dll")
+    file(GLOB_RECURSE _dml_runtime "${DEPS_DIR}/directml-${DIRECTML_VERSION}/*/DirectML.dll")
+    list(FILTER _dml_libs INCLUDE REGEX "win-x64")
+    list(FILTER _dml_dlls INCLUDE REGEX "win-x64")
+    list(FILTER _dml_runtime INCLUDE REGEX "x64-win")
+    if(_dml_header AND _dml_libs AND _dml_dlls AND _dml_runtime)
+        list(GET _dml_header 0 _dml_header)
+        list(GET _dml_libs 0 ONNXRUNTIME_LIB)
+        list(GET _dml_dlls 0 ONNXRUNTIME_DLL)
+        list(GET _dml_runtime 0 DIRECTML_DLL)
+        get_filename_component(ONNXRUNTIME_INCLUDE "${_dml_header}" DIRECTORY)
+        get_filename_component(_ort_lib_dir "${ONNXRUNTIME_DLL}" DIRECTORY)
+        set(ONNXRUNTIME_ROOT "${_ort_dml}")
+        set(MALAMIH_DIRECTML_READY ON)
+        message(STATUS "ONNX Runtime DirectML: ${ONNXRUNTIME_DLL}, ${DIRECTML_DLL}")
+    else()
+        message(WARNING "ONNX Runtime DirectML package not usable; falling back to the CPU build")
+    endif()
+endif()
+
 if(NOT ONNXRUNTIME_ROOT)
     if(WIN32)
         set(_ort_package "onnxruntime-win-x64-${ONNXRUNTIME_VERSION}")
@@ -29,13 +81,25 @@ if(NOT ONNXRUNTIME_ROOT)
 endif()
 
 add_library(onnxruntime SHARED IMPORTED)
-target_include_directories(onnxruntime INTERFACE "${ONNXRUNTIME_ROOT}/include")
-if(WIN32)
+if(MALAMIH_DIRECTML_READY)
+    target_include_directories(onnxruntime INTERFACE "${ONNXRUNTIME_INCLUDE}")
+    target_compile_definitions(onnxruntime INTERFACE MALAMIH_DIRECTML)
+    set_target_properties(onnxruntime PROPERTIES
+        IMPORTED_IMPLIB "${ONNXRUNTIME_LIB}"
+        IMPORTED_LOCATION "${ONNXRUNTIME_DLL}"
+    )
+    set(ONNXRUNTIME_EXTRA_DLLS "${DIRECTML_DLL}")
+    file(GLOB _ort_shared "${_ort_lib_dir}/onnxruntime_providers_shared.dll")
+    list(APPEND ONNXRUNTIME_EXTRA_DLLS ${_ort_shared})
+elseif(WIN32)
+    target_include_directories(onnxruntime INTERFACE "${ONNXRUNTIME_ROOT}/include")
     set_target_properties(onnxruntime PROPERTIES
         IMPORTED_IMPLIB "${ONNXRUNTIME_ROOT}/lib/onnxruntime.lib"
         IMPORTED_LOCATION "${ONNXRUNTIME_ROOT}/lib/onnxruntime.dll"
     )
+    file(GLOB ONNXRUNTIME_EXTRA_DLLS "${ONNXRUNTIME_ROOT}/lib/onnxruntime_providers_shared.dll")
 else()
+    target_include_directories(onnxruntime INTERFACE "${ONNXRUNTIME_ROOT}/include")
     set_target_properties(onnxruntime PROPERTIES
         IMPORTED_LOCATION "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.so"
     )

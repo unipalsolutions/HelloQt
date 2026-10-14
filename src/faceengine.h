@@ -36,6 +36,10 @@ public:
 
     bool load(const QString &modelsDir, QString *error = nullptr);
     bool isLoaded() const;
+    // أين تعمل النماذج: اسم كرت الشاشة، أو فارغ للمعالج
+    QString gpuName() const;
+    // كرت الشاشة الذي يُستخدم إن سُمح به (فارغ إن لم يوجد كرت مناسب أو كانت النسخة للمعالج فقط)
+    static QString availableGpu();
 
     // thorough: كشف متعدد المقاييس مع تحسين الإضاءة وتقسيم الصور الكبيرة (أدق وأبطأ)
     std::vector<DetectedFace> detect(const cv::Mat &bgr, bool thorough, float threshold = 0.45f) const;

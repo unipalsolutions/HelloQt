@@ -58,6 +58,8 @@ signals:
     void trackUpdated(const FaceItem &track);
     // تبيّن أن هويتين لشخص واحد فدُمجتا؛ removedId لم يعد موجوداً
     void identitiesMerged(int keepId, int removedId);
+    // الكاميرا: أشخاص غابوا طويلاً فنُسوا لتبقى الذاكرة ثابتة؛ تُحذف بطاقاتهم
+    void identitiesForgotten(const QList<int> &ids);
     void finished(const QString &error);
     // انقطعت الكاميرا وتجري إعادة الاتصال (المحاولة attempt)، ثم عادت
     void connectionLost(int attempt);

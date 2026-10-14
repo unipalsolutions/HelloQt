@@ -17,6 +17,8 @@ class AnimatedStack;
 class QButtonGroup;
 class QComboBox;
 class QTimeEdit;
+class QMenu;
+class QSystemTrayIcon;
 class FancyButton;
 class ImageView;
 class QLabel;
@@ -55,6 +57,13 @@ public:
     ~MainWindow() override;
 
     void openFile(const QString &path); // صورة أو فيديو
+    // فُتح البرنامج مع ويندوز: يبقى بجانب الساعة دون نافذة إن أمكن
+    bool startHidden() const;
+
+    // العمل في الخلفية لمراقبة الكاميرا
+    static bool keepRunningInTray();
+    static bool startCameraOnLaunch();
+    static bool launchWithWindows();
 
 signals:
     // تنبيه مراقبة (لإشعار ويندوز حين تكون النافذة مخفية)؛ camera فارغ للملفات
@@ -93,6 +102,10 @@ private:
     QString stopRecording(); // رسالة الحفظ، أو فارغ إن لم يكن التسجيل جارياً
     void updateRecordButton();
     void showRecordFolderMenu();
+    void setupTray();
+    void showFromTray();
+    void addBackgroundMenu(QMenu *menu);
+    void quitApplication();
     void onImageAnalyzed();
     void onFrameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress);
     void onTrackUpdated(const FaceItem &track);
@@ -232,6 +245,9 @@ private:
     FancyButton *m_recordButton = nullptr;
     QWidget *m_recordGroup = nullptr; // مجلد التسجيلات والتسجيل التلقائي، للكاميرا فقط
     ToggleSwitch *m_autoRecordSwitch = nullptr;
+    QSystemTrayIcon *m_tray = nullptr;
+    bool m_quitting = false;
+    bool m_trayHintShown = false;
     QElapsedTimer m_pauseClock;
     qint64 m_pausedMs = 0;
 

@@ -28,6 +28,7 @@ QString settingsFile()
 }
 
 int forced = -1;
+bool cpuForced = false;
 
 } // namespace
 
@@ -42,6 +43,23 @@ Level saved()
         return Level(forced);
     const QSettings settings(settingsFile(), QSettings::IniFormat);
     return Level(std::clamp(settings.value(QStringLiteral("performance"), int(Level::Balanced)).toInt(), 0, 2));
+}
+
+bool gpuEnabled()
+{
+    if (cpuForced)
+        return false;
+    return QSettings(settingsFile(), QSettings::IniFormat).value(QStringLiteral("useGpu"), true).toBool();
+}
+
+void setGpuEnabled(bool enabled)
+{
+    QSettings(settingsFile(), QSettings::IniFormat).setValue(QStringLiteral("useGpu"), enabled);
+}
+
+void forceCpu()
+{
+    cpuForced = true;
 }
 
 void save(Level level)

@@ -70,6 +70,7 @@
 #include <QStackedWidget>
 #include <QStandardPaths>
 #include <QStatusBar>
+#include <QSystemTrayIcon>
 #include <QTextStream>
 #include <QThread>
 #include <QTimer>
@@ -400,6 +401,11 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_videoWorker, &VideoWorker::trackUpdated, this, &MainWindow::onTrackUpdated);
     connect(m_videoWorker, &VideoWorker::finished, this, &MainWindow::onVideoFinished);
     connect(m_videoWorker, &VideoWorker::identitiesMerged, this, &MainWindow::onIdentitiesMerged);
+    connect(m_videoWorker, &VideoWorker::identitiesForgotten, this, [this](const QList<int> &ids) {
+        for (int id : ids)
+            m_laneAvatars.remove(id);
+        removeFaces(ids);
+    });
     connect(m_videoWorker, &VideoWorker::connectionLost, this, [this](int attempt) {
         if (!m_videoRunning)
             return;
@@ -420,6 +426,7 @@ MainWindow::MainWindow(QWidget *parent)
     loadSettings();
     setBusy(false);
     updateResponsiveLayout();
+    setupTray();
 }
 
 void MainWindow::onEngineLoaded()
@@ -436,9 +443,19 @@ void MainWindow::onEngineLoaded()
     m_ready = true;
     m_matchPage->setReady(true);
     setBusy(false);
-    statusBar()->showMessage(QStringLiteral("جاهز — كل المعالجة تتم محلياً على هذا الجهاز · اسحب صورة أو فيديو إلى النافذة أو الصق صورة بـ Ctrl+V"));
-    if (!m_pendingFile.isEmpty())
+    const QString device = m_engine.gpuName().isEmpty() ? QStringLiteral("المعالج")
+                                                         : QStringLiteral("كرت الشاشة %1").arg(m_engine.gpuName());
+    statusBar()->showMessage(QStringLiteral("جاهز — كل المعالجة تتم محلياً على هذا الجهاز (التحليل على %1) · اسحب صورة أو فيديو إلى "
+                                            "النافذة أو الصق صورة بـ Ctrl+V")
+                                 .arg(device));
+    if (!m_pendingFile.isEmpty()) {
         openFile(std::exchange(m_pendingFile, QString()));
+    } else if (startCameraOnLaunch() && !Cameras::lastSource().isEmpty()) {
+        // بعد إعادة تشغيل الجهاز تعود المراقبة وحدها (والتسجيل إن كان «تسجيل تلقائي» مفعّلاً)
+        Cameras::Camera camera;
+        if (Cameras::resolve(Cameras::lastSource().mid(7), &camera))
+            startVideo(Cameras::lastSource());
+    }
 }
 
 void MainWindow::setupShortcuts()
@@ -551,8 +568,150 @@ void MainWindow::saveSettings() const
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // إغلاق النافذة أثناء تشغيل الكاميرا يبقيها تعمل بجانب الساعة (المراقبة والتسجيل والتنبيهات)
+    const bool camera = m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:"));
+    if (!m_quitting && camera && m_tray && QSystemTrayIcon::isSystemTrayAvailable() && keepRunningInTray()) {
+        event->ignore();
+        hide();
+        if (!m_trayHintShown) {
+            m_trayHintShown = true;
+            m_tray->showMessage(QStringLiteral("ملامح يعمل في الخلفية"),
+                                QStringLiteral("تستمر مراقبة الكاميرا «%1»%2. انقر الأيقونة بجانب الساعة لإظهار النافذة، "
+                                               "أو اختر «خروج» من قائمتها لإغلاق البرنامج.")
+                                    .arg(m_cameraName, m_recorder->isRecording() ? QStringLiteral(" وتسجيلها") : QString()),
+                                QSystemTrayIcon::Information, 8000);
+        }
+        return;
+    }
     saveSettings();
+    if (m_tray)
+        m_tray->hide();
     QMainWindow::closeEvent(event);
+}
+
+namespace {
+
+const QString RunKey = QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+
+} // namespace
+
+bool MainWindow::keepRunningInTray()
+{
+    return QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("keepRunningInTray"), true).toBool();
+}
+
+bool MainWindow::startCameraOnLaunch()
+{
+    return QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("startCameraOnLaunch"), false).toBool();
+}
+
+bool MainWindow::launchWithWindows()
+{
+#ifdef Q_OS_WIN
+    return QSettings(RunKey, QSettings::NativeFormat).contains(QStringLiteral("Malamih"));
+#else
+    return false;
+#endif
+}
+
+bool MainWindow::startHidden() const
+{
+    return QApplication::arguments().contains(QStringLiteral("--startup")) && m_tray && QSystemTrayIcon::isSystemTrayAvailable();
+}
+
+void MainWindow::setupTray()
+{
+    if (!QSystemTrayIcon::isSystemTrayAvailable())
+        return;
+    m_tray = new QSystemTrayIcon(QApplication::windowIcon(), this);
+    m_tray->setToolTip(QStringLiteral("ملامح — التعرف على الوجوه"));
+    auto *menu = new QMenu(this);
+    menu->addAction(QStringLiteral("إظهار ملامح"), this, &MainWindow::showFromTray);
+    QAction *camera = menu->addAction(QStringLiteral("تشغيل آخر كاميرا"), this, [this] {
+        showFromTray();
+        if (m_cameraButton->isEnabled())
+            startLastCamera();
+    });
+    QAction *stop = menu->addAction(QStringLiteral("إيقاف الكاميرا"), this, [this] { stopVideo(); });
+    QAction *record = menu->addAction(QStringLiteral("تسجيل"), this, [this] { toggleRecording(); });
+    menu->addSeparator();
+    addBackgroundMenu(menu);
+    menu->addSeparator();
+    menu->addAction(QStringLiteral("خروج"), this, &MainWindow::quitApplication);
+    connect(menu, &QMenu::aboutToShow, this, [this, camera, stop, record] {
+        const bool running = m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:"));
+        camera->setEnabled(m_cameraButton->isEnabled());
+        stop->setVisible(running);
+        record->setVisible(running);
+        record->setText(m_recorder->isRecording() ? QStringLiteral("إيقاف التسجيل") : QStringLiteral("تسجيل الكاميرا"));
+    });
+    m_tray->setContextMenu(menu);
+    connect(m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
+        if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick)
+            showFromTray();
+    });
+    connect(m_tray, &QSystemTrayIcon::messageClicked, this, &MainWindow::showFromTray);
+    // تنبيه المراقبة يصل إشعاراً من ويندوز حين تكون النافذة مخفية أو مصغرة
+    connect(this, &MainWindow::watchAlert, this, [this](const QString &name, const QString &camera) {
+        m_tray->setToolTip(QStringLiteral("ملامح — آخر تنبيه: %1 الساعة %2").arg(name, QTime::currentTime().toString(QStringLiteral("HH:mm"))));
+        if (isVisible() && !isMinimized() && isActiveWindow())
+            return;
+        m_tray->showMessage(QStringLiteral("تنبيه مراقبة: ظهر %1").arg(name),
+                            camera.isEmpty() ? QStringLiteral("انقر لعرض التفاصيل")
+                                             : QStringLiteral("أمام الكاميرا «%1» — انقر لعرضه").arg(camera),
+                            QSystemTrayIcon::Warning, 15000);
+        QApplication::alert(this);
+    });
+    m_tray->show();
+}
+
+void MainWindow::showFromTray()
+{
+    if (isMinimized())
+        showNormal();
+    else
+        show();
+    raise();
+    activateWindow();
+}
+
+void MainWindow::quitApplication()
+{
+    m_quitting = true;
+    showFromTray(); // النافذة المخفية لا تُغلق فلا يخرج البرنامج
+    close();
+}
+
+void MainWindow::addBackgroundMenu(QMenu *parent)
+{
+    QMenu *menu = parent->addMenu(QStringLiteral("العمل في الخلفية"));
+    QAction *tray = menu->addAction(QStringLiteral("إبقاء الكاميرا تعمل عند إغلاق النافذة"));
+    tray->setCheckable(true);
+    tray->setChecked(keepRunningInTray());
+    tray->setToolTip(QStringLiteral("تختفي النافذة إلى جانب الساعة وتستمر المراقبة والتسجيل والتنبيهات"));
+    connect(tray, &QAction::toggled, this, [](bool on) {
+        QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("keepRunningInTray"), on);
+    });
+    QAction *camera = menu->addAction(QStringLiteral("تشغيل آخر كاميرا عند فتح البرنامج"));
+    camera->setCheckable(true);
+    camera->setChecked(startCameraOnLaunch());
+    connect(camera, &QAction::toggled, this, [](bool on) {
+        QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("startCameraOnLaunch"), on);
+    });
+#ifdef Q_OS_WIN
+    QAction *startup = menu->addAction(QStringLiteral("فتح البرنامج مع ويندوز"));
+    startup->setCheckable(true);
+    startup->setChecked(launchWithWindows());
+    startup->setToolTip(QStringLiteral("يُفتح بجانب الساعة عند تسجيل الدخول؛ مع «تشغيل آخر كاميرا» تعود المراقبة وحدها بعد إعادة تشغيل الجهاز"));
+    connect(startup, &QAction::toggled, this, [this](bool on) {
+        QSettings run(RunKey, QSettings::NativeFormat);
+        if (on)
+            run.setValue(QStringLiteral("Malamih"), QStringLiteral("\"%1\" --startup").arg(QDir::toNativeSeparators(QApplication::applicationFilePath())));
+        else
+            run.remove(QStringLiteral("Malamih"));
+        statusBar()->showMessage(on ? QStringLiteral("سيُفتح البرنامج مع ويندوز") : QStringLiteral("لن يُفتح البرنامج مع ويندوز"));
+    });
+#endif
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
@@ -952,7 +1111,19 @@ QWidget *MainWindow::createRecognitionPage()
     m_recordGroup = group({new QLabel(QStringLiteral("تسجيل الكاميرا"), settings), m_autoRecordSwitch, recordFolderButton});
     m_videoSettings = {frameStepGroup, rangeGroup, regionGroup};
     settingsLayout->addWidget(frameStepGroup);
-    settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo}));
+    auto *gpuSwitch = new ToggleSwitch(QStringLiteral("كرت الشاشة"), settings);
+    const QString gpu = FaceEngine::availableGpu();
+    gpuSwitch->setChecked(Performance::gpuEnabled() && !gpu.isEmpty());
+    gpuSwitch->setEnabled(!gpu.isEmpty());
+    gpuSwitch->setToolTip(gpu.isEmpty() ? QStringLiteral("لا يوجد كرت شاشة يدعم DirectX 12 في هذا الجهاز؛ التحليل على المعالج")
+                                        : QStringLiteral("تحليل الوجوه على %1 بدل المعالج: أسرع عادةً بعدة مرات، ويبقى المعالج "
+                                                         "متاحاً لبقية البرامج. يُطبَّق عند إعادة تشغيل البرنامج")
+                                              .arg(gpu));
+    connect(gpuSwitch, &QAbstractButton::toggled, this, [this](bool on) {
+        Performance::setGpuEnabled(on);
+        Toast::show(this, QStringLiteral("يُطبَّق عند إعادة تشغيل البرنامج"), Toast::Kind::Info);
+    });
+    settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo, gpuSwitch}));
     settingsLayout->addWidget(rangeGroup);
     settingsLayout->addWidget(regionGroup);
     settingsLayout->addWidget(m_recordGroup);
@@ -1639,6 +1810,7 @@ void MainWindow::openCamera()
         addCamera(QStringLiteral("camera:0"), QStringLiteral("كاميرا الجهاز"), QString(), Icons::Name::Camera);
     menu.addSeparator();
     menu.addAction(icon(Icons::Name::Sliders), QStringLiteral("إدارة الكاميرات وإضافة كاميرا شبكة…"), this, [this] { manageCameras(); });
+    addBackgroundMenu(&menu);
     menu.exec(m_cameraButton->mapToGlobal(QPoint(0, m_cameraButton->height())));
 }
 

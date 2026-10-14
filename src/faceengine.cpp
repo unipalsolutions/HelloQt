@@ -12,7 +12,21 @@
 
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <stdexcept>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <dxgi.h>
+#endif
+
+#ifdef MALAMIH_DIRECTML
+// من onnxruntime.dll في نسخة DirectML (dml_provider_factory.h دون الحاجة لترويسات DirectX)
+extern "C" OrtStatus *ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_DML(OrtSessionOptions *options, int device_id);
+#endif
 
 namespace {
 
@@ -29,6 +43,40 @@ const std::array<cv::Point2f, 5> ArcFaceTemplate = {{
     {41.5493f, 92.3655f},
     {70.7299f, 92.2041f},
 }};
+
+struct GpuAdapter
+{
+    int index = -1;
+    QString name;
+};
+
+// كرت شاشة حقيقي يدعم DirectX 12؛ مع كرتين (مدمج ومنفصل) يُختار صاحب الذاكرة الأكبر.
+// المحوّل البرمجي (WARP و Microsoft Basic Render Driver في الأجهزة الافتراضية) أبطأ من المعالج فيُستبعد
+GpuAdapter findGpu()
+{
+    GpuAdapter best;
+#if defined(_WIN32) && defined(MALAMIH_DIRECTML)
+    IDXGIFactory1 *factory = nullptr;
+    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void **>(&factory))) || !factory)
+        return best;
+    SIZE_T bestMemory = 0;
+    IDXGIAdapter1 *adapter = nullptr;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 desc{};
+        const bool ok = SUCCEEDED(adapter->GetDesc1(&desc));
+        adapter->Release();
+        if (!ok || (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || desc.VendorId == 0x1414)
+            continue;
+        if (best.index < 0 || desc.DedicatedVideoMemory > bestMemory) {
+            best.index = int(i);
+            best.name = QString::fromWCharArray(desc.Description).trimmed();
+            bestMemory = desc.DedicatedVideoMemory;
+        }
+    }
+    factory->Release();
+#endif
+    return best;
+}
 
 std::basic_string<ORTCHAR_T> toOrtPath(const QString &path)
 {
@@ -144,6 +192,9 @@ struct FaceEngine::Impl
     std::vector<std::string> detectorOutputs;
     std::string recognizerInput;
     std::string recognizerOutput;
+    QString gpu; // اسم كرت الشاشة الذي تعمل عليه النماذج، فارغ للمعالج
+    // DirectML لا يقبل تشغيلين متزامنين للجلسة نفسها، والمعالج يقبل
+    mutable std::mutex runMutex;
 
     std::vector<DetectedFace> detectAt(const cv::Mat &bgr, int inputSize, float threshold) const;
     bool recognizerBatch = false; // هل يقبل نموذج البصمة أكثر من وجه في التشغيل الواحد
@@ -179,8 +230,13 @@ std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inp
     std::vector<const char *> outputNames;
     for (const std::string &name : detectorOutputs)
         outputNames.push_back(name.c_str());
+    std::unique_lock<std::mutex> lock(runMutex, std::defer_lock);
+    if (!gpu.isEmpty())
+        lock.lock();
     std::vector<Ort::Value> outputs = detector->Run(Ort::RunOptions{nullptr}, &inputName, &input, 1,
                                                     outputNames.data(), outputNames.size());
+    if (lock.owns_lock())
+        lock.unlock();
 
     // مخرجات SCRFD: درجات ثم صناديق ثم نقاط لكل خطوة (8، 16، 32) مع مرساتين لكل خلية
     const int strides[3] = {8, 16, 32};
@@ -245,7 +301,12 @@ std::vector<std::vector<float>> FaceEngine::Impl::recognize(const std::vector<cv
 
         const char *inputName = recognizerInput.c_str();
         const char *outputName = recognizerOutput.c_str();
+        std::unique_lock<std::mutex> lock(runMutex, std::defer_lock);
+        if (!gpu.isEmpty())
+            lock.lock();
         std::vector<Ort::Value> outputs = recognizer->Run(Ort::RunOptions{nullptr}, &inputName, &input, 1, &outputName, 1);
+        if (lock.owns_lock())
+            lock.unlock();
         const float *data = outputs[0].GetTensorData<float>();
         const size_t size = outputs[0].GetTensorTypeAndShapeInfo().GetElementCount() / count;
         for (size_t i = 0; i < count; ++i) {
@@ -298,8 +359,36 @@ bool FaceEngine::load(const QString &modelsDir, QString *error)
         options.SetInterOpNumThreads(1);
         options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-        d->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(detectorPath).c_str(), options);
-        d->recognizer = std::make_unique<Ort::Session>(d->env, toOrtPath(recognizerPath).c_str(), options);
+        d->gpu.clear();
+        d->detector.reset();
+        d->recognizer.reset();
+#ifdef MALAMIH_DIRECTML
+        // كرت الشاشة أولاً إن وُجد وسُمح به؛ أي فشل فيه يعيد التحميل على المعالج
+        const GpuAdapter adapter = Performance::gpuEnabled() ? findGpu() : GpuAdapter();
+        if (adapter.index >= 0) {
+            try {
+                Ort::SessionOptions gpuOptions;
+                gpuOptions.SetIntraOpNumThreads(Performance::threads(Performance::saved()));
+                gpuOptions.SetInterOpNumThreads(1);
+                gpuOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+                // شرطان من DirectML
+                gpuOptions.DisableMemPattern();
+                gpuOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+                Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(gpuOptions, adapter.index));
+                d->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(detectorPath).c_str(), gpuOptions);
+                d->recognizer = std::make_unique<Ort::Session>(d->env, toOrtPath(recognizerPath).c_str(), gpuOptions);
+                d->gpu = adapter.name.isEmpty() ? QStringLiteral("كرت الشاشة") : adapter.name;
+            } catch (const std::exception &) {
+                d->detector.reset();
+                d->recognizer.reset();
+                d->gpu.clear();
+            }
+        }
+#endif
+        if (!d->detector || !d->recognizer) {
+            d->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(detectorPath).c_str(), options);
+            d->recognizer = std::make_unique<Ort::Session>(d->env, toOrtPath(recognizerPath).c_str(), options);
+        }
 
         Ort::AllocatorWithDefaultOptions allocator;
         d->detectorInput = d->detector->GetInputNameAllocated(0, allocator).get();
@@ -327,6 +416,16 @@ bool FaceEngine::load(const QString &modelsDir, QString *error)
 bool FaceEngine::isLoaded() const
 {
     return d->detector && d->recognizer;
+}
+
+QString FaceEngine::gpuName() const
+{
+    return d->gpu;
+}
+
+QString FaceEngine::availableGpu()
+{
+    return findGpu().name;
 }
 
 std::vector<DetectedFace> FaceEngine::detect(const cv::Mat &bgr, bool thorough, float threshold) const

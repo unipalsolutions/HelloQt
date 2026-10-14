@@ -51,8 +51,13 @@ int main(int argc, char *argv[])
     qRegisterMetaType<QList<FaceItem>>();
 
     const QStringList args = app.arguments();
-    if (args.size() > 1 && args.at(1).startsWith(QLatin1String("--")))
+    const bool startup = args.contains(QStringLiteral("--startup"));
+    if (args.size() > 1 && args.at(1).startsWith(QLatin1String("--")) && !startup) {
         Performance::force(Performance::Level::Max);
+        // نتائج الفحوص ثابتة على المعالج؛ MALAMIH_GPU=1 لتجربتها على كرت الشاشة
+        if (qEnvironmentVariable("MALAMIH_GPU") != QLatin1String("1"))
+            Performance::forceCpu();
+    }
     Performance::apply(Performance::saved());
     const int diagnostics = Diagnostics::run(args);
     if (diagnostics >= 0)
@@ -61,7 +66,10 @@ int main(int argc, char *argv[])
     MainWindow window;
     const QRect available = app.primaryScreen()->availableGeometry();
     window.setMinimumSize(QSize(760, 520).boundedTo(available.size()));
-    if (available.width() < 1400 || available.height() < 860) {
+    if (window.startHidden()) {
+        // فُتح مع ويندوز: يبقى بجانب الساعة، ويظهر بالنقر على أيقونته
+        window.setGeometry(QStyle::alignedRect(Qt::RightToLeft, Qt::AlignCenter, QSize(1320, 820).boundedTo(available.size()), available));
+    } else if (available.width() < 1400 || available.height() < 860) {
         // شاشات اللابتوب: النافذة تملأ الشاشة والواجهة تصغّر نفسها لتظهر كل أجزائها
         window.setGeometry(available);
         window.showMaximized();

@@ -48,7 +48,11 @@ constexpr double AutoAnalysisRate = 10.0; // إطارات محللة لكل ثا
 constexpr double IdleAnalysisRate = 2.0;  // عند خلو المشهد من الوجوه يُفحص أقل، ويعود للمعدل الكامل فور ظهور وجه
 constexpr int IdleAfter = 20;             // إطارات محللة متتالية بلا وجوه قبل خفض المعدل
 constexpr double StillDifference = 1.6;   // متوسط تغيّر البكسل (من 255) الذي يُعد دونه الإطار ساكناً
-constexpr int MaxStillSkips = 50;         // إطار ساكن يُفحص رغم ذلك بعد هذا العدد، احتياطاً للتغير البطيء جداً
+constexpr int MaxStillSkips = 50;
+// الكاميرا تعمل أياماً ويمر أمامها آلاف الأشخاص: أقدم من غاب طويلاً يُنسى (ظهوره سُجِّل في القاعدة)
+// فتبقى الذاكرة وسرعة البحث ثابتتين
+constexpr size_t MaxCameraIdentities = 300;
+constexpr qint64 CameraForgetMs = 10 * 60 * 1000;         // إطار ساكن يُفحص رغم ذلك بعد هذا العدد، احتياطاً للتغير البطيء جداً
 
 struct Exemplar
 {
@@ -839,6 +843,32 @@ void VideoWorker::process(const QString &source)
                     item.id = it->second;
             }
             redirect.clear();
+        }
+
+        if (camera && processed % MergeInterval == 0 && identities.size() > MaxCameraIdentities) {
+            std::vector<std::pair<qint64, int>> oldest;
+            for (const auto &[id, identity] : identities) {
+                const bool tracked = std::any_of(tracks.begin(), tracks.end(), [id = id](const Track &t) { return t.identity == id; });
+                if (!tracked && positionMs - identity.lastSeenMs >= CameraForgetMs)
+                    oldest.emplace_back(identity.lastSeenMs, id);
+            }
+            std::sort(oldest.begin(), oldest.end());
+            const size_t target = MaxCameraIdentities * 4 / 5;
+            QList<int> forgotten;
+            for (const auto &[seen, id] : oldest) {
+                if (identities.size() <= target)
+                    break;
+                identities.erase(id);
+                forgotten.append(id);
+            }
+            if (!forgotten.isEmpty()) {
+                for (auto it = together.begin(); it != together.end();) {
+                    const int a = int(quint32(*it >> 32));
+                    const int b = int(quint32(*it));
+                    it = forgotten.contains(a) || forgotten.contains(b) ? together.erase(it) : std::next(it);
+                }
+                emit identitiesForgotten(forgotten);
+            }
         }
 
         // لا تُرسل إطارات جديدة إذا كانت الواجهة متأخرة في عرض السابقة

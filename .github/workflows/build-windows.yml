@@ -66,6 +66,8 @@ jobs:
           $crt = Get-ChildItem "$env:VCToolsRedistDir\x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
           if (-not $crt) { throw "MSVC runtime not found under $env:VCToolsRedistDir" }
           Copy-Item "$($crt.FullName)\*.dll" dist\Malamih\
+          # نسخة DirectML من ONNX Runtime (تحليل على كرت الشاشة)؛ غيابها يعني أن البناء رجع لنسخة المعالج
+          if (-not (Test-Path dist\Malamih\DirectML.dll)) { throw "DirectML.dll missing: the GPU build of ONNX Runtime was not used" }
           Get-ChildItem dist\Malamih
         shell: pwsh
 
