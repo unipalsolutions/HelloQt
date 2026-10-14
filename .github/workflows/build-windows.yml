@@ -137,6 +137,16 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "HTML report test failed" }
         shell: pwsh
 
+      - name: Camera test
+        timeout-minutes: 6
+        run: |
+          # صيغ عناوين الكاميرات وحفظها، ثم الفيديو يُبث كأنه كاميرا شبكة مع انقطاع وعودة إن وُجد ffmpeg
+          $out = Join-Path $PWD "camera.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--camera-test', (Join-Path $PWD "testdata\clip.mp4"), $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "Camera test failed" }
+        shell: pwsh
+
       - name: Smoke test
         run: |
           Add-Type @"

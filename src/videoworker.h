@@ -12,6 +12,8 @@
 
 #include <atomic>
 
+#include <opencv2/core.hpp>
+
 class FaceEngine;
 
 // يحلل الفيديو أو الكاميرا في خيط منفصل ويتتبع كل وجه عبر الإطارات
@@ -38,9 +40,11 @@ public:
     void setPaused(bool paused); // إيقاف مؤقت دون فقدان التقدم أو الأشخاص المكتشفين
     bool isPaused() const { return m_paused; }
     void frameShown();
+    // آخر إطار من الكاميرا كما وصل قبل المعالجات (لمعاينة المعالجات أثناء البث)
+    cv::Mat lastCameraFrame();
 
 public slots:
-    void process(const QString &source); // مسار ملف أو "camera:0"
+    void process(const QString &source); // مسار ملف، أو "camera:<رقم أو معرّف كاميرا محفوظة>"
 
 signals:
     void started(int frameStep, double fps, qint64 durationMs);
@@ -50,6 +54,9 @@ signals:
     // تبيّن أن هويتين لشخص واحد فدُمجتا؛ removedId لم يعد موجوداً
     void identitiesMerged(int keepId, int removedId);
     void finished(const QString &error);
+    // انقطعت الكاميرا وتجري إعادة الاتصال (المحاولة attempt)، ثم عادت
+    void connectionLost(int attempt);
+    void connectionRestored();
 
 private:
     const FaceEngine *m_engine;
@@ -65,4 +72,5 @@ private:
     std::atomic<bool> m_stop{false};
     std::atomic<bool> m_paused{false};
     std::atomic<int> m_pendingFrames{0};
+    cv::Mat m_lastCameraFrame; // يحميه m_mutex
 };

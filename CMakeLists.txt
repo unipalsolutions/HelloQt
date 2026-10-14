@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(DEPS_DIR "${CMAKE_BINARY_DIR}/_deps" CACHE PATH "Folder for downloaded dependencies (ONNX Runtime, face models)")
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Sql)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Sql Network)
 find_package(OpenCV 4.8 REQUIRED COMPONENTS core imgproc imgcodecs videoio)
 
 include(cmake/onnxruntime.cmake)
@@ -66,6 +66,10 @@ qt_add_executable(Malamih
     src/videofilters.cpp
     src/videofiltersdialog.h
     src/videofiltersdialog.cpp
+    src/cameras.h
+    src/cameras.cpp
+    src/cameradialog.h
+    src/cameradialog.cpp
     src/imagelab.h
     src/imagelab.cpp
     src/enhancedialog.h
@@ -87,6 +91,7 @@ qt_add_resources(Malamih app_resources
 
 target_link_libraries(Malamih PRIVATE
     Qt6::Widgets
+    Qt6::Network
     Qt6::Concurrent
     Qt6::Sql
     ${OpenCV_LIBS}
@@ -98,7 +103,7 @@ if(MSVC)
     target_compile_options(Malamih PRIVATE /utf-8)
 endif()
 if(WIN32)
-    target_link_libraries(Malamih PRIVATE psapi)
+    target_link_libraries(Malamih PRIVATE psapi strmiids ole32 oleaut32 crypt32)
 endif()
 
 set_target_properties(Malamih PROPERTIES

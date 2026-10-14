@@ -6,6 +6,8 @@
 #include "matchpage.h"
 #include "personprofile.h"
 
+#include "cameradialog.h"
+#include "cameras.h"
 #include "carddelegates.h"
 #include "enhancedialog.h"
 #include "folderscan.h"
@@ -372,6 +374,21 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_videoWorker, &VideoWorker::trackUpdated, this, &MainWindow::onTrackUpdated);
     connect(m_videoWorker, &VideoWorker::finished, this, &MainWindow::onVideoFinished);
     connect(m_videoWorker, &VideoWorker::identitiesMerged, this, &MainWindow::onIdentitiesMerged);
+    connect(m_videoWorker, &VideoWorker::connectionLost, this, [this](int attempt) {
+        if (!m_videoRunning)
+            return;
+        const QString text = QStringLiteral("انقطع الاتصال بالكاميرا «%1» — إعادة المحاولة (%2)").arg(m_cameraName).arg(attempt);
+        m_view->setBusy(true, text);
+        statusBar()->showMessage(text);
+        if (attempt == 1)
+            Toast::show(this, QStringLiteral("انقطع الاتصال بالكاميرا — تُعاد المحاولة تلقائياً"), Toast::Kind::Warning);
+    });
+    connect(m_videoWorker, &VideoWorker::connectionRestored, this, [this] {
+        if (!m_videoRunning)
+            return;
+        m_view->setBusy(false);
+        Toast::show(this, QStringLiteral("عاد الاتصال بالكاميرا «%1»").arg(m_cameraName), Toast::Kind::Success);
+    });
     m_videoThread->start();
 
     loadSettings();
@@ -413,7 +430,7 @@ void MainWindow::setupShortcuts()
     });
     add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), [this] {
         if (m_cameraButton->isEnabled())
-            openCamera();
+            startLastCamera();
     });
     add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F), [this] {
         if (m_folderScanButton->isEnabled())
@@ -720,7 +737,8 @@ QWidget *MainWindow::createRecognitionPage()
     m_stopButton = new FancyButton(Icons::Name::Stop, QStringLiteral("إيقاف"), FancyButton::Kind::Danger, page);
     m_openImageButton->setToolTip(QStringLiteral("فتح صورة (Ctrl+O) — أو اسحبها إلى النافذة، أو الصقها بـ Ctrl+V"));
     m_openVideoButton->setToolTip(QStringLiteral("فتح فيديو (Ctrl+Shift+O)"));
-    m_cameraButton->setToolTip(QStringLiteral("تشغيل الكاميرا (Ctrl+Shift+C)"));
+    m_cameraButton->setToolTip(QStringLiteral("اختيار كاميرا وتشغيلها: كاميرا الجهاز، كاميرا USB أو تناظرية عبر محوّل، "
+                                              "أو كاميرا شبكة وجهاز تسجيل\nCtrl+Shift+C يشغّل آخر كاميرا"));
     m_pauseButton->setToolTip(QStringLiteral("إيقاف مؤقت / استئناف (مسافة)"));
     m_stopButton->setToolTip(QStringLiteral("إيقاف التحليل (Esc)"));
     m_saveFacesButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ الوجوه"), FancyButton::Kind::Secondary, page);
@@ -1532,12 +1550,86 @@ void MainWindow::openVideo()
 
 void MainWindow::openCamera()
 {
-    startVideo(QStringLiteral("camera:0"));
+    QMenu menu(this);
+    const auto icon = [](Icons::Name name) { return Icons::icon(name, Theme::Accent2, 18); };
+    const QList<Cameras::Camera> saved = Cameras::load();
+    const QList<Cameras::LocalDevice> devices = Cameras::localDevices();
+    const QString last = Cameras::lastSource();
+    const auto addCamera = [&](const QString &source, const QString &title, const QString &detail, Icons::Name iconName) {
+        QAction *action = menu.addAction(icon(iconName), detail.isEmpty() ? title : QStringLiteral("%1  —  %2").arg(title, detail));
+        if (source == last) {
+            QFont font = action->font();
+            font.setBold(true);
+            action->setFont(font);
+        }
+        connect(action, &QAction::triggered, this, [this, source] { startVideo(source); });
+    };
+    for (const Cameras::Camera &camera : saved)
+        addCamera(camera.source(), camera.name, camera.description(),
+                  camera.kind == Cameras::Kind::Network ? Icons::Name::Video : Icons::Name::Camera);
+    // الكاميرات الموصولة التي لم تُحفظ تظهر مباشرة بأسمائها
+    bool anyLocal = false;
+    for (const Cameras::LocalDevice &device : devices) {
+        const bool known = std::any_of(saved.begin(), saved.end(), [&](const Cameras::Camera &c) {
+            return c.kind == Cameras::Kind::Local && c.index == device.index;
+        });
+        anyLocal = anyLocal || known;
+        if (!known) {
+            addCamera(QStringLiteral("camera:%1").arg(device.index), Cameras::localName(device.index, devices),
+                      QStringLiteral("موصولة بالجهاز"), Icons::Name::Camera);
+            anyLocal = true;
+        }
+    }
+    if (!anyLocal && devices.isEmpty())
+        addCamera(QStringLiteral("camera:0"), QStringLiteral("كاميرا الجهاز"), QString(), Icons::Name::Camera);
+    menu.addSeparator();
+    menu.addAction(icon(Icons::Name::Sliders), QStringLiteral("إدارة الكاميرات وإضافة كاميرا شبكة…"), this, [this] { manageCameras(); });
+    menu.exec(m_cameraButton->mapToGlobal(QPoint(0, m_cameraButton->height())));
+}
+
+void MainWindow::startLastCamera()
+{
+    const QString source = Cameras::lastSource();
+    Cameras::Camera camera;
+    if (!Cameras::resolve(source.mid(7), &camera)) {
+        openCamera();
+        return;
+    }
+    startVideo(source);
+}
+
+void MainWindow::manageCameras(const QString &selectId)
+{
+    CameraDialog dialog(this, selectId);
+    dialog.exec();
+    if (!dialog.startSource().isEmpty() && m_cameraButton->isEnabled())
+        startVideo(dialog.startSource());
 }
 
 void MainWindow::startVideo(const QString &source)
 {
     const bool camera = source.startsWith(QStringLiteral("camera:"));
+    // معالجات كاميرا سابقة لا تبقى على المصدر الجديد
+    if (!m_cameraId.isEmpty())
+        VideoFilters::setCurrent(m_fileFilters, false);
+    m_cameraId.clear();
+    m_cameraName.clear();
+    if (camera) {
+        Cameras::setLastSource(source);
+        Cameras::Camera info;
+        if (Cameras::resolve(source.mid(7), &info)) {
+            m_cameraName = info.name;
+            if (!info.id.isEmpty()) {
+                // لكل كاميرا محفوظة معالجاتها، فكاميرا مقلوبة أو ليلية لا تغيّر إعدادات الملفات
+                m_cameraId = info.id;
+                m_fileFilters = VideoFilters::current();
+                VideoFilters::setCurrent(info.hasFilters ? info.filters : VideoFilters::Settings(), false);
+            }
+        }
+        if (m_cameraName.isEmpty())
+            m_cameraName = QStringLiteral("الكاميرا");
+    }
+    updateFiltersButton();
     if (source != m_videoSource && !m_videoSource.isEmpty()) {
         // منطقة التحليل خاصة بالفيديو السابق
         m_view->setRegion(QRectF());
@@ -1566,8 +1658,8 @@ void MainWindow::startVideo(const QString &source)
     m_videoWorker->setRange(m_videoStartMs, m_videoEndMs);
     m_videoWorker->setRegion(region);
     m_videoWorker->setEnhance(m_enhanceSwitch->isChecked());
-    m_view->setBusy(true, source.startsWith(QStringLiteral("camera:")) ? QStringLiteral("جارٍ تشغيل الكاميرا")
-                                                                       : QStringLiteral("جارٍ فتح الفيديو"));
+    m_view->setBusy(true, camera ? QStringLiteral("جارٍ الاتصال بالكاميرا «%1»").arg(m_cameraName)
+                                 : QStringLiteral("جارٍ فتح الفيديو"));
     m_progress->setRange(0, 0);
     m_progress->setVisible(true);
     const QString filters = VideoFilters::current().summary();
@@ -1687,6 +1779,11 @@ void MainWindow::onVideoFinished(const QString &error)
     }
     m_videoRunning = false;
     m_videoPaused = false;
+    if (!m_cameraId.isEmpty()) {
+        VideoFilters::setCurrent(m_fileFilters, false);
+        m_cameraId.clear();
+        updateFiltersButton();
+    }
     m_timeline->setAnalyzedUntil(-1);
     rebuildTimelineLanes();
     m_view->setBusy(false);
@@ -3237,14 +3334,28 @@ void MainWindow::openVideoFilters()
         const QString source = m_videoSource;
         const qint64 position = m_videoRunning ? m_videoPositionMs : std::max<qint64>(0, m_timeline->position());
         frame = runResponsive([source, position] { return VideoExport::frameAt(source, position, false); });
+    } else if (m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:"))) {
+        frame = m_videoWorker->lastCameraFrame();
     }
     const VideoFilters::Settings before = VideoFilters::current();
+    const QString cameraId = m_cameraId;
     VideoFiltersDialog dialog(frame, this);
+    // كاميرا محفوظة تحتفظ بمعالجاتها لنفسها دون أن تغيّر معالجات الملفات
+    dialog.setPersistent(cameraId.isEmpty());
+    if (!cameraId.isEmpty())
+        dialog.setWindowTitle(QStringLiteral("معالجات الكاميرا «%1»").arg(m_cameraName));
     connect(&dialog, &VideoFiltersDialog::changed, this, &MainWindow::updateFiltersButton);
     dialog.exec();
     const VideoFilters::Settings after = VideoFilters::current();
     if (after == before)
         return;
+    if (!cameraId.isEmpty()) {
+        Cameras::saveFilters(cameraId, after);
+        if (m_cameraId != cameraId) // انتهت الكاميرا أثناء فتح النافذة
+            VideoFilters::setCurrent(m_fileFilters, false);
+        Toast::show(this, QStringLiteral("حُفظت المعالجات مع الكاميرا «%1»").arg(m_cameraName), Toast::Kind::Info);
+        return;
+    }
     if (fileVideo && !m_videoRunning) {
         loadVideoFrame(std::max<qint64>(0, m_timeline->position()));
         Toast::show(this, QStringLiteral("تغيّرت معالجات الفيديو · «إعادة التحليل» يطبقها على الفيديو كله"), Toast::Kind::Info);

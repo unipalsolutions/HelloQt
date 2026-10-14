@@ -2,6 +2,8 @@
 
 #include <QString>
 
+class QSettings;
+
 #include <opencv2/core.hpp>
 
 // معالجات تُطبَّق على كل إطار من الفيديو أو الكاميرا قبل كشف الوجوه وعرضها، وعلى الإطارات
@@ -36,7 +38,11 @@ struct Settings
 
 // الإعدادات الحالية للبرنامج كله، آمنة من أي خيط، وتُحفظ بين الجلسات
 Settings current();
-void setCurrent(const Settings &settings);
+// persist = false: لهذه الجلسة فقط (إعدادات كاميرا محفوظة معها لا تحل محل إعدادات الملفات)
+void setCurrent(const Settings &settings, bool persist = true);
+// قراءة الإعدادات وحفظها في المجموعة الحالية من store
+Settings read(const QSettings &store);
+void write(QSettings &store, const Settings &settings);
 
 cv::Mat apply(const cv::Mat &bgr, const Settings &settings);
 inline cv::Mat apply(const cv::Mat &bgr) { return apply(bgr, current()); }

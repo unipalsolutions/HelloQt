@@ -1,5 +1,6 @@
 #include "diagnostics.h"
 
+#include "cameras.h"
 #include "facedatabase.h"
 #include "importdialog.h"
 #include "faceengine.h"
@@ -14,8 +15,12 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QPainter>
+#include <QProcess>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QSet>
 #include <QTextStream>
+#include <QThread>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -1071,6 +1076,170 @@ int filtersTest(const QString &imagePath, const QString &directory, QTextStream 
                : 1;
 }
 
+
+// الكاميرات: صيغ العناوين، حفظ كلمة المرور، القائمة المحفوظة، ثم بث حي حقيقي مع انقطاع وعودة
+// إن وُجد ffmpeg يبث الفيديو المعطى كما تبث كاميرا شبكة
+int cameraTest(const QString &videoPath, QTextStream &out)
+{
+    Cameras::Camera hik;
+    hik.kind = Cameras::Kind::Network;
+    hik.brand = QStringLiteral("hikvision");
+    hik.host = QStringLiteral(" 192.168.1.64 ");
+    hik.channel = 2;
+    hik.substream = true;
+    hik.user = QStringLiteral("admin");
+    hik.password = QStringLiteral("p@ss:1/x");
+    const QString hikUrl = hik.url();
+    const QString shown = hik.url(false);
+    Cameras::Camera dahua = hik;
+    dahua.brand = QStringLiteral("dahua");
+    dahua.substream = false;
+    Cameras::Camera custom;
+    custom.kind = Cameras::Kind::Network;
+    custom.brand = QStringLiteral("custom");
+    custom.path = QStringLiteral("rtsp://10.0.0.9:8554/live");
+    custom.user = QStringLiteral("u");
+    custom.password = QStringLiteral("v");
+    const bool urls = hikUrl == QLatin1String("rtsp://admin:p%40ss%3A1%2Fx@192.168.1.64:554/Streaming/Channels/202")
+        && !shown.contains(QLatin1String("p%40ss")) && shown.contains(QLatin1String("****"))
+        && dahua.url(false).endsWith(QLatin1String("/cam/realmonitor?channel=2&subtype=0"))
+        && custom.url() == QLatin1String("rtsp://u:v@10.0.0.9:8554/live");
+    out << "urls=" << urls << " " << hikUrl << " | " << shown << " | " << dahua.url(false) << " | " << custom.url() << "\n";
+
+    const QString stored = Cameras::protect(hik.password);
+    const bool secrets = !stored.isEmpty() && !stored.contains(hik.password) && Cameras::unprotect(stored) == hik.password
+        && Cameras::protect(QString()).isEmpty() && Cameras::unprotect(QString()).isEmpty();
+    out << "secrets=" << secrets << " " << stored.left(2) << "\n";
+
+    // القائمة المحفوظة؛ تُستعاد قائمة المستخدم بعد الاختبار
+    const QList<Cameras::Camera> userCameras = Cameras::load();
+    const QString userLast = Cameras::lastSource();
+    hik.id = Cameras::newId();
+    hik.name = QStringLiteral("مدخل المبنى");
+    Cameras::Camera usb;
+    usb.id = Cameras::newId();
+    usb.name = QStringLiteral("محوّل الكاميرا التناظرية");
+    usb.index = 1;
+    usb.width = 720;
+    usb.height = 576;
+    Cameras::save({hik, usb});
+    VideoFilters::Settings night = VideoFilters::preset(VideoFilters::Preset::Night, VideoFilters::Settings());
+    night.quarterTurns = 2;
+    Cameras::saveFilters(hik.id, night);
+    Cameras::Camera found, local, missing;
+    const QList<Cameras::Camera> loaded = Cameras::load();
+    const bool storage = loaded.size() == 2 && Cameras::resolve(hik.id, &found) && found.password == hik.password
+        && found.url() == hikUrl && found.hasFilters && found.filters == night && found.source() == QLatin1String("camera:") + hik.id
+        && loaded.at(1).width == 720 && !loaded.at(1).hasFilters && Cameras::resolve(QStringLiteral("0"), &local)
+        && local.kind == Cameras::Kind::Local && local.index == 0 && !Cameras::resolve(QStringLiteral("c0000000000"), &missing)
+        && QSettings().value(QStringLiteral("cameras/list/1/password")).toString() != hik.password;
+    Cameras::setLastSource(found.source());
+    const bool last = Cameras::lastSource() == found.source();
+    out << "storage=" << storage << " last=" << last << "\n";
+    out << "local_devices=" << Cameras::localDevices().size() << " addresses=" << Cameras::localAddresses().join(QLatin1Char(',')) << "\n";
+
+    // عنوان لا يرد عليه أحد: الفشل سريع وسببه مفهوم
+    Cameras::Camera dead;
+    dead.kind = Cameras::Kind::Network;
+    dead.brand = QStringLiteral("rtsp");
+    dead.host = QStringLiteral("127.0.0.1");
+    dead.port = 1;
+    QElapsedTimer timer;
+    timer.start();
+    QString deadError;
+    const bool deadFails = Cameras::snapshot(dead, &deadError).empty() && !deadError.isEmpty() && timer.elapsed() < 20000;
+    out << "unreachable=" << deadFails << " " << timer.elapsed() << "ms " << deadError.section(QLatin1Char('\n'), 0, 0) << "\n";
+
+    bool live = true;
+    const QString ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+    if (videoPath != QLatin1String("-") && !ffmpeg.isEmpty()) {
+        const QString url = QStringLiteral("http://127.0.0.1:8090/video");
+        QProcess server;
+        server.setStandardOutputFile(QProcess::nullDevice());
+        server.setStandardErrorFile(QProcess::nullDevice());
+        const auto startServer = [&] {
+            server.start(ffmpeg, {QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-re"),
+                                  QStringLiteral("-stream_loop"), QStringLiteral("-1"), QStringLiteral("-i"), videoPath,
+                                  QStringLiteral("-q:v"), QStringLiteral("5"), QStringLiteral("-f"), QStringLiteral("mjpeg"),
+                                  QStringLiteral("-listen"), QStringLiteral("1"), url});
+            server.waitForStarted();
+        };
+        const auto stopServer = [&] {
+            server.kill();
+            server.waitForFinished(5000);
+        };
+        Cameras::Camera stream;
+        stream.id = Cameras::newId();
+        stream.name = QStringLiteral("بث تجريبي");
+        stream.kind = Cameras::Kind::Network;
+        stream.brand = QStringLiteral("custom");
+        stream.path = url;
+
+        // قارئ البث الحي وحده
+        startServer();
+        QThread::msleep(800);
+        int read = 0;
+        {
+            Cameras::LiveReader reader(stream);
+            QString error;
+            if (reader.open(&error)) {
+                cv::Mat frame;
+                while (read < 40 && reader.read(frame, 5000) && !frame.empty())
+                    ++read;
+            }
+            out << "live_reader_frames=" << read << " fps=" << reader.fps() << " " << error << "\n";
+        }
+        stopServer();
+
+        // التحليل كاملاً من كاميرا محفوظة، مع قطع البث ثم إعادته
+        Cameras::save({hik, usb, stream});
+        FaceEngine engine;
+        if (!loadEngine(engine, out)) {
+            Cameras::save(userCameras);
+            return 1;
+        }
+        startServer();
+        QThread::msleep(800);
+        VideoWorker worker(&engine);
+        int frames = 0, framesAfter = 0, lost = 0, restored = 0;
+        QString error;
+        QObject::connect(&worker, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &, qint64, double) {
+            worker.frameShown();
+            ++frames;
+            if (restored > 0 && ++framesAfter >= 20)
+                worker.requestStop();
+            else if (frames == 25 && lost == 0)
+                stopServer(); // انقطاع الكاميرا
+        });
+        QObject::connect(&worker, &VideoWorker::connectionLost, [&](int attempt) {
+            lost = attempt;
+            if (attempt == 1)
+                startServer(); // عادت الكاميرا
+            else if (attempt > 15)
+                worker.requestStop(); // لم تعد: لا ينتظر الاختبار للأبد
+        });
+        QObject::connect(&worker, &VideoWorker::connectionRestored, [&] { ++restored; });
+        QObject::connect(&worker, &VideoWorker::finished, [&](const QString &message) { error = message; });
+        timer.restart();
+        worker.process(stream.source());
+        stopServer();
+        const bool snapshotAfter = worker.lastCameraFrame().empty();
+        out << "worker_frames=" << frames << " lost_attempts=" << lost << " restored=" << restored
+            << " frames_after=" << framesAfter << " error=" << error << " elapsed_ms=" << timer.elapsed() << "\n";
+        live = read >= 30 && frames >= 45 && lost >= 1 && restored == 1 && framesAfter >= 20 && error.isEmpty() && snapshotAfter;
+    } else {
+        out << "live=skipped\n";
+    }
+
+    Cameras::save(userCameras);
+    Cameras::setLastSource(userLast);
+    if (userCameras.isEmpty()) {
+        QSettings settings;
+        settings.remove(QStringLiteral("cameras"));
+    }
+    return urls && secrets && storage && last && deadFails && live ? 0 : 1;
+}
+
 } // namespace
 
 int run(const QStringList &args)
@@ -1082,7 +1251,8 @@ int run(const QStringList &args)
         && command != QLatin1String("--db-test") && command != QLatin1String("--enhance-test")
         && command != QLatin1String("--embed-dump") && command != QLatin1String("--stress-test")
         && command != QLatin1String("--pair-matrix") && command != QLatin1String("--report-test")
-        && command != QLatin1String("--backup-test") && command != QLatin1String("--filters-test"))
+        && command != QLatin1String("--backup-test") && command != QLatin1String("--filters-test")
+        && command != QLatin1String("--camera-test"))
         return -1;
 
     QFile output(args.last());
@@ -1115,6 +1285,9 @@ int run(const QStringList &args)
     // Malamih --filters-test <صورة وجه> <مجلد مؤقت> <ملف النتائج>
     if (command == QLatin1String("--filters-test") && args.size() == 5)
         return filtersTest(args.at(2), args.at(3), out);
+    // Malamih --camera-test <فيديو يُبث كأنه كاميرا شبكة، أو -> <ملف النتائج>
+    if (command == QLatin1String("--camera-test") && args.size() == 4)
+        return cameraTest(args.at(2), out);
     // Malamih --report-test <صورة> <تقرير.html> <ملف النتائج>
     if (command == QLatin1String("--report-test") && args.size() == 5)
         return reportTest(args.at(2), args.at(3), out);

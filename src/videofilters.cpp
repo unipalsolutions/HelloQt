@@ -25,20 +25,7 @@ Settings load()
 {
     QSettings store;
     store.beginGroup(QStringLiteral("videoFilters"));
-    Settings s;
-    s.quarterTurns = std::clamp(store.value(QStringLiteral("quarterTurns"), 0).toInt(), 0, 3);
-    s.mirror = store.value(QStringLiteral("mirror"), false).toBool();
-    s.flip = store.value(QStringLiteral("flip"), false).toBool();
-    s.deinterlace = store.value(QStringLiteral("deinterlace"), false).toBool();
-    s.autoLevels = store.value(QStringLiteral("autoLevels"), false).toBool();
-    s.grayscale = store.value(QStringLiteral("grayscale"), false).toBool();
-    s.brightness = std::clamp(store.value(QStringLiteral("brightness"), 0).toInt(), -100, 100);
-    s.contrast = std::clamp(store.value(QStringLiteral("contrast"), 0).toInt(), 0, 100);
-    s.denoise = std::clamp(store.value(QStringLiteral("denoise"), 0).toInt(), 0, 100);
-    s.sharpen = std::clamp(store.value(QStringLiteral("sharpen"), 0).toInt(), 0, 100);
-    s.minFaceSize = std::clamp(store.value(QStringLiteral("minFaceSize"), 0).toInt(), 0, 400);
-    s.skipStill = store.value(QStringLiteral("skipStill"), false).toBool();
-    return s;
+    return read(store);
 }
 
 Settings &storage()
@@ -132,16 +119,26 @@ Settings current()
     return storage();
 }
 
-void setCurrent(const Settings &s)
+Settings read(const QSettings &store)
 {
-    {
-        QMutexLocker locker(&mutex());
-        if (storage() == s)
-            return;
-        storage() = s;
-    }
-    QSettings store;
-    store.beginGroup(QStringLiteral("videoFilters"));
+    Settings s;
+    s.quarterTurns = std::clamp(store.value(QStringLiteral("quarterTurns"), 0).toInt(), 0, 3);
+    s.mirror = store.value(QStringLiteral("mirror"), false).toBool();
+    s.flip = store.value(QStringLiteral("flip"), false).toBool();
+    s.deinterlace = store.value(QStringLiteral("deinterlace"), false).toBool();
+    s.autoLevels = store.value(QStringLiteral("autoLevels"), false).toBool();
+    s.grayscale = store.value(QStringLiteral("grayscale"), false).toBool();
+    s.brightness = std::clamp(store.value(QStringLiteral("brightness"), 0).toInt(), -100, 100);
+    s.contrast = std::clamp(store.value(QStringLiteral("contrast"), 0).toInt(), 0, 100);
+    s.denoise = std::clamp(store.value(QStringLiteral("denoise"), 0).toInt(), 0, 100);
+    s.sharpen = std::clamp(store.value(QStringLiteral("sharpen"), 0).toInt(), 0, 100);
+    s.minFaceSize = std::clamp(store.value(QStringLiteral("minFaceSize"), 0).toInt(), 0, 400);
+    s.skipStill = store.value(QStringLiteral("skipStill"), false).toBool();
+    return s;
+}
+
+void write(QSettings &store, const Settings &s)
+{
     store.setValue(QStringLiteral("quarterTurns"), s.quarterTurns % 4);
     store.setValue(QStringLiteral("mirror"), s.mirror);
     store.setValue(QStringLiteral("flip"), s.flip);
@@ -154,6 +151,21 @@ void setCurrent(const Settings &s)
     store.setValue(QStringLiteral("sharpen"), s.sharpen);
     store.setValue(QStringLiteral("minFaceSize"), s.minFaceSize);
     store.setValue(QStringLiteral("skipStill"), s.skipStill);
+}
+
+void setCurrent(const Settings &s, bool persist)
+{
+    {
+        QMutexLocker locker(&mutex());
+        if (storage() == s)
+            return;
+        storage() = s;
+    }
+    if (!persist)
+        return;
+    QSettings store;
+    store.beginGroup(QStringLiteral("videoFilters"));
+    write(store, s);
 }
 
 cv::Mat apply(const cv::Mat &bgr, const Settings &s)

@@ -22,6 +22,8 @@ class VideoFiltersDialog : public QDialog
 public:
     // frame: الإطار الحالي كما في الملف (قبل المعالجات)، وقد يكون فارغاً فلا تظهر المعاينة
     explicit VideoFiltersDialog(const cv::Mat &frame, QWidget *parent = nullptr);
+    // false: التغييرات لهذه الجلسة فقط (معالجات كاميرا محفوظة معها لا تمس إعدادات الملفات)
+    void setPersistent(bool persistent) { m_persistent = persistent; }
 
 signals:
     void changed(); // تغيّرت VideoFilters::current()
@@ -37,6 +39,7 @@ private:
     void commit();
     void renderPreview();
 
+    bool m_persistent = true;
     cv::Mat m_frame; // مصغّر للمعاينة السريعة
     QLabel *m_before = nullptr;
     QLabel *m_after = nullptr;

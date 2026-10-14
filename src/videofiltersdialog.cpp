@@ -296,7 +296,7 @@ void VideoFiltersDialog::commit()
         notes << QStringLiteral("بعد تغيير الاتجاه أعد تحليل الفيديو لتتطابق مواضع الوجوه المحفوظة");
     m_speed->setText(notes.join(QStringLiteral(" · ")));
     if (VideoFilters::current() != s) {
-        VideoFilters::setCurrent(s);
+        VideoFilters::setCurrent(s, m_persistent);
         emit changed();
     }
     m_debounce->start();

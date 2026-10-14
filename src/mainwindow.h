@@ -4,6 +4,7 @@
 #include "faceengine.h"
 #include "facetypes.h"
 #include "shotviewer.h"
+#include "videofilters.h"
 
 #include <QElapsedTimer>
 #include <QFutureWatcher>
@@ -75,7 +76,9 @@ private:
     void openImage();
     void analyzeImage(const QString &path);
     void openVideo();
-    void openCamera();
+    void openCamera();          // قائمة الكاميرات المحفوظة والموصولة
+    void startLastCamera();     // آخر كاميرا استُخدمت (Ctrl+Shift+C)
+    void manageCameras(const QString &selectId = QString());
     void startVideo(const QString &source);
     void stopVideo();
     void togglePause();
@@ -191,6 +194,9 @@ private:
     qint64 m_videoEndMs = 0;
     qint64 m_videoPositionMs = 0;
     QString m_videoSource;   // آخر فيديو أو كاميرا حُلِّل، لإعادة التحليل والرجوع للقطات
+    QString m_cameraName;    // اسم الكاميرا الجارية
+    QString m_cameraId;      // كاميرا محفوظة تحمل معالجاتها الخاصة (فارغ للملفات والكاميرا غير المحفوظة)
+    VideoFilters::Settings m_fileFilters; // معالجات الملفات، تعود بعد إيقاف كاميرا بمعالجاتها الخاصة
     qint64 m_restartFromMs = -1; // إعادة التحليل من موضع بعد توقف التحليل الجاري
     QSet<int> m_hiddenFaces;     // وجوه حذفها المستخدم أثناء التحليل فلا تعود للظهور
     double m_videoFps = 25.0;

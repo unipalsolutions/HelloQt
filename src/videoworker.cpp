@@ -1,5 +1,6 @@
 #include "videoworker.h"
 
+#include "cameras.h"
 #include "faceengine.h"
 #include "imageio.h"
 #include "videofilters.h"
@@ -12,6 +13,7 @@
 #include <climits>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <set>
 
 #include <opencv2/imgproc.hpp>
@@ -292,6 +294,12 @@ void VideoWorker::frameShown()
     --m_pendingFrames;
 }
 
+cv::Mat VideoWorker::lastCameraFrame()
+{
+    QMutexLocker locker(&m_mutex);
+    return m_lastCameraFrame.clone();
+}
+
 void VideoWorker::process(const QString &source)
 {
     m_stop = false;
@@ -304,20 +312,28 @@ void VideoWorker::process(const QString &source)
 
     cv::VideoCapture capture;
     const bool camera = source.startsWith(QStringLiteral("camera:"));
+    // الكاميرا تُقرأ في خيط خاص يحتفظ بأحدث إطار، فلا يتأخر العرض عنها عندما يكون التحليل أبطأ منها
+    Cameras::Camera cameraSpec;
+    std::unique_ptr<Cameras::LiveReader> live;
     if (camera) {
-        capture.open(source.mid(7).toInt());
-        // أحدث إطار فقط، حتى لا يتأخر العرض عن الكاميرا عندما يكون التحليل أبطأ منها
-        capture.set(cv::CAP_PROP_BUFFERSIZE, 1);
-    } else {
-        ImageIO::openVideo(capture, source);
-    }
-    if (!capture.isOpened()) {
-        emit finished(camera ? QStringLiteral("تعذر فتح الكاميرا") : QStringLiteral("تعذر فتح ملف الفيديو"));
+        if (!Cameras::resolve(source.mid(7), &cameraSpec)) {
+            emit finished(QStringLiteral("هذه الكاميرا لم تعد في قائمة الكاميرات"));
+            return;
+        }
+        live = std::make_unique<Cameras::LiveReader>(cameraSpec);
+        QString error;
+        if (!live->open(&error)) {
+            emit finished(error.isEmpty() ? QStringLiteral("تعذر فتح الكاميرا") : error);
+            return;
+        }
+    } else if (!ImageIO::openVideo(capture, source)) {
+        emit finished(QStringLiteral("تعذر فتح ملف الفيديو"));
         return;
     }
+    QString endError;
 
     const int frameCount = camera ? 0 : std::max(0, int(capture.get(cv::CAP_PROP_FRAME_COUNT)));
-    const double fps = capture.get(cv::CAP_PROP_FPS);
+    const double fps = camera ? live->fps() : capture.get(cv::CAP_PROP_FPS);
     const bool validFps = fps > 1.0 && fps < 1000.0;
     const double rate = validFps ? fps : 25.0;
     const bool automatic = !camera && m_frameStep.load() <= 0;
@@ -499,8 +515,40 @@ void VideoWorker::process(const QString &source)
             --skip;
             continue;
         }
-        if (!capture.read(frame))
+        if (camera) {
+            if (!live->read(frame)) {
+                if (m_stop)
+                    break;
+                // انقطعت الكاميرا: تُعاد المحاولة حتى تعود (كاميرا الشبكة بلا حد، والموصولة نحو نصف دقيقة)
+                live.reset();
+                const bool network = cameraSpec.kind == Cameras::Kind::Network;
+                for (int attempt = 1; !m_stop && (network || attempt <= 12); ++attempt) {
+                    emit connectionLost(attempt);
+                    for (int waited = 0; waited < 2000 && !m_stop; waited += 100)
+                        QThread::msleep(100);
+                    if (m_stop)
+                        break;
+                    auto reader = std::make_unique<Cameras::LiveReader>(cameraSpec);
+                    if (reader->open(nullptr)) {
+                        live = std::move(reader);
+                        break;
+                    }
+                }
+                if (!live) {
+                    if (!m_stop)
+                        endError = QStringLiteral("انقطع الاتصال بالكاميرا ولم يعد");
+                    break;
+                }
+                // المشهد بعد العودة قد يختلف، فلا تُكمَل المسارات القديمة
+                tracks.clear();
+                emit connectionRestored();
+                continue;
+            }
+            QMutexLocker locker(&m_mutex);
+            m_lastCameraFrame = frame;
+        } else if (!capture.read(frame)) {
             break;
+        }
         ++frameIndex;
         skip = currentStep - 1;
         if (frame.empty())
@@ -813,5 +861,9 @@ void VideoWorker::process(const QString &source)
         if (identity.confirmed && identity.changed)
             emitUpdate(identity);
     }
-    emit finished(QString());
+    {
+        QMutexLocker locker(&m_mutex);
+        m_lastCameraFrame.release();
+    }
+    emit finished(endError);
 }
