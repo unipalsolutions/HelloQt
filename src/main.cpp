@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QIcon>
 #include <QScreen>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QStyle>
 
@@ -32,6 +33,8 @@ int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Malamih"));
+    // بلا اسم منظمة لا يحفظ سجل ويندوز أي إعداد، وملف INI يعمل كما على لينكس
+    QSettings::setDefaultFormat(QSettings::IniFormat);
     QApplication::setApplicationDisplayName(QStringLiteral("ملامح"));
     QApplication::setApplicationVersion(QStringLiteral("3.0.0"));
     QIcon appIcon;
