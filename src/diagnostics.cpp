@@ -3,6 +3,7 @@
 #include "facedatabase.h"
 #include "faceengine.h"
 #include "imageio.h"
+#include "report.h"
 #include "videoworker.h"
 
 #include <QDir>
@@ -848,6 +849,71 @@ int pairMatrix(const QString &folder, QTextStream &out)
     return 0;
 }
 
+// يكتب تقرير HTML لوجوه صورة، مع فترات ظهور مصطنعة لاختبار قسم الفيديو أيضاً
+int reportTest(const QString &image, const QString &html, QTextStream &out)
+{
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    const cv::Mat bgr = ImageIO::loadImage(image);
+    const std::vector<AnalyzedFace> faces = engine.analyze(bgr, true);
+    QList<FaceItem> items;
+    for (size_t i = 0; i < faces.size(); ++i) {
+        FaceItem item = ImageIO::makeFaceItem(bgr, faces[i], int(i) + 1);
+        item.match.status = i == 0 ? MatchStatus::Confirmed : MatchStatus::Unknown;
+        item.match.personId = QStringLiteral("1");
+        item.match.name = QStringLiteral("شخص تجريبي");
+        item.match.score = 0.71f;
+        item.appearances = {{1000, 4000}, {3000, 9000}, {20000, 26000}};
+        item.firstSeenMs = 1000;
+        item.lastSeenMs = 26000;
+        items << item;
+    }
+    Report::Source source;
+    source.path = image;
+    source.video = true;
+    source.durationMs = 30000;
+    QString error;
+    const bool ok = Report::writeHtml(html, items, source, &error);
+    out << "faces=" << items.size() << "\nscreen_time_ms=" << Report::screenTime(items.value(0).appearances)
+        << "\nok=" << ok << "\n" << error;
+    return ok && !items.isEmpty() ? 0 : 1;
+}
+
+// نسخة احتياطية ثم تعديل ثم استعادة: يجب أن تعود القاعدة كما كانت وقت النسخ
+int backupTest(const QString &directory, QTextStream &out)
+{
+    QDir(directory).removeRecursively();
+    FaceDatabase database;
+    QString error;
+    if (!database.open(directory, &error)) {
+        out << "error=" << error << "\n";
+        return 1;
+    }
+    for (int i = 0; i < 3; ++i) {
+        Person person;
+        person.name = QStringLiteral("شخص %1").arg(i + 1);
+        database.addPerson(person);
+    }
+    const QString file = QDir(directory).filePath(QStringLiteral("backup.malamih"));
+    const bool saved = database.backup(file, &error);
+    const QPair<qint64, qint64> inspected = FaceDatabase::inspectBackup(file);
+    for (int i = 0; i < 2; ++i) {
+        Person person;
+        person.name = QStringLiteral("بعد النسخ %1").arg(i + 1);
+        database.addPerson(person);
+    }
+    const qint64 before = database.personCount();
+    const bool restored = database.restore(file, &error);
+    const qint64 after = database.personCount();
+    const bool invalid = !database.restore(QDir(directory).filePath(QStringLiteral("index.codes")));
+    out << "saved=" << saved << "\ninspected_persons=" << inspected.first << "\nbefore_restore=" << before
+        << "\nrestored=" << restored << "\nafter_restore=" << after << "\nrejects_invalid=" << invalid
+        << "\nkept_previous=" << QFile::exists(QDir(directory).filePath(QStringLiteral("faces.db.before-restore")))
+        << "\nstill_open=" << (database.personCount() == 3) << "\n" << error;
+    return saved && inspected.first == 3 && before == 5 && restored && after == 3 && invalid ? 0 : 1;
+}
+
 } // namespace
 
 int run(const QStringList &args)
@@ -858,7 +924,8 @@ int run(const QStringList &args)
     if (command != QLatin1String("--self-test") && command != QLatin1String("--video-test")
         && command != QLatin1String("--db-test") && command != QLatin1String("--enhance-test")
         && command != QLatin1String("--embed-dump") && command != QLatin1String("--stress-test")
-        && command != QLatin1String("--pair-matrix"))
+        && command != QLatin1String("--pair-matrix") && command != QLatin1String("--report-test")
+        && command != QLatin1String("--backup-test"))
         return -1;
 
     QFile output(args.last());
@@ -885,6 +952,12 @@ int run(const QStringList &args)
     if (command == QLatin1String("--stress-test") && args.size() == 5)
         return stressTest(args.at(2), args.at(3), out);
     // Malamih --pair-matrix <مجلد صور> <ملف النتائج>
+    // Malamih --backup-test <مجلد مؤقت> <ملف النتائج>
+    if (command == QLatin1String("--backup-test") && args.size() == 4)
+        return backupTest(args.at(2), out);
+    // Malamih --report-test <صورة> <تقرير.html> <ملف النتائج>
+    if (command == QLatin1String("--report-test") && args.size() == 5)
+        return reportTest(args.at(2), args.at(3), out);
     if (command == QLatin1String("--pair-matrix") && args.size() == 4)
         return pairMatrix(args.at(2), out);
     out << "error=invalid arguments\n";

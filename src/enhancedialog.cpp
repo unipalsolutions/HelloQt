@@ -48,6 +48,17 @@ public:
 
     std::function<void()> onEmptyClick;
 
+    // وضع القص: تُعرض الصورة كاملة ويُرسم فوقها مستطيل القص بمقابض للسحب
+    void setCropMode(bool on, const QRectF &crop)
+    {
+        m_cropMode = on;
+        m_crop = crop;
+        setCursor(on ? Qt::CrossCursor : Qt::SplitHCursor);
+        setToolTip(on ? QString() : QStringLiteral("اسحب الخط للمقارنة بين الأصل (يمين) والمحسّنة (يسار)"));
+        update();
+    }
+    QRectF crop() const { return m_crop; }
+
     void setBefore(const QImage &image)
     {
         m_before = image;
@@ -89,8 +100,11 @@ protected:
                        QStringLiteral("ثم حسّنها: التشويش، الضبابية، الحدة، الدقة، الإضاءة، الزاوية والمنظور"));
             return;
         }
-        const QSizeF fitted = QSizeF(shown.size()).scaled(QSizeF(size()) - QSizeF(16, 16), Qt::KeepAspectRatio);
-        const QRectF target(QPointF((width() - fitted.width()) / 2, (height() - fitted.height()) / 2), fitted);
+        const QRectF target = imageRect(shown);
+        if (m_cropMode) {
+            paintCrop(p, shown, target);
+            return;
+        }
         const double split = target.left() + target.width() * m_split;
         p.save();
         p.setClipRect(QRectF(target.left(), target.top(), split - target.left(), target.height()));
@@ -99,6 +113,7 @@ protected:
         if (!m_before.isNull()) {
             p.save();
             p.setClipRect(QRectF(split, target.top(), target.right() - split, target.height()));
+            // الأصل بنفس إطار المحسّنة (التدوير والقص نفسه) فيتطابقان عند الخط الفاصل
             p.drawImage(target, m_before);
             p.restore();
         }
@@ -131,13 +146,187 @@ protected:
                 onEmptyClick();
             return;
         }
+        if (m_cropMode) {
+            m_drag = hitTest(event->position());
+            // بلا قص سابق يرسم السحب داخل الصورة مستطيلاً جديداً بدل تحريك الصورة كلها
+            if (m_drag == Drag::Move && m_crop.width() > 0.98 && m_crop.height() > 0.98)
+                m_drag = Drag::None;
+            m_pressPoint = toImage(event->position());
+            m_pressCrop = m_crop;
+            if (m_drag == Drag::None) {
+                m_drag = Drag::New;
+                m_crop = QRectF(m_pressPoint, QSizeF(0, 0));
+            }
+            update();
+            return;
+        }
         moveSplit(event->position().x());
     }
     void mouseMoveEvent(QMouseEvent *event) override
     {
+        if (m_cropMode) {
+            if (event->buttons() & Qt::LeftButton)
+                dragCrop(toImage(event->position()));
+            else
+                setCursor(cursorFor(hitTest(event->position())));
+            return;
+        }
         if (event->buttons() & Qt::LeftButton)
             moveSplit(event->position().x());
     }
+    void mouseReleaseEvent(QMouseEvent *) override
+    {
+        if (!m_cropMode)
+            return;
+        // نقرة بلا سحب لا تترك مستطيلاً فارغاً
+        if (m_crop.width() < 0.02 || m_crop.height() < 0.02)
+            m_crop = m_pressCrop.isValid() && m_pressCrop.width() >= 0.02 ? m_pressCrop : QRectF(0, 0, 1, 1);
+        m_drag = Drag::None;
+        update();
+    }
+
+private:
+    enum class Drag { None, New, Move, Left, Right, Top, Bottom, TopLeft, TopRight, BottomLeft, BottomRight };
+
+    QRectF imageRect(const QImage &image) const
+    {
+        const QSizeF fitted = QSizeF(image.size()).scaled(QSizeF(size()) - QSizeF(16, 16), Qt::KeepAspectRatio);
+        return QRectF(QPointF((width() - fitted.width()) / 2, (height() - fitted.height()) / 2), fitted);
+    }
+    QRectF shownRect() const { return imageRect(m_after.isNull() ? m_before : m_after); }
+    QPointF toImage(const QPointF &pos) const
+    {
+        const QRectF target = shownRect();
+        return QPointF(std::clamp((pos.x() - target.left()) / std::max(1.0, target.width()), 0.0, 1.0),
+                       std::clamp((pos.y() - target.top()) / std::max(1.0, target.height()), 0.0, 1.0));
+    }
+    QRectF cropOnScreen() const
+    {
+        const QRectF target = shownRect();
+        return QRectF(target.left() + m_crop.left() * target.width(), target.top() + m_crop.top() * target.height(),
+                      m_crop.width() * target.width(), m_crop.height() * target.height());
+    }
+    Drag hitTest(const QPointF &pos) const
+    {
+        const QRectF r = cropOnScreen();
+        const double grip = 12;
+        const bool left = std::abs(pos.x() - r.left()) < grip, right = std::abs(pos.x() - r.right()) < grip;
+        const bool top = std::abs(pos.y() - r.top()) < grip, bottom = std::abs(pos.y() - r.bottom()) < grip;
+        const bool insideX = pos.x() > r.left() - grip && pos.x() < r.right() + grip;
+        const bool insideY = pos.y() > r.top() - grip && pos.y() < r.bottom() + grip;
+        if (top && left)
+            return Drag::TopLeft;
+        if (top && right)
+            return Drag::TopRight;
+        if (bottom && left)
+            return Drag::BottomLeft;
+        if (bottom && right)
+            return Drag::BottomRight;
+        if (left && insideY)
+            return Drag::Left;
+        if (right && insideY)
+            return Drag::Right;
+        if (top && insideX)
+            return Drag::Top;
+        if (bottom && insideX)
+            return Drag::Bottom;
+        return r.contains(pos) ? Drag::Move : Drag::None;
+    }
+    static Qt::CursorShape cursorFor(Drag drag)
+    {
+        switch (drag) {
+        case Drag::Move:
+            return Qt::SizeAllCursor;
+        case Drag::Left:
+        case Drag::Right:
+            return Qt::SizeHorCursor;
+        case Drag::Top:
+        case Drag::Bottom:
+            return Qt::SizeVerCursor;
+        case Drag::TopLeft:
+        case Drag::BottomRight:
+            return Qt::SizeFDiagCursor;
+        case Drag::TopRight:
+        case Drag::BottomLeft:
+            return Qt::SizeBDiagCursor;
+        default:
+            return Qt::CrossCursor;
+        }
+    }
+    void dragCrop(const QPointF &at)
+    {
+        QRectF r = m_pressCrop;
+        switch (m_drag) {
+        case Drag::New:
+            r = QRectF(m_pressPoint, at).normalized();
+            break;
+        case Drag::Move: {
+            const QPointF delta = at - m_pressPoint;
+            r.translate(std::clamp(delta.x(), -r.left(), 1.0 - r.right()), std::clamp(delta.y(), -r.top(), 1.0 - r.bottom()));
+            break;
+        }
+        case Drag::Left:
+        case Drag::TopLeft:
+        case Drag::BottomLeft:
+            r.setLeft(std::min(at.x(), r.right() - 0.02));
+            break;
+        case Drag::Right:
+        case Drag::TopRight:
+        case Drag::BottomRight:
+            r.setRight(std::max(at.x(), r.left() + 0.02));
+            break;
+        default:
+            break;
+        }
+        if (m_drag == Drag::Top || m_drag == Drag::TopLeft || m_drag == Drag::TopRight)
+            r.setTop(std::min(at.y(), r.bottom() - 0.02));
+        if (m_drag == Drag::Bottom || m_drag == Drag::BottomLeft || m_drag == Drag::BottomRight)
+            r.setBottom(std::max(at.y(), r.top() + 0.02));
+        m_crop = r.intersected(QRectF(0, 0, 1, 1));
+        update();
+    }
+    void paintCrop(QPainter &p, const QImage &shown, const QRectF &target)
+    {
+        p.drawImage(target, shown);
+        const QRectF r = cropOnScreen();
+        QPainterPath outside;
+        outside.addRect(target);
+        outside.addRect(r);
+        p.fillPath(outside, QColor(0, 0, 0, 150));
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(QColor(255, 255, 255, 90), 1));
+        for (int i = 1; i < 3; ++i) {
+            p.drawLine(QPointF(r.left() + r.width() * i / 3, r.top()), QPointF(r.left() + r.width() * i / 3, r.bottom()));
+            p.drawLine(QPointF(r.left(), r.top() + r.height() * i / 3), QPointF(r.right(), r.top() + r.height() * i / 3));
+        }
+        p.setPen(QPen(Qt::white, 2));
+        p.drawRect(r);
+        p.setPen(Qt::NoPen);
+        p.setBrush(Theme::Accent2);
+        for (const QPointF &corner : {r.topLeft(), r.topRight(), r.bottomLeft(), r.bottomRight()})
+            p.drawEllipse(corner, 6, 6);
+        for (const QPointF &edge : {QPointF(r.center().x(), r.top()), QPointF(r.center().x(), r.bottom()),
+                                    QPointF(r.left(), r.center().y()), QPointF(r.right(), r.center().y())})
+            p.drawEllipse(edge, 4, 4);
+        // الأبعاد الناتجة بالبكسل من الصورة الأصلية
+        if (m_sourceSize.isValid()) {
+            // عزل لاتيني حتى لا يعكس الاتجاه العربي ترتيب العرض والارتفاع
+            const QString size = QStringLiteral("\u2066%1 × %2\u2069").arg(qRound(m_crop.width() * m_sourceSize.width()))
+                                     .arg(qRound(m_crop.height() * m_sourceSize.height()));
+            QFont font = p.font();
+            font.setPointSizeF(9);
+            p.setFont(font);
+            const QRectF box(r.center().x() - 50, r.bottom() + 8 > target.bottom() - 26 ? r.bottom() - 32 : r.bottom() + 8, 100, 24);
+            QPainterPath pill;
+            pill.addRoundedRect(box, 12, 12);
+            p.fillPath(pill, QColor(0, 0, 0, 170));
+            p.setPen(Qt::white);
+            p.drawText(box, Qt::AlignCenter, size);
+        }
+    }
+
+public:
+    void setSourceSize(const QSize &size) { m_sourceSize = size; }
 
 private:
     void moveSplit(double x)
@@ -148,6 +337,12 @@ private:
 
     QImage m_before, m_after;
     double m_split = 0.5;
+    bool m_cropMode = false;
+    QRectF m_crop{0, 0, 1, 1};
+    QRectF m_pressCrop;
+    QPointF m_pressPoint;
+    Drag m_drag = Drag::None;
+    QSize m_sourceSize;
 };
 
 namespace {
@@ -247,6 +442,23 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     turnRow->addWidget(mirror);
     side->addLayout(turnRow);
 
+    auto *cropRow = new QHBoxLayout;
+    m_cropButton = new FancyButton(Icons::Name::Scan, QStringLiteral("قص"), FancyButton::Kind::Secondary, panel);
+    m_cropButton->setToolTip(QStringLiteral("حدّد منطقة من الصورة بالسحب، ثم اضغط \"تطبيق القص\""));
+    auto *faceCrop = new FancyButton(Icons::Name::Users, QStringLiteral("حول الوجه"), FancyButton::Kind::Secondary, panel);
+    faceCrop->setToolTip(QStringLiteral("قص تلقائي بنسبة صورة شخصية (3:4) حول أكبر وجه"));
+    m_clearCrop = new FancyButton(Icons::Name::Stop, QStringLiteral("إلغاء القص"), FancyButton::Kind::Secondary, panel);
+    cropRow->addWidget(m_cropButton, 1);
+    cropRow->addWidget(faceCrop);
+    cropRow->addWidget(m_clearCrop);
+    side->addLayout(cropRow);
+    connect(m_cropButton, &QAbstractButton::clicked, this, [this] { setCropMode(!m_cropMode); });
+    connect(faceCrop, &QAbstractButton::clicked, this, &EnhanceDialog::cropToFace);
+    connect(m_clearCrop, &QAbstractButton::clicked, this, [this] {
+        m_crop = cv::Rect2d(0, 0, 1, 1);
+        setCropMode(false);
+    });
+
     m_info->setObjectName(QStringLiteral("muted"));
     m_info->setWordWrap(true);
     side->addWidget(m_info);
@@ -277,7 +489,7 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
         m_needImage << use;
     }
     side->addWidget(m_close);
-    m_needImage << autoButton << controls << level << turn << mirror << reset << saveButton << copyButton;
+    m_needImage << autoButton << controls << level << turn << mirror << reset << saveButton << copyButton << m_cropButton << faceCrop;
     m_view->onEmptyClick = [this] { openImage(); };
     // داخل النافذة الرئيسية يمرّر اختصارها اللصق إلى هنا؛ في النافذة المنفصلة يكون الاختصار خاصاً بها
     m_paste = new QShortcut(QKeySequence::Paste, this);
@@ -295,8 +507,10 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     m_debounce->setSingleShot(true);
     m_debounce->setInterval(120);
     connect(m_debounce, &QTimer::timeout, this, &EnhanceDialog::renderPreview);
-    connect(&m_watcher, &QFutureWatcher<QImage>::finished, this, [this] {
-        m_view->setAfter(m_watcher.result());
+    connect(&m_watcher, &QFutureWatcher<QPair<QImage, QImage>>::finished, this, [this] {
+        const QPair<QImage, QImage> images = m_watcher.result();
+        m_view->setBefore(images.second);
+        m_view->setAfter(images.first);
         if (std::exchange(m_pending, false))
             renderPreview();
     });
@@ -322,6 +536,8 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     connect(reset, &QAbstractButton::clicked, this, [this] {
         m_quarterTurns = 0;
         m_mirror = false;
+        m_crop = cv::Rect2d(0, 0, 1, 1);
+        setCropMode(false);
         setSettings({});
     });
     connect(saveButton, &QAbstractButton::clicked, this, &EnhanceDialog::save);
@@ -373,6 +589,11 @@ void EnhanceDialog::setImage(const cv::Mat &image, const QString &name)
     }
     m_quarterTurns = 0;
     m_mirror = false;
+    m_crop = cv::Rect2d(0, 0, 1, 1);
+    m_cropMode = false;
+    m_view->setCropMode(false, QRectF(0, 0, 1, 1));
+    m_view->setSourceSize(QSize(m_source.cols, m_source.rows));
+    updateCropButtons();
     m_updating = true;
     for (Control *c : {&m_brightness, &m_contrast, &m_denoise, &m_deblur, &m_sharpen, &m_rotation, &m_keystoneV, &m_keystoneH})
         c->slider->setValue(0);
@@ -381,7 +602,7 @@ void EnhanceDialog::setImage(const cv::Mat &image, const QString &name)
     m_view->setBefore(m_preview.empty() ? QImage() : ImageIO::toQImage(m_preview));
     m_view->setAfter({});
     m_info->setText(m_source.empty() ? QString()
-                                     : QStringLiteral("%1الأبعاد: %2×%3")
+                                     : QStringLiteral("%1الأبعاد: \u2066%2×%3\u2069")
                                            .arg(name.isEmpty() ? QString() : name + QStringLiteral(" · "))
                                            .arg(m_source.cols)
                                            .arg(m_source.rows));
@@ -394,6 +615,57 @@ void EnhanceDialog::updateEnabled()
 {
     for (QWidget *widget : std::as_const(m_needImage))
         widget->setEnabled(!m_source.empty());
+    updateCropButtons();
+}
+
+void EnhanceDialog::updateCropButtons()
+{
+    m_cropButton->setText(m_cropMode ? QStringLiteral("تطبيق القص") : QStringLiteral("قص"));
+    m_cropButton->setIconName(m_cropMode ? Icons::Name::Check : Icons::Name::Scan);
+    m_clearCrop->setEnabled(!m_source.empty() && (m_cropMode || cropActive()));
+}
+
+bool EnhanceDialog::cropActive() const
+{
+    ImageLab::Settings s;
+    s.crop = m_crop;
+    return s.hasCrop();
+}
+
+void EnhanceDialog::setCropMode(bool on)
+{
+    if (m_source.empty())
+        return;
+    if (m_cropMode && !on) {
+        // تطبيق المستطيل المحدد
+        const QRectF r = m_view->crop();
+        m_crop = cv::Rect2d(r.x(), r.y(), r.width(), r.height());
+    }
+    m_cropMode = on;
+    const bool swapped = (((m_quarterTurns % 4) + 4) % 4) % 2 == 1;
+    m_view->setSourceSize(swapped ? QSize(m_source.rows, m_source.cols) : QSize(m_source.cols, m_source.rows));
+    m_view->setCropMode(on, QRectF(m_crop.x, m_crop.y, m_crop.width, m_crop.height));
+    updateCropButtons();
+    renderPreview();
+}
+
+void EnhanceDialog::cropToFace()
+{
+    ImageLab::Settings base = settings().geometryOnly();
+    base.crop = cv::Rect2d(0, 0, 1, 1);
+    const cv::Mat oriented = ImageLab::apply(m_source, base);
+    const FaceEngine *engine = m_engine;
+    cv::Rect2d crop;
+    const bool found = waitResponsive([engine, oriented, &crop] { return ImageLab::faceCrop(oriented, engine, &crop); });
+    if (!found) {
+        Toast::show(this, QStringLiteral("لم يُعثر على وجه"), Toast::Kind::Warning);
+        return;
+    }
+    m_crop = crop;
+    if (m_cropMode)
+        m_view->setCropMode(true, QRectF(crop.x, crop.y, crop.width, crop.height)); // يبقى للتعديل اليدوي
+    updateCropButtons();
+    renderPreview();
 }
 
 void EnhanceDialog::openImage()
@@ -479,6 +751,12 @@ ImageLab::Settings EnhanceDialog::settings() const
     s.keystoneV = m_keystoneV.slider->value();
     s.quarterTurns = m_quarterTurns;
     s.mirror = m_mirror;
+    if (m_cropMode) {
+        const QRectF r = m_view->crop();
+        s.crop = cv::Rect2d(r.x(), r.y(), r.width(), r.height());
+    } else {
+        s.crop = m_crop;
+    }
     return s;
 }
 
@@ -517,8 +795,14 @@ void EnhanceDialog::renderPreview()
     // المعاينة لا تحتاج التكبير الفعلي إلا بقدر ما تظهر به على الشاشة
     const int maxSide = std::max(m_preview.cols, m_preview.rows);
     s.upscale = std::clamp(int(std::lround(1400.0 / std::max(1, maxSide))), 1, s.upscale);
+    // أثناء القص تُعرض الصورة كاملة ليُحدَّد عليها المستطيل
+    if (m_cropMode)
+        s.crop = cv::Rect2d(0, 0, 1, 1);
     const cv::Mat preview = m_preview;
-    m_watcher.setFuture(QtConcurrent::run([preview, s] { return ImageIO::toQImage(ImageLab::apply(preview, s)); }));
+    m_watcher.setFuture(QtConcurrent::run([preview, s] {
+        const ImageLab::Settings geometry = s.geometryOnly();
+        return qMakePair(ImageIO::toQImage(ImageLab::apply(preview, s)), ImageIO::toQImage(ImageLab::apply(preview, geometry)));
+    }));
 }
 
 cv::Mat EnhanceDialog::renderFull()

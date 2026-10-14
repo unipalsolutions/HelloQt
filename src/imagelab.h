@@ -20,8 +20,12 @@ struct Settings
     int keystoneH = 0;    // -100..100 تصحيح المنظور الأفقي
     int keystoneV = 0;    // -100..100 تصحيح المنظور العمودي (تصوير من أعلى أو أسفل)
     bool mirror = false;
+    cv::Rect2d crop{0, 0, 1, 1}; // منطقة القص بنسب من الصورة بعد التدوير والمنظور
 
     bool isIdentity() const;
+    bool hasCrop() const;
+    // التدوير والمنظور والقص فقط، بلا تحسين (للمقارنة قبل/بعد على نفس الإطار)
+    Settings geometryOnly() const;
 };
 
 cv::Mat apply(const cv::Mat &bgr, const Settings &settings);
@@ -31,6 +35,9 @@ Settings suggest(const cv::Mat &bgr);
 
 // زاوية تجعل خط العينين أفقياً لأكبر وجه (يتطلب نماذج التعرف). يعيد false إن لم يجد وجهاً
 bool levelFace(const cv::Mat &bgr, const FaceEngine *engine, double *angle);
+
+// قص بنسبة صورة شخصية (3:4) حول أكبر وجه، بنسب من الصورة. يعيد false إن لم يجد وجهاً
+bool faceCrop(const cv::Mat &bgr, const FaceEngine *engine, cv::Rect2d *crop);
 
 double estimateNoise(const cv::Mat &bgr);
 double estimateSharpness(const cv::Mat &bgr);

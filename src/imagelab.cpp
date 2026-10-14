@@ -12,7 +12,24 @@ namespace ImageLab {
 bool Settings::isIdentity() const
 {
     return brightness == 0 && contrast == 0 && denoise == 0 && deblur == 0 && sharpen == 0 && upscale <= 1
-        && std::abs(rotation) < 0.05 && quarterTurns % 4 == 0 && keystoneH == 0 && keystoneV == 0 && !mirror;
+        && std::abs(rotation) < 0.05 && quarterTurns % 4 == 0 && keystoneH == 0 && keystoneV == 0 && !mirror && !hasCrop();
+}
+
+bool Settings::hasCrop() const
+{
+    return crop.x > 1e-4 || crop.y > 1e-4 || crop.width < 1 - 1e-4 || crop.height < 1 - 1e-4;
+}
+
+Settings Settings::geometryOnly() const
+{
+    Settings s;
+    s.rotation = rotation;
+    s.quarterTurns = quarterTurns;
+    s.keystoneH = keystoneH;
+    s.keystoneV = keystoneV;
+    s.mirror = mirror;
+    s.crop = crop;
+    return s;
 }
 
 double estimateNoise(const cv::Mat &bgr)
@@ -90,6 +107,15 @@ cv::Mat geometry(const cv::Mat &input, const Settings &s)
         cv::Mat rotated;
         cv::warpAffine(image, rotated, transform, image.size(), cv::INTER_CUBIC, cv::BORDER_REPLICATE);
         image = rotated;
+    }
+    if (s.hasCrop()) {
+        const cv::Rect area(int(std::lround(s.crop.x * image.cols)), int(std::lround(s.crop.y * image.rows)),
+                            std::max(1, int(std::lround(s.crop.width * image.cols))),
+                            std::max(1, int(std::lround(s.crop.height * image.rows))));
+        const cv::Rect clipped = area & cv::Rect(0, 0, image.cols, image.rows);
+        // نسخة مستقلة حتى لا تعدّل خطوات التحسين اللاحقة الصورة الأصلية
+        if (!clipped.empty())
+            image = image(clipped).clone();
     }
     return image;
 }
@@ -213,6 +239,29 @@ bool levelFace(const cv::Mat &bgr, const FaceEngine *engine, double *angle)
     });
     const cv::Point2f left = largest->landmarks[0], right = largest->landmarks[1];
     *angle = std::atan2(right.y - left.y, right.x - left.x) * 180.0 / CV_PI;
+    return true;
+}
+
+bool faceCrop(const cv::Mat &bgr, const FaceEngine *engine, cv::Rect2d *crop)
+{
+    if (!engine || !engine->isLoaded() || bgr.empty())
+        return false;
+    const std::vector<DetectedFace> faces = engine->detect(bgr, true);
+    if (faces.empty())
+        return false;
+    const auto largest = std::max_element(faces.begin(), faces.end(), [](const DetectedFace &a, const DetectedFace &b) {
+        return a.box.area() < b.box.area();
+    });
+    // الوجه في الثلث العلوي مع الكتفين، كصور الهوية
+    const double w = bgr.cols, h = bgr.rows;
+    double width = std::min(largest->box.width * 2.2, w);
+    double height = std::min(width * 4.0 / 3.0, h);
+    width = std::min(width, height * 3.0 / 4.0);
+    const double cx = largest->box.x + largest->box.width / 2.0;
+    const double cy = largest->box.y + largest->box.height * 0.62;
+    const double x = std::clamp(cx - width / 2.0, 0.0, w - width);
+    const double y = std::clamp(cy - height * 0.45, 0.0, h - height);
+    *crop = cv::Rect2d(x / w, y / h, width / w, height / h);
     return true;
 }
 

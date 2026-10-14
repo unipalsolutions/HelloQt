@@ -6,6 +6,8 @@
 
 #include "carddelegates.h"
 #include "enhancedialog.h"
+#include "folderscan.h"
+#include "report.h"
 #include "icons.h"
 #include "imageio.h"
 #include "imageview.h"
@@ -405,6 +407,10 @@ void MainWindow::setupShortcuts()
         if (m_cameraButton->isEnabled())
             openCamera();
     });
+    add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F), [this] {
+        if (m_folderScanButton->isEnabled())
+            openFolderScan();
+    });
     add(QKeySequence::Save, [this] {
         if (m_saveFacesButton->isEnabled())
             saveFaces();
@@ -682,7 +688,7 @@ QWidget *MainWindow::createRecognitionPage()
     m_pauseButton->setToolTip(QStringLiteral("إيقاف مؤقت / استئناف (مسافة)"));
     m_stopButton->setToolTip(QStringLiteral("إيقاف التحليل (Esc)"));
     m_saveFacesButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ الوجوه"), FancyButton::Kind::Secondary, page);
-    m_saveFacesButton->setToolTip(QStringLiteral("حفظ صور الوجوه المكتشفة مع تقرير (Ctrl+S)"));
+    m_saveFacesButton->setToolTip(QStringLiteral("حفظ صور الوجوه المكتشفة مع تقرير مرئي (HTML) وتقرير Excel (CSV) — Ctrl+S"));
     connect(m_openImageButton, &QAbstractButton::clicked, this, &MainWindow::openImage);
     connect(m_openVideoButton, &QAbstractButton::clicked, this, &MainWindow::openVideo);
     connect(m_cameraButton, &QAbstractButton::clicked, this, &MainWindow::openCamera);
@@ -693,7 +699,10 @@ QWidget *MainWindow::createRecognitionPage()
     m_enhanceImageButton->setToolTip(QStringLiteral("تحسين الصورة الحالية أو إطار الفيديو الحالي يدوياً:\n"
                                                     "إزالة التشويش والضبابية، الحدة، تكبير الدقة، الإضاءة، التدوير وتصحيح المنظور (Ctrl+Shift+E)"));
     connect(m_enhanceImageButton, &QAbstractButton::clicked, this, &MainWindow::openEnhancer);
-    m_headerButtons = {m_openImageButton, m_openVideoButton, m_cameraButton, m_pauseButton, m_stopButton, m_enhanceImageButton, m_saveFacesButton};
+    m_folderScanButton = new FancyButton(Icons::Name::Folder, QStringLiteral("مجلد صور"), FancyButton::Kind::Secondary, page);
+    m_folderScanButton->setToolTip(QStringLiteral("البحث عن الأشخاص في كل صور مجلد (Ctrl+Shift+F)"));
+    connect(m_folderScanButton, &QAbstractButton::clicked, this, &MainWindow::openFolderScan);
+    m_headerButtons = {m_openImageButton, m_openVideoButton, m_cameraButton, m_folderScanButton, m_pauseButton, m_stopButton, m_enhanceImageButton, m_saveFacesButton};
 
     auto *header = new QHBoxLayout;
     auto *titles = new QVBoxLayout;
@@ -1037,6 +1046,14 @@ QWidget *MainWindow::createDatabasePage()
     auto *openFolderButton = new FancyButton(Icons::Name::Folder, QStringLiteral("فتح المجلد"), FancyButton::Kind::Secondary, page);
     connect(addPersonButton, &QAbstractButton::clicked, this, &MainWindow::addPerson);
     connect(openFolderButton, &QAbstractButton::clicked, this, &MainWindow::openDatabaseFolder);
+    auto *backupButton = new FancyButton(Icons::Name::Save, QStringLiteral("نسخ احتياطي"), FancyButton::Kind::Secondary, page);
+    backupButton->setToolTip(QStringLiteral("حفظ نسخة احتياطية من القاعدة كلها في ملف واحد، أو استعادتها"));
+    connect(backupButton, &QAbstractButton::clicked, this, [this, backupButton] {
+        QMenu menu(this);
+        menu.addAction(Icons::icon(Icons::Name::Save, Theme::Text, 18), QStringLiteral("إنشاء نسخة احتياطية…"), this, &MainWindow::backupDatabase);
+        menu.addAction(Icons::icon(Icons::Name::History, Theme::Text, 18), QStringLiteral("استعادة من نسخة احتياطية…"), this, &MainWindow::restoreDatabase);
+        menu.exec(backupButton->mapToGlobal(QPoint(0, backupButton->height())));
+    });
 
     auto *header = new QHBoxLayout;
     header->setSpacing(10);
@@ -1049,8 +1066,9 @@ QWidget *MainWindow::createDatabasePage()
     m_subtitles << m_databaseSubtitle;
     header->addLayout(titles, 1);
     header->addWidget(addPersonButton);
+    header->addWidget(backupButton);
     header->addWidget(openFolderButton);
-    m_headerButtons << addPersonButton << openFolderButton;
+    m_headerButtons << addPersonButton << backupButton << openFolderButton;
     layout->addLayout(header);
 
     // قائمة الأشخاص
@@ -1236,6 +1254,7 @@ void MainWindow::setBusy(bool busy)
     m_openImageButton->setEnabled(idle);
     m_openVideoButton->setEnabled(idle);
     m_cameraButton->setEnabled(idle);
+    m_folderScanButton->setEnabled(m_ready);
     m_stopButton->setEnabled(m_videoRunning);
     m_pauseButton->setEnabled(m_videoRunning);
     m_pauseButton->setVisible(m_videoRunning);
@@ -2032,6 +2051,25 @@ void MainWindow::showFaceDetails()
     m_faceDetails->setText(html);
 }
 
+void MainWindow::openFolderScan()
+{
+    if (!m_ready)
+        return;
+    auto *dialog = new FolderScanDialog(&m_engine, &m_database, threshold(), m_lastDirectory, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &FolderScanDialog::analyzeRequested, this, [this](const QString &path) {
+        m_navGroup->button(0)->click();
+        if (m_openImageButton->isEnabled())
+            analyzeImage(path);
+    });
+    connect(dialog, &QDialog::finished, this, [this, dialog] {
+        if (!dialog->lastDirectory().isEmpty())
+            m_lastDirectory = dialog->lastDirectory();
+    });
+    dialog->show();
+    QTimer::singleShot(0, dialog, &FolderScanDialog::chooseFolder);
+}
+
 void MainWindow::saveFaces()
 {
     if (m_faces.isEmpty())
@@ -2046,7 +2084,7 @@ void MainWindow::saveFaces()
     const bool hasReport = report.open(QIODevice::WriteOnly | QIODevice::Text);
     if (hasReport) {
         csv.setGenerateByteOrderMark(true);
-        csv << QStringLiteral("الرقم,الاسم,الحالة,التشابه %,جودة الوجه %,عدد الإطارات,أول ظهور,آخر ظهور,الصورة\n");
+        csv << QStringLiteral("الرقم,الاسم,الحالة,التشابه %,جودة الوجه %,عدد الإطارات,أول ظهور,آخر ظهور,الصورة,مدة الظهور (ث),مرات الظهور\n");
     }
     auto field = [](QString text) {
         text.replace(QLatin1Char('"'), QStringLiteral("\"\""));
@@ -2063,10 +2101,22 @@ void MainWindow::saveFaces()
             csv << (i + 1) << ',' << field(matchLabel(face.match)) << ',' << field(statusDescription(face.match.status)) << ','
                 << qRound(face.match.score * 100) << ',' << qRound(face.quality * 100) << ',' << face.frames << ','
                 << (face.firstSeenMs >= 0 ? ImageIO::formatTime(face.firstSeenMs) : QString()) << ','
-                << (face.lastSeenMs >= 0 ? ImageIO::formatTime(face.lastSeenMs) : QString()) << ',' << field(fileName) << '\n';
+                << (face.lastSeenMs >= 0 ? ImageIO::formatTime(face.lastSeenMs) : QString()) << ',' << field(fileName) << ','
+                << (m_videoMode ? QString::number(Report::screenTime(face.appearances) / 1000.0, 'f', 1) : QString()) << ','
+                << (m_videoMode ? QString::number(face.appearances.size()) : QString()) << '\n';
         }
     }
-    Toast::show(this, QStringLiteral("تم حفظ %1 وجه مع تقرير CSV").arg(saved));
+    // وتقرير مرئي يُفتح في المتصفح ويُطبع
+    Report::Source source;
+    source.video = m_videoMode;
+    source.path = m_videoMode ? m_videoSource : m_currentImagePath;
+    source.durationMs = m_videoDurationMs;
+    const QString htmlPath = QDir(folder).filePath(QStringLiteral("تقرير.html"));
+    const bool html = Report::writeHtml(htmlPath, m_faces, source);
+    Toast::show(this, html ? QStringLiteral("تم حفظ %1 وجه مع تقرير مرئي وتقرير CSV").arg(saved)
+                           : QStringLiteral("تم حفظ %1 وجه مع تقرير CSV").arg(saved));
+    if (html)
+        QDesktopServices::openUrl(QUrl::fromLocalFile(htmlPath));
 }
 
 void MainWindow::addSelectedFaceToDatabase()
@@ -2617,6 +2667,64 @@ void MainWindow::removePhoto()
 void MainWindow::openDatabaseFolder()
 {
     QDesktopServices::openUrl(QUrl::fromLocalFile(m_database.directory()));
+}
+
+void MainWindow::backupDatabase()
+{
+    const QString name = QStringLiteral("ملامح-نسخة-احتياطية-%1.malamih").arg(QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd")));
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("حفظ نسخة احتياطية"), QDir(m_lastDirectory).filePath(name),
+                                                      QStringLiteral("نسخ ملامح الاحتياطية (*.malamih)"));
+    if (path.isEmpty())
+        return;
+    m_lastDirectory = QFileInfo(path).absolutePath();
+    QString error;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = m_database.backup(path, &error);
+    QApplication::restoreOverrideCursor();
+    if (ok)
+        Toast::show(this, QStringLiteral("حُفظت النسخة الاحتياطية (%1 شخص، %2 ميغابايت)")
+                              .arg(m_database.personCount())
+                              .arg(QFileInfo(path).size() / 1048576.0, 0, 'f', 1));
+    else
+        QMessageBox::warning(this, QStringLiteral("نسخة احتياطية"), QStringLiteral("تعذر إنشاء النسخة الاحتياطية:\n%1").arg(error));
+}
+
+void MainWindow::restoreDatabase()
+{
+    if (m_analyzing || m_videoRunning) {
+        Toast::show(this, QStringLiteral("أوقف التحليل الجاري أولاً"), Toast::Kind::Warning);
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("استعادة نسخة احتياطية"), m_lastDirectory,
+                                                      QStringLiteral("نسخ ملامح الاحتياطية (*.malamih *.db);;كل الملفات (*)"));
+    if (path.isEmpty())
+        return;
+    m_lastDirectory = QFileInfo(path).absolutePath();
+    const QPair<qint64, qint64> counts = FaceDatabase::inspectBackup(path);
+    if (counts.first < 0) {
+        QMessageBox::warning(this, QStringLiteral("استعادة"), QStringLiteral("هذا الملف ليس نسخة احتياطية صالحة من ملامح."));
+        return;
+    }
+    const auto answer = QMessageBox::question(
+        this, QStringLiteral("استعادة نسخة احتياطية"),
+        QStringLiteral("ستُستبدل القاعدة الحالية (%1 شخص، %2 صورة) بالنسخة الاحتياطية (%3 شخص، %4 صورة).\n\n"
+                       "تُحفظ القاعدة الحالية بجانبها باسم faces.db.before-restore تحسباً. هل تريد المتابعة؟")
+            .arg(m_database.personCount())
+            .arg(m_database.photoCount())
+            .arg(counts.first)
+            .arg(counts.second));
+    if (answer != QMessageBox::Yes)
+        return;
+    QString error;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = m_database.restore(path, &error);
+    QApplication::restoreOverrideCursor();
+    if (!ok) {
+        QMessageBox::warning(this, QStringLiteral("استعادة"), QStringLiteral("تعذرت الاستعادة، وبقيت القاعدة كما كانت:\n%1").arg(error));
+        return;
+    }
+    refreshMatches();
+    Toast::show(this, QStringLiteral("استُعيدت القاعدة: %1 شخص").arg(m_database.personCount()));
 }
 
 // ───────────── تحسين الصور والخط الزمني ─────────────

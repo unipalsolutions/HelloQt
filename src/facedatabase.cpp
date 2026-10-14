@@ -5,7 +5,9 @@
 #include <QBuffer>
 #include <QCache>
 #include <QDir>
+#include <QDateTime>
 #include <QFile>
+#include <QFileInfo>
 #include <QHash>
 #include <QImageReader>
 #include <QJsonArray>
@@ -757,6 +759,116 @@ bool FaceDatabase::open(const QString &directory, QString *error)
 QString FaceDatabase::directory() const
 {
     return m_directory;
+}
+
+bool FaceDatabase::backup(const QString &target, QString *error) const
+{
+    if (!m_db.isOpen()) {
+        if (error)
+            *error = QStringLiteral("قاعدة البيانات غير مفتوحة");
+        return false;
+    }
+    // VACUUM INTO ينتج نسخة متسقة ومضغوطة حتى أثناء الاستخدام، ويرفض الكتابة فوق ملف موجود
+    if (QFile::exists(target) && !QFile::remove(target)) {
+        if (error)
+            *error = QStringLiteral("تعذر استبدال الملف الموجود");
+        return false;
+    }
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("VACUUM INTO '%1'").arg(QString(target).replace(QLatin1Char('\''), QStringLiteral("''"))))) {
+        if (error)
+            *error = query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QPair<qint64, qint64> FaceDatabase::inspectBackup(const QString &path)
+{
+    QPair<qint64, qint64> counts(-1, -1);
+    const QString connection = QStringLiteral("malamih-inspect-%1").arg(QUuid::createUuid().toString(QUuid::Id128));
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(path);
+        db.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
+        if (QFileInfo::exists(path) && db.open()) {
+            QSqlQuery query(db);
+            if (query.exec(QStringLiteral("SELECT (SELECT COUNT(*) FROM persons), (SELECT COUNT(*) FROM photos),"
+                                          " (SELECT COUNT(*) FROM meta)"))
+                && query.next())
+                counts = qMakePair(query.value(0).toLongLong(), query.value(1).toLongLong());
+            query.finish();
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(connection);
+    return counts;
+}
+
+bool FaceDatabase::restore(const QString &source, QString *error)
+{
+    auto fail = [error](const QString &message) {
+        if (error)
+            *error = message;
+        return false;
+    };
+    if (inspectBackup(source).first < 0)
+        return fail(QStringLiteral("الملف ليس نسخة احتياطية صالحة من ملامح"));
+    const QString directory = m_directory;
+    const QDir dir(directory);
+    const QString path = dir.filePath(QString::fromLatin1(DatabaseFile));
+    const QString incoming = path + QStringLiteral(".restoring");
+    QFile::remove(incoming);
+    if (!QFile::copy(source, incoming))
+        return fail(QStringLiteral("تعذر نسخ ملف النسخة الاحتياطية"));
+
+    // إصدار جديد يجعل فهرس المطابقة الحالي غير مطابق فيُعاد بناؤه من النسخة المستعادة
+    {
+        const QString connection = QStringLiteral("malamih-restore-%1").arg(QUuid::createUuid().toString(QUuid::Id128));
+        bool ok = false;
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+            db.setDatabaseName(incoming);
+            if (db.open()) {
+                QSqlQuery query(db);
+                ok = query.exec(QStringLiteral("INSERT OR REPLACE INTO meta(key, value) VALUES('generation', '%1')")
+                                    .arg(QDateTime::currentMSecsSinceEpoch()));
+                query.finish();
+                db.close();
+            }
+        }
+        QSqlDatabase::removeDatabase(connection);
+        if (!ok) {
+            QFile::remove(incoming);
+            return fail(QStringLiteral("تعذر تجهيز النسخة الاحتياطية"));
+        }
+    }
+
+    close();
+    const QString previous = path + QStringLiteral(".before-restore");
+    QFile::remove(previous);
+    // بعد الإغلاق يُدمج سجل WAL في الملف الرئيسي، فيكفي نقل faces.db
+    if (QFile::exists(path) && !QFile::rename(path, previous)) {
+        QFile::remove(incoming);
+        open(directory);
+        return fail(QStringLiteral("تعذر نقل القاعدة الحالية؛ أغلق أي برنامج يستخدمها ثم حاول مرة أخرى"));
+    }
+    QFile::remove(path + QStringLiteral("-wal"));
+    QFile::remove(path + QStringLiteral("-shm"));
+    if (!QFile::rename(incoming, path)) {
+        QFile::rename(previous, path);
+        open(directory);
+        return fail(QStringLiteral("تعذر وضع النسخة المستعادة"));
+    }
+    QString openError;
+    if (!open(directory, &openError)) {
+        // العودة إلى القاعدة السابقة كما كانت
+        QFile::remove(path);
+        QFile::rename(previous, path);
+        open(directory);
+        return fail(openError);
+    }
+    return true;
 }
 
 // أعمدة ملف الشخص التي أضيفت بعد الإصدار الأول من القاعدة

@@ -124,6 +124,19 @@ jobs:
           if ($open -gt 3000) { throw "Opening a large database is too slow: $open ms" }
         shell: pwsh
 
+      - name: Backup and report tests
+        run: |
+          $out = Join-Path $PWD "backup.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--backup-test', (Join-Path $PWD "backuptest"), $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "Backup/restore test failed" }
+          Invoke-WebRequest "https://raw.githubusercontent.com/ageitgey/face_recognition/master/examples/knn_examples/test/obama_and_biden.jpg" -OutFile report_input.jpg
+          $out = Join-Path $PWD "report.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--report-test', (Join-Path $PWD "report_input.jpg"), (Join-Path $PWD "report.html"), $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "HTML report test failed" }
+        shell: pwsh
+
       - name: Smoke test
         run: |
           Add-Type @"

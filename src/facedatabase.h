@@ -78,6 +78,13 @@ public:
     void close();
     QString directory() const;
 
+    // نسخة احتياطية كاملة في ملف واحد (الأشخاص وصورهم وبصماتهم وسجل الظهور)، تُنشأ والقاعدة مفتوحة
+    bool backup(const QString &target, QString *error = nullptr) const;
+    // يستبدل القاعدة بنسخة احتياطية بعد التحقق منها؛ القاعدة الحالية تُحفظ بجانبها باسم faces.db.before-restore
+    bool restore(const QString &source, QString *error = nullptr);
+    // عدد الأشخاص والصور في ملف نسخة احتياطية، أو -1 إن لم يكن نسخة صالحة
+    static QPair<qint64, qint64> inspectBackup(const QString &path);
+
     qint64 personCount() const { return m_personCount; }
     qint64 photoCount() const { return m_photoCount; }
 

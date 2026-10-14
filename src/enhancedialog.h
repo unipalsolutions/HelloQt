@@ -62,6 +62,10 @@ private:
     void copy();
     void levelFace();
     void updateEnabled();
+    void setCropMode(bool on);
+    void cropToFace();
+    void updateCropButtons();
+    bool cropActive() const;
 
     cv::Mat m_source;
     cv::Mat m_preview; // نسخة مصغرة للمعاينة السريعة
@@ -75,8 +79,12 @@ private:
     bool m_mirror = false;
     bool m_updating = false;
     QTimer *m_debounce;
-    QFutureWatcher<QImage> m_watcher;
+    QFutureWatcher<QPair<QImage, QImage>> m_watcher; // المحسّنة، والأصل بنفس التدوير والقص
     bool m_pending = false;
+    bool m_cropMode = false;
+    cv::Rect2d m_crop{0, 0, 1, 1};
+    FancyButton *m_cropButton = nullptr;
+    FancyButton *m_clearCrop = nullptr;
     QString m_name;
     QString m_lastDirectory;
     QList<QWidget *> m_needImage;

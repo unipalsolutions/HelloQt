@@ -98,6 +98,7 @@ private:
     void analyzeVideoFrom(qint64 positionMs);
     void reanalyzeVideo();
     void openEnhancer();
+    void openFolderScan();
     void enhanceVideoFrame(qint64 positionMs);
     void showTimelineMenu(const QPoint &globalPos, qint64 positionMs, int laneId);
     void exportClip(const QList<QPair<qint64, qint64>> &segments, const QString &suggestedName);
@@ -132,6 +133,8 @@ private:
     void addPhotoFiles(const QString &personId, const QStringList &files);
     void removePhoto();
     void openDatabaseFolder();
+    void backupDatabase();
+    void restoreDatabase();
     QString selectedPersonId() const;
     bool enrollFace(const QString &personId, const FaceItem &face);
     int enrollFaces(const QString &personId, const QList<FaceItem> &faces);
@@ -214,6 +217,7 @@ private:
     QSpinBox *m_frameStepSpin = nullptr;
     QComboBox *m_performanceCombo = nullptr;
     FancyButton *m_enhanceImageButton = nullptr;
+    FancyButton *m_folderScanButton = nullptr;
     class EnhanceDialog *m_studio = nullptr; // صفحة تحسين الصور
     QProgressBar *m_progress = nullptr;
     QLabel *m_thresholdWarning = nullptr;

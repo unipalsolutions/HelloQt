@@ -62,6 +62,10 @@ qt_add_executable(Malamih
     src/imagelab.cpp
     src/enhancedialog.h
     src/enhancedialog.cpp
+    src/folderscan.h
+    src/folderscan.cpp
+    src/report.h
+    src/report.cpp
 )
 
 # أيقونة التطبيق: داخل الملف التنفيذي على Windows وللنافذة عبر موارد Qt
