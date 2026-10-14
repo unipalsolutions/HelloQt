@@ -279,7 +279,10 @@ QString FaceEngine::defaultModelsDir()
 bool FaceEngine::load(const QString &modelsDir, QString *error)
 {
     const QString detectorPath = QDir(modelsDir).filePath(QString::fromLatin1(DetectorFile));
-    const QString recognizerPath = QDir(modelsDir).filePath(QString::fromLatin1(RecognizerFile));
+    // نموذج تعرّف بديل لأدوات التشخيص فقط (مقارنة نماذج على نفس الصور)
+    const QString alternative = qEnvironmentVariable("MALAMIH_RECOGNIZER");
+    const QString recognizerPath = alternative.isEmpty()
+        ? QDir(modelsDir).filePath(QString::fromLatin1(RecognizerFile)) : alternative;
     for (const QString &path : {detectorPath, recognizerPath}) {
         if (!QFileInfo::exists(path)) {
             if (error)
