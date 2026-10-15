@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLocale>
 #include <QMap>
 #include <QPageLayout>
 #include <QPageSize>
@@ -100,7 +101,7 @@ public:
     QString tag(const QImage &image)
     {
         const QString src = source(image);
-        return src.isEmpty() ? QString() : QStringLiteral("<img src=\"%1\" width=\"48\" height=\"48\">").arg(src);
+        return src.isEmpty() ? QString() : QStringLiteral("<img src=\"%1\" width=\"40\" height=\"40\">").arg(src);
     }
 
 private:
@@ -168,41 +169,78 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
             std::reverse(cells.begin(), cells.end());
         return QStringLiteral("<tr%1>%2</tr>").arg(attributes, cells.join(QString()));
     };
-    const auto headers = [&tr](const QStringList &titles) {
-        QStringList cells;
-        for (const QString &title : titles)
-            cells << QStringLiteral("<th>%1</th>").arg(title);
-        return tr(cells);
+    const auto td = [](const QString &content, bool center = false) {
+        return QStringLiteral("<td%1>%2</td>").arg(center ? QStringLiteral(" align=\"center\"") : QString(), content);
     };
-    const QString table = QStringLiteral("<table width=\"100%\" cellspacing=\"0\" cellpadding=\"5\">");
-    const QString watchedRow = QStringLiteral(" class=\"watched\" bgcolor=\"#ffe4e4\"");
+    // رأس الجدول داكن ويتكرر أعلى كل صفحة؛ العنوان الذي يبدأ بـ «^» عمود موسَّط
+    const auto open = [&tr](const QStringList &titles) {
+        QStringList cells;
+        for (const QString &title : titles) {
+            const bool center = title.startsWith(QLatin1Char('^'));
+            cells << QStringLiteral("<th bgcolor=\"#1e3a8a\" align=\"%1\">%2</th>")
+                         .arg(center ? QStringLiteral("center") : QStringLiteral("right"), center ? title.mid(1) : title);
+        }
+        return QStringLiteral("<table class=\"grid\" width=\"100%\" cellspacing=\"0\" cellpadding=\"6\"><thead>") + tr(cells)
+            + QStringLiteral("</thead>");
+    };
+    // صفوف متناوبة اللون، والمراقَب بلون تحذير
+    const auto rowAttributes = [](int index, bool alert) {
+        if (alert)
+            return QStringLiteral(" class=\"watched\" bgcolor=\"#fff1f2\"");
+        return index % 2 ? QStringLiteral(" bgcolor=\"#f8fafc\"") : QString();
+    };
+    const auto section = [&tr](const QString &title, const QString &note = QString()) {
+        return QStringLiteral("<table class=\"section\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">")
+            + tr({QStringLiteral("<td class=\"title\" width=\"70%\" align=\"right\">%1</td>").arg(title),
+                  QStringLiteral("<td class=\"note\" width=\"30%\" align=\"left\">%1</td>").arg(note)})
+            + QStringLiteral("</table>");
+    };
+    const auto empty = [](const QString &text) { return QStringLiteral("<p class=\"empty\">%1</p>").arg(text); };
+    const auto time = [](const QDateTime &value) { return QStringLiteral("⁦%1⁩").arg(value.toString(QStringLiteral("HH:mm:ss"))); };
 
     QString html;
     html += QStringLiteral("<html dir=\"rtl\"><head><meta charset=\"utf-8\"><title>تقرير يوم %1</title><style>"
-                           "body { font-family: 'Segoe UI', Tahoma, sans-serif; color: #10233f; margin: %2; }"
-                           "h1 { color: #1d4ed8; margin-bottom: 2px; } h2 { color: #1d4ed8; margin-top: 22px; }"
-                           ".muted { color: #64748b; }"
-                           "table { border-collapse: collapse; width: 100%; }"
-                           "th { background: #e0ecff; text-align: right; padding: 6px; }"
-                           "td { border-bottom: 1px solid #dbe5f3; padding: 5px 6px; vertical-align: middle; }"
-                           "tr.watched td { background: #ffe4e4; color: #9f1239; font-weight: bold; }"
-                           ".num { font-size: 20pt; font-weight: bold; color: #1d4ed8; }"
+                           "body { font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 10pt; color: #0f172a; %2 }"
+                           "table.grid { border-collapse: collapse; }"
+                           "th { color: #ffffff; font-size: 9pt; font-weight: bold; padding: 7px 8px; }"
+                           "table.grid td { border-bottom: 1px solid #e2e8f0; padding: 6px 8px; vertical-align: middle; }"
+                           "tr.watched td { color: #be123c; font-weight: bold; }"
+                           "table.section { margin-top: 20px; margin-bottom: 8px; }"
+                           "table.section td { border-bottom: 2px solid #2563eb; padding-bottom: 4px; }"
+                           "td.title { color: #1e3a8a; font-size: 14pt; font-weight: bold; }"
+                           "td.note { color: #64748b; font-size: 9pt; }"
+                           ".empty { color: #94a3b8; margin: 6px 0; }"
+                           ".num { font-size: 22pt; font-weight: bold; }"
+                           ".label { color: #475569; font-size: 9pt; }"
                            "</style></head><body dir=\"rtl\">")
-                .arg(day.toString(QStringLiteral("yyyy/MM/dd")), mirror ? QStringLiteral("0") : QStringLiteral("24px"));
-    html += QStringLiteral("<h1>تقرير الكاميرات ليوم ⁦%1⁩</h1>").arg(day.toString(QStringLiteral("yyyy/MM/dd")));
-    html += QStringLiteral("<p class=\"muted\">أُنشئ ⁦%1⁩ ببرنامج ملامح ⁦%2⁩</p>")
-                .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy/MM/dd HH:mm")), QApplication::applicationVersion());
+                .arg(day.toString(QStringLiteral("yyyy/MM/dd")),
+                     mirror ? QStringLiteral("margin: 0;") : QStringLiteral("max-width: 980px; margin: 24px auto; padding: 0 16px;"));
 
-    // الملخص
-    const auto stat = [](const QString &label, const QString &value) {
-        return QStringLiteral("<td align=\"center\" width=\"20%\"><span class=\"num\">%1</span><br><span class=\"muted\">%2</span></td>").arg(value, label);
+    // الترويسة
+    html += QStringLiteral("<table width=\"100%\" cellspacing=\"0\" cellpadding=\"16\" bgcolor=\"#1e3a8a\">");
+    html += tr({QStringLiteral("<td width=\"65%\" align=\"right\"><span style=\"color:#ffffff; font-size:20pt; font-weight:bold\">تقرير الكاميرات اليومي</span><br>"
+                               "<span style=\"color:#c7d2fe; font-size:11pt\">%1 ⁦%2⁩</span></td>")
+                    .arg(QLocale(QLocale::Arabic).dayName(day.dayOfWeek()), day.toString(QStringLiteral("yyyy/MM/dd"))),
+                QStringLiteral("<td width=\"35%\" align=\"left\" valign=\"bottom\"><span style=\"color:#ffffff; font-size:13pt; font-weight:bold\">ملامح</span><br>"
+                               "<span style=\"color:#c7d2fe; font-size:8pt\">أُنشئ ⁦%1⁩ · الإصدار ⁦%2⁩</span></td>")
+                    .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy/MM/dd HH:mm")), QApplication::applicationVersion())});
+    html += QStringLiteral("</table>");
+
+    // الملخص: بطاقات
+    const auto stat = [](const QString &label, const QString &value, const QString &color, const QString &background) {
+        return QStringLiteral("<td align=\"center\" width=\"20%\" bgcolor=\"%4\" style=\"border-top: 3px solid %3\">"
+                              "<span class=\"num\" style=\"color:%3\">%1</span><br><span class=\"label\">%2</span></td>")
+            .arg(value, label, color, background);
     };
-    html += QStringLiteral("<table width=\"100%\" cellspacing=\"0\" cellpadding=\"8\">");
-    html += tr({stat(QStringLiteral("أشخاص معروفون"), QString::number(persons.size())),
-                stat(QStringLiteral("مرات ظهورهم"), QString::number(known)),
-                stat(QStringLiteral("تنبيهات مراقبة"), QString::number(alerts)),
-                stat(QStringLiteral("زوار مجهولون"), QString::number(visitors.size())),
-                stat(QStringLiteral("ساعات التسجيل"), hours(recordedMs))});
+    const QString blue = QStringLiteral("#2563eb");
+    const QString pale = QStringLiteral("#eff6ff");
+    html += QStringLiteral("<table width=\"100%\" cellspacing=\"6\" cellpadding=\"10\" style=\"margin-top: 10px\">");
+    html += tr({stat(QStringLiteral("أشخاص معروفون"), QString::number(persons.size()), blue, pale),
+                stat(QStringLiteral("مرات ظهورهم"), QString::number(known), blue, pale),
+                alerts > 0 ? stat(QStringLiteral("تنبيهات مراقبة"), QString::number(alerts), QStringLiteral("#e11d48"), QStringLiteral("#fff1f2"))
+                           : stat(QStringLiteral("تنبيهات مراقبة"), QStringLiteral("0"), QStringLiteral("#16a34a"), QStringLiteral("#f0fdf4")),
+                stat(QStringLiteral("زوار مجهولون"), QString::number(visitors.size()), QStringLiteral("#d97706"), QStringLiteral("#fffbeb")),
+                stat(QStringLiteral("ساعات التسجيل"), hours(recordedMs), QStringLiteral("#7c3aed"), QStringLiteral("#f5f3ff"))});
     html += QStringLiteral("</table>");
 
     // الكاميرات
@@ -211,20 +249,21 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
         if (!cameras.contains(camera))
             cameras << camera;
     }
-    html += QStringLiteral("<h2>الكاميرات</h2>");
+    html += section(QStringLiteral("الكاميرات"), cameras.isEmpty() ? QString() : QStringLiteral("%1 كاميرا").arg(cameras.size()));
     if (cameras.isEmpty()) {
-        html += QStringLiteral("<p class=\"muted\">لا ظهور ولا تسجيل في هذا اليوم.</p>");
+        html += empty(QStringLiteral("لا ظهور ولا تسجيل في هذا اليوم."));
     } else {
-        html += table
-            + headers({QStringLiteral("الكاميرا"), QStringLiteral("ظهور معروفين"), QStringLiteral("ظهور زوار مجهولين"),
-                       QStringLiteral("ملفات التسجيل"), QStringLiteral("ساعات التسجيل")});
+        html += open({QStringLiteral("الكاميرا"), QStringLiteral("^ظهور معروفين"), QStringLiteral("^ظهور زوار مجهولين"),
+                      QStringLiteral("^ملفات التسجيل"), QStringLiteral("^ساعات التسجيل")});
+        int index = 0;
         for (const QString &camera : std::as_const(cameras)) {
             const auto counts = perCamera.value(camera);
             // أسماء ملفات التسجيل بلا الرموز الممنوعة في أسماء الملفات
             const auto files = recorded.value(recorded.contains(camera) ? camera : CameraRecorder::fileCameraName(camera));
-            html += tr({QStringLiteral("<td>%1</td>").arg(escape(camera)), QStringLiteral("<td>%1</td>").arg(counts.first),
-                        QStringLiteral("<td>%1</td>").arg(counts.second), QStringLiteral("<td>%1</td>").arg(files.first),
-                        QStringLiteral("<td>%1</td>").arg(hours(files.second))});
+            html += tr({td(QStringLiteral("<b>%1</b>").arg(escape(camera))), td(QString::number(counts.first), true),
+                        td(QString::number(counts.second), true), td(QString::number(files.first), true),
+                        td(hours(files.second), true)},
+                       rowAttributes(index++, false));
         }
         html += QStringLiteral("</table>");
     }
@@ -238,21 +277,21 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
             return a.count > b.count;
         return a.first < b.first;
     });
-    html += QStringLiteral("<h2>من ظهر</h2>");
+    html += section(QStringLiteral("من ظهر"), rows.isEmpty() ? QString() : QStringLiteral("%1 شخص").arg(rows.size()));
     if (rows.isEmpty()) {
-        html += QStringLiteral("<p class=\"muted\">لم يظهر أحد من المسجلين أمام الكاميرات.</p>");
+        html += empty(QStringLiteral("لم يظهر أحد من المسجلين أمام الكاميرات."));
     } else {
-        html += table
-            + headers({QString(), QStringLiteral("الاسم"), QStringLiteral("أول ظهور"), QStringLiteral("آخر ظهور"), QStringLiteral("المرات"),
-                       QStringLiteral("الكاميرات")});
+        html += open({QString(), QStringLiteral("الاسم"), QStringLiteral("^أول ظهور"), QStringLiteral("^آخر ظهور"), QStringLiteral("^المرات"),
+                      QStringLiteral("الكاميرات")});
+        int index = 0;
         for (const PersonRow &row : std::as_const(rows)) {
-            html += tr({QStringLiteral("<td width=\"56\">%1</td>").arg(images.tag(row.face)),
-                        QStringLiteral("<td>%1</td>").arg(escape(row.watched ? QStringLiteral("⚠ ") + row.name : row.name)),
-                        QStringLiteral("<td>⁦%1⁩</td>").arg(row.first.toString(QStringLiteral("HH:mm:ss"))),
-                        QStringLiteral("<td>⁦%1⁩</td>").arg(row.last.toString(QStringLiteral("HH:mm:ss"))),
-                        QStringLiteral("<td>%1</td>").arg(row.count),
-                        QStringLiteral("<td>%1</td>").arg(escape(row.cameras.join(QStringLiteral("، "))))},
-                       row.watched ? watchedRow : QString());
+            const QString name = row.watched
+                ? QStringLiteral("%1<br><span style=\"font-size:8pt; font-weight:normal; color:#e11d48\">⚠ مراقَب</span>").arg(escape(row.name))
+                : escape(row.name);
+            html += tr({QStringLiteral("<td width=\"52\">%1</td>").arg(images.tag(row.face)), td(name), td(time(row.first), true),
+                        td(time(row.last), true), td(QString::number(row.count), true),
+                        td(escape(row.cameras.join(QStringLiteral("، "))))},
+                       rowAttributes(index++, row.watched));
         }
         html += QStringLiteral("</table>");
     }
@@ -262,48 +301,47 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
     std::sort(unknown.begin(), unknown.end(), [](const VisitorRow &a, const VisitorRow &b) {
         return a.count != b.count ? a.count > b.count : a.first < b.first;
     });
-    html += QStringLiteral("<h2>الزوار المجهولون</h2>");
+    html += section(QStringLiteral("الزوار المجهولون"),
+                    unknown.isEmpty() ? QString()
+                                      : QStringLiteral("%1 زائراً · %2 مرة ظهور%3")
+                                            .arg(unknown.size())
+                                            .arg(visitorSightings)
+                                            .arg(unknown.size() > MaxVisitors ? QStringLiteral(" · أول %1 فقط").arg(MaxVisitors) : QString()));
     if (unknown.isEmpty()) {
-        html += QStringLiteral("<p class=\"muted\">لا زوار مجهولين.</p>");
+        html += empty(QStringLiteral("لا زوار مجهولين."));
     } else {
-        html += QStringLiteral("<p class=\"muted\">%1 زائراً، %2 مرة ظهور%3</p>")
-                    .arg(unknown.size())
-                    .arg(visitorSightings)
-                    .arg(unknown.size() > MaxVisitors ? QStringLiteral(" (أول %1 فقط)").arg(MaxVisitors) : QString());
-        html += table
-            + headers({QString(), QStringLiteral("الزائر"), QStringLiteral("أول ظهور"), QStringLiteral("آخر ظهور"), QStringLiteral("المرات"),
-                       QStringLiteral("الكاميرات")});
+        html += open({QString(), QStringLiteral("الزائر"), QStringLiteral("^أول ظهور"), QStringLiteral("^آخر ظهور"), QStringLiteral("^المرات"),
+                      QStringLiteral("الكاميرات")});
         for (int i = 0; i < std::min<qsizetype>(unknown.size(), MaxVisitors); ++i) {
             const VisitorRow &row = unknown.at(i);
-            html += tr({QStringLiteral("<td width=\"56\">%1</td>").arg(images.tag(row.face)), QStringLiteral("<td>⁦#%1⁩</td>").arg(row.id),
-                        QStringLiteral("<td>⁦%1⁩</td>").arg(row.first.toString(QStringLiteral("HH:mm:ss"))),
-                        QStringLiteral("<td>⁦%1⁩</td>").arg(row.last.toString(QStringLiteral("HH:mm:ss"))),
-                        QStringLiteral("<td>%1</td>").arg(row.count),
-                        QStringLiteral("<td>%1</td>").arg(escape(row.cameras.join(QStringLiteral("، "))))});
+            html += tr({QStringLiteral("<td width=\"52\">%1</td>").arg(images.tag(row.face)), td(QStringLiteral("<b>⁦#%1⁩</b>").arg(row.id)),
+                        td(time(row.first), true), td(time(row.last), true), td(QString::number(row.count), true),
+                        td(escape(row.cameras.join(QStringLiteral("، "))))},
+                       rowAttributes(i, false));
         }
         html += QStringLiteral("</table>");
     }
 
     // أحداث اليوم من سجل الأحداث
     const QStringList events = AppLog::lines(day);
-    html += QStringLiteral("<h2>أحداث اليوم</h2>");
+    const qsizetype first = std::max<qsizetype>(0, events.size() - MaxEvents);
+    html += section(QStringLiteral("أحداث اليوم"),
+                    first > 0 ? QStringLiteral("آخر %1 من %2").arg(MaxEvents).arg(events.size())
+                              : (events.isEmpty() ? QString() : QStringLiteral("%1 حدث").arg(events.size())));
     if (events.isEmpty()) {
-        html += QStringLiteral("<p class=\"muted\">لا أحداث مسجلة.</p>");
+        html += empty(QStringLiteral("لا أحداث مسجلة."));
     } else {
-        html += table + headers({QStringLiteral("الوقت"), QStringLiteral("الحدث")});
-        const qsizetype first = std::max<qsizetype>(0, events.size() - MaxEvents);
+        html += open({QStringLiteral("^الوقت"), QStringLiteral("الحدث")});
         for (qsizetype i = first; i < events.size(); ++i) {
             const QString &line = events.at(i);
             const bool problem = line.contains(QStringLiteral("[انهيار]")) || line.contains(QStringLiteral("[خطأ]"))
                 || line.contains(QStringLiteral("انقطع")) || line.contains(QStringLiteral("منقطعة"));
-            html += tr({QStringLiteral("<td width=\"70\">⁦%1⁩</td>").arg(escape(line.left(8))),
-                        QStringLiteral("<td>%1</td>").arg(escape(line.mid(10)))},
-                       problem ? watchedRow : QString());
+            html += tr({QStringLiteral("<td width=\"80\" align=\"center\">⁦%1⁩</td>").arg(escape(line.left(8))), td(escape(line.mid(10)))},
+                       rowAttributes(int(i - first), problem));
         }
         html += QStringLiteral("</table>");
-        if (first > 0)
-            html += QStringLiteral("<p class=\"muted\">آخر %1 حدث فقط من %2</p>").arg(MaxEvents).arg(events.size());
     }
+    html += QStringLiteral("<p style=\"color:#94a3b8; font-size:8pt; margin-top:18px\">أُنشئ هذا التقرير محلياً ببرنامج ملامح دون إرسال أي بيانات عبر الإنترنت.</p>");
     html += QStringLiteral("</body></html>");
     return html;
 }
@@ -317,9 +355,13 @@ void makeRightToLeft(QTextDocument *document)
         QTextBlockFormat format = block.blockFormat();
         format.setLayoutDirection(Qt::RightToLeft);
         cursor.setPosition(block.position());
-        // خلايا الجداول تبقى على محاذاتها المكتوبة (توسيط الأرقام مثلاً)؛ ما عداها إلى اليمين
-        if (!cursor.currentTable() || !(format.alignment() & (Qt::AlignHCenter | Qt::AlignLeft)))
-            format.setAlignment(Qt::AlignRight | Qt::AlignAbsolute);
+        // خلايا الجداول تبقى على محاذاتها المكتوبة (توسيط الأرقام أو يسار الترويسة)؛ ما عداها إلى اليمين
+        const Qt::Alignment horizontal = format.alignment() & Qt::AlignHorizontal_Mask;
+        const Qt::Alignment vertical = format.alignment() & ~Qt::AlignHorizontal_Mask;
+        if (!cursor.currentTable() || !(horizontal & (Qt::AlignHCenter | Qt::AlignLeft)))
+            format.setAlignment(vertical | Qt::AlignRight | Qt::AlignAbsolute);
+        else if (horizontal & Qt::AlignLeft)
+            format.setAlignment(vertical | Qt::AlignLeft | Qt::AlignAbsolute);
         cursor.setBlockFormat(format);
     }
 }
