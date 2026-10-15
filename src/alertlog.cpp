@@ -1,5 +1,7 @@
 #include "alertlog.h"
 
+#include "clipexport.h"
+
 #include "cameras.h"
 #include "carddelegates.h"
 #include "facetypes.h"
@@ -114,12 +116,15 @@ AlertLogDialog::AlertLogDialog(const FaceDatabase *database, QWidget *parent)
     m_open->setToolTip(QStringLiteral("فتح الصورة أو الفيديو الذي ظهر فيه الشخص في صفحة التعرف"));
     m_snapshot = new FancyButton(Icons::Name::Camera, QStringLiteral("لقطة الإطار"), FancyButton::Kind::Secondary, this);
     m_snapshot->setToolTip(QStringLiteral("صورة الإطار كاملاً لحظة ظهور الشخص أمام الكاميرا"));
+    m_clip = new FancyButton(Icons::Name::Film, QStringLiteral("تصدير المقطع…"), FancyButton::Kind::Secondary, this);
+    m_clip->setToolTip(QStringLiteral("حفظ 30 ثانية من التسجيل حول لحظة الظهور في ملف واحد جاهز للتسليم"));
     m_person = new FancyButton(Icons::Name::Users, QStringLiteral("ملف الشخص"), FancyButton::Kind::Secondary, this);
     m_export = new FancyButton(Icons::Name::Export, QStringLiteral("تصدير CSV…"), FancyButton::Kind::Secondary, this);
     m_export->setToolTip(QStringLiteral("حفظ السجل المعروض في ملف يُفتح ببرنامج Excel"));
     auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     buttons->addWidget(m_open);
     buttons->addWidget(m_snapshot);
+    buttons->addWidget(m_clip);
     buttons->addWidget(m_person);
     buttons->addWidget(m_export);
     buttons->addStretch(1);
@@ -134,6 +139,11 @@ AlertLogDialog::AlertLogDialog(const FaceDatabase *database, QWidget *parent)
     connect(m_snapshot, &QAbstractButton::clicked, this, [this] {
         if (const SightingEntry *entry = currentEntry())
             QDesktopServices::openUrl(QUrl::fromLocalFile(entry->sighting.snapshot));
+    });
+    connect(m_clip, &QAbstractButton::clicked, this, [this] {
+        if (const SightingEntry *entry = currentEntry())
+            ClipExport::exportAround(this, entry->sighting.source, entry->sighting.positionMs,
+                                     QStringLiteral("%1 %2").arg(entry->name, entry->sighting.seen.toString(QStringLiteral("yyyy-MM-dd HH-mm"))));
     });
     connect(m_person, &QAbstractButton::clicked, this, [this] {
         if (const SightingEntry *entry = currentEntry()) {
@@ -217,6 +227,7 @@ void AlertLogDialog::updateButtons()
     const SightingEntry *entry = currentEntry();
     m_open->setEnabled(entry && !isCamera(entry->sighting.source));
     m_snapshot->setEnabled(entry && !entry->sighting.snapshot.isEmpty() && QFileInfo::exists(entry->sighting.snapshot));
+    m_clip->setEnabled(entry && !entry->sighting.camera.isEmpty() && !isCamera(entry->sighting.source) && entry->sighting.positionMs >= 0);
     m_person->setEnabled(entry != nullptr);
     m_export->setEnabled(!m_entries.isEmpty());
 }

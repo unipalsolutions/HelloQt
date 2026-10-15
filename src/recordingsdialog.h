@@ -101,5 +101,6 @@ private:
     QListWidget *m_list;
     FancyButton *m_open;
     FancyButton *m_snapshot;
+    FancyButton *m_clip;
     QList<Entry> m_entries;
 };

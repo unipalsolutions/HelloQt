@@ -8,6 +8,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "camerarules.h"
 #include "videofilters.h"
 
 #include <opencv2/core.hpp>
@@ -40,6 +41,8 @@ public:
         // معالجات خاصة بهذه الكاميرا (نافذة عدة كاميرات)؛ وإلا تُطبَّق المعالجات الحالية في البرنامج
         bool ownFilters = false;
         VideoFilters::Settings filters;
+        // جدول الكاميرا: خارج ساعاته لا يُكتب شيء (يُغلق الملف الجاري)
+        CameraRules::Window schedule;
     };
 
     // مربع وجه بإحداثيات نسبية من 0 إلى 1 من الإطار بعد المعالجات
@@ -67,6 +70,8 @@ public:
     bool isRecording() const { return m_recording; }
     // في وضع الحركة فقط: لا حركة الآن فلا يُكتب شيء
     bool isWaitingForMotion() const { return m_recording && m_waiting; }
+    // خارج ساعات جدول التسجيل الآن
+    bool isOffSchedule() const { return m_recording && m_offSchedule; }
     // مدة التسجيل الحالي بالمللي ثانية
     qint64 elapsedMs() const;
     // ملفات التسجيل الأخير التي حُفظت
@@ -90,6 +95,9 @@ public:
     static void setRetentionDays(int days);
     // يحذف تسجيلات البرنامج (لا غيرها من ملفات المجلد) الأقدم من retentionDays؛ يعيد عدد المحذوف
     static int removeExpired();
+    // مجلد لقطات الظهور (مجلد لكل يوم)، وحذف لقطات الأيام الأقدم من before
+    static QString snapshotsFolder();
+    static int removeExpiredSnapshots(const QDate &before);
     // يحذف أقدم تسجيلات البرنامج حتى تتوفر needBytes في قرص المجلد؛ يعيد هل توفرت
     static bool freeSpace(const QString &folder, qint64 needBytes);
     // كل ملف حفظه البرنامج يُضاف إلى قائمته، فالحذف التلقائي لا يمس ملفات أخرى في المجلد
@@ -140,6 +148,7 @@ private:
     Options m_options;
     std::atomic<bool> m_recording{false};
     std::atomic<bool> m_waiting{false};
+    std::atomic<bool> m_offSchedule{false};
     Clock::time_point m_startedAt;
 
     std::thread m_thread;
@@ -164,6 +173,7 @@ private:
     qint64 m_written = 0;
     Clock::time_point m_spaceChecked;
     Clock::time_point m_cleaned;
+    Clock::time_point m_scheduleChecked;
     // وضع الحركة فقط
     std::deque<Pending> m_preRoll; // آخر ثوانٍ قبل الحركة، تُكتب حين تبدأ
     cv::Mat m_motionReference;

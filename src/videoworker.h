@@ -1,5 +1,7 @@
 #pragma once
 
+#include "camerarules.h"
+
 #include "facedatabase.h"
 #include "facetypes.h"
 
@@ -35,6 +37,8 @@ public:
     void setRegion(const QRectF &region);
     // تحسين كل إطار وتوضيحه قبل التحليل (أبطأ، ويفيد الفيديو الصغير أو المظلم)
     void setEnhance(bool enhance);
+    // مناطق الكاميرا: الوجوه خارجها (أو داخل منطقة متجاهلة) لا تُحلَّل
+    void setZones(const CameraRules::Rules &rules);
     // دمج هويتين يدوياً أثناء التحليل
     void mergeIdentities(int keepId, int removedId);
     void requestStop();
@@ -73,6 +77,7 @@ private:
     GalleryPtr m_gallery;
     float m_threshold = 0.30f;
     QRectF m_region;
+    CameraRules::Rules m_zones;
     bool m_enhance = false;
     QList<QPair<int, int>> m_manualMerges;
     qint64 m_startMs = 0;

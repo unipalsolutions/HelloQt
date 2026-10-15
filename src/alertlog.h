@@ -38,6 +38,7 @@ private:
     QListWidget *m_list;
     FancyButton *m_open;
     FancyButton *m_snapshot;
+    FancyButton *m_clip;
     FancyButton *m_person;
     FancyButton *m_export;
     QList<SightingEntry> m_entries;

@@ -208,6 +208,8 @@ bool CameraRecorder::start(const QString &folder, const QString &cameraName, dou
     m_startedAt = Clock::now();
     m_spaceChecked = m_cleaned = m_startedAt;
     m_waiting = options.motionOnly;
+    m_offSchedule = options.schedule.enabled && !options.schedule.active();
+    m_scheduleChecked = Clock::time_point();
     m_recording = true;
     m_thread = std::thread([this] { run(); });
     return true;
@@ -325,6 +327,21 @@ void CameraRecorder::handle(const Pending &item)
     if (item.time - m_cleaned >= std::chrono::hours(1)) {
         m_cleaned = item.time;
         removeExpired();
+    }
+
+    if (m_options.schedule.enabled) {
+        // يُفحص الجدول مرة في الثانية تقريباً؛ خارج ساعاته يُغلق الملف ولا يُكتب شيء
+        if (item.time - m_scheduleChecked >= std::chrono::seconds(1) || m_scheduleChecked == Clock::time_point()) {
+            m_scheduleChecked = item.time;
+            m_offSchedule = !m_options.schedule.active();
+        }
+        if (m_offSchedule) {
+            if (m_writer.isOpened())
+                closeSegment();
+            m_preRoll.clear();
+            m_hadMotion = false;
+            return;
+        }
     }
 
     if (!m_options.motionOnly) {
@@ -640,6 +657,32 @@ int CameraRecorder::removeExpired()
     }
     if (kept != paths)
         writeManifest(kept);
+    return removed + removeExpiredSnapshots(limit.date());
+}
+
+QString CameraRecorder::snapshotsFolder()
+{
+    return QDir(savedFolder()).filePath(QStringLiteral("لقطات الظهور"));
+}
+
+int CameraRecorder::removeExpiredSnapshots(const QDate &before)
+{
+    // لقطات كل يوم في مجلد باسم تاريخه؛ لا يُحذف إلا ما كتبه البرنامج (صور JPG) ثم المجلد إن فرغ
+    QDir root(snapshotsFolder());
+    if (!root.exists())
+        return 0;
+    int removed = 0;
+    for (const QString &name : root.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        const QDate day = QDate::fromString(name, QStringLiteral("yyyy-MM-dd"));
+        if (!day.isValid() || day >= before)
+            continue;
+        QDir folder(root.filePath(name));
+        for (const QString &file : folder.entryList({QStringLiteral("*.jpg")}, QDir::Files)) {
+            if (folder.remove(file))
+                ++removed;
+        }
+        root.rmdir(name); // يفشل بصمت إن بقي فيه ملف للمستخدم
+    }
     return removed;
 }
 
@@ -676,8 +719,7 @@ QString CameraRecorder::saveSnapshot(const QImage &frame, const QRectF &box, con
     if (frame.isNull())
         return {};
     const QDateTime now = QDateTime::currentDateTime();
-    const QString folder = QDir(CameraRecorder::savedFolder())
-                               .filePath(QStringLiteral("لقطات الظهور/%1").arg(now.toString(QStringLiteral("yyyy-MM-dd"))));
+    const QString folder = QDir(snapshotsFolder()).filePath(now.toString(QStringLiteral("yyyy-MM-dd")));
     if (!QDir().mkpath(folder))
         return {};
     QString safe = name;

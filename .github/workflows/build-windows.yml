@@ -155,6 +155,16 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "Camera watch test failed" }
         shell: pwsh
 
+      - name: Camera rules and maintenance test
+        timeout-minutes: 3
+        run: |
+          # المناطق والجداول، وتنبيه المجهول المتكرر، وحذف القديم، والنسخ الاحتياطي التلقائي، والأصوات، وتصدير المقطع
+          $out = Join-Path $PWD "rules.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--rules-test', (Join-Path $PWD "rulestest"), $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "Camera rules test failed" }
+        shell: pwsh
+
       - name: Daily report test
         timeout-minutes: 3
         run: |

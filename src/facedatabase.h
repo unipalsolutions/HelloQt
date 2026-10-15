@@ -112,6 +112,9 @@ public:
     bool backup(const QString &target, QString *error = nullptr) const;
     // يستبدل القاعدة بنسخة احتياطية بعد التحقق منها؛ القاعدة الحالية تُحفظ بجانبها باسم faces.db.before-restore
     bool restore(const QString &source, QString *error = nullptr);
+    // نسخة احتياطية من ملف القاعدة باتصال مستقل، فتصلح لخيط في الخلفية دون إيقاف الواجهة
+    static bool backupFile(const QString &databaseFile, const QString &target, QString *error = nullptr);
+    QString databaseFile() const;
     // عدد الأشخاص والصور في ملف نسخة احتياطية، أو -1 إن لم يكن نسخة صالحة
     static QPair<qint64, qint64> inspectBackup(const QString &path);
 
@@ -127,6 +130,10 @@ public:
     // قائمة المراقبة: الأشخاص الذين في تصنيفاتهم «مراقبة» أو «مطلوب» يُنبَّه المستخدم فور ظهورهم
     static bool isWatched(const QString &tags);
     static QString withWatchTag(const QString &tags, bool watched);
+    // مستوى تنبيه الشخص المراقَب (AlertLevel في alertsound.h)
+    int alertLevel(const QString &personId) const;
+    bool setAlertLevel(const QString &personId, int level);
+    QHash<QString, int> alertLevels() const; // من مستواه غير العادي فقط
     QSet<QString> watchedIds() const;
 
     // الشخص المسجل برقم الهوية هذا، أو بالاسم نفسه تماماً إن لم يُعطَ رقم هوية
@@ -153,6 +160,8 @@ public:
     bool addCameraSighting(const QString &personId, const QString &camera, const QString &recording, qint64 positionMs,
                            float score, const QImage &face, const QString &snapshot);
     QList<Sighting> sightings(const QString &personId, int limit = 50) const;
+    // يحذف ظهور الكاميرات (للمعروفين والزوار) الأقدم من before؛ ظهور الصور والفيديو يبقى. يعيد عدد المحذوف
+    int removeCameraSightingsBefore(const QDateTime &before);
     // أحدث الظهور لكل الأشخاص منذ since (أو كله إن كان غير صالح)؛ watchedOnly لقائمة المراقبة فقط
     QList<SightingEntry> recentSightings(bool watchedOnly, const QDateTime &since, int limit) const;
 
@@ -170,6 +179,7 @@ public:
     Visitor visitor(qint64 id) const;
     std::vector<float> visitorEmbedding(qint64 id) const;
     QList<Sighting> visitorSightings(qint64 visitorId, int limit = 200) const;
+    int visitorSightingCount(qint64 visitorId, const QDateTime &since) const;
     QList<VisitorSighting> visitorSightingsBetween(const QDateTime &from, const QDateTime &to) const;
     bool removeVisitor(qint64 id);
     // تسمية الزائر: صورته (بصماتها embeddings) تُضاف لصور الشخص، وظهوره كله ينتقل إلى سجل ظهوره

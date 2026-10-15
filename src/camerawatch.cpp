@@ -36,9 +36,39 @@ void CameraWatch::setVisitorsEnabled(bool enabled)
     QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("saveVisitors"), enabled);
 }
 
+CameraWatch::StrangerAlerts CameraWatch::strangerAlerts()
+{
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    StrangerAlerts result;
+    result.dailyCount = std::max(0, settings.value(QStringLiteral("strangerDailyCount"), result.dailyCount).toInt());
+    result.night = settings.value(QStringLiteral("strangerNight"), result.night).toBool();
+    const QTime from = QTime::fromString(settings.value(QStringLiteral("strangerNightFrom")).toString(), QStringLiteral("HH:mm"));
+    const QTime to = QTime::fromString(settings.value(QStringLiteral("strangerNightTo")).toString(), QStringLiteral("HH:mm"));
+    if (from.isValid())
+        result.nightWindow.from = from;
+    if (to.isValid())
+        result.nightWindow.to = to;
+    return result;
+}
+
+void CameraWatch::setStrangerAlerts(const StrangerAlerts &value)
+{
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("strangerDailyCount"), std::max(0, value.dailyCount));
+    settings.setValue(QStringLiteral("strangerNight"), value.night);
+    settings.setValue(QStringLiteral("strangerNightFrom"), value.nightWindow.from.toString(QStringLiteral("HH:mm")));
+    settings.setValue(QStringLiteral("strangerNightTo"), value.nightWindow.to.toString(QStringLiteral("HH:mm")));
+}
+
+void CameraWatch::reloadRules()
+{
+    m_rules = CameraRules::load(m_source);
+}
+
 void CameraWatch::reset(const QString &source, const QString &cameraName, CameraRecorder *recorder)
 {
     m_source = source;
+    m_rules = CameraRules::load(source);
     m_cameraName = cameraName;
     m_recorder = recorder;
     m_known.clear();
@@ -106,7 +136,11 @@ void CameraWatch::process(const QImage &frame, const QList<Face> &faces)
         return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     const bool visitors = visitorsEnabled();
+    const bool alerts = m_rules.alerts.active();
     for (const Face &face : faces) {
+        // خارج مناطق الكاميرا (أو داخل منطقة متجاهلة): لا ظهور ولا تنبيه ولا زائر
+        if (!m_rules.accepts(face.box, frame.size()))
+            continue;
         if (face.match.status == MatchStatus::Unknown) {
             if (visitors)
                 noteStranger(frame, face, now);
@@ -123,7 +157,7 @@ void CameraWatch::process(const QImage &frame, const QList<Face> &faces)
         const CameraRecorder::Position position = recordingPosition();
         m_database->addCameraSighting(face.match.personId, m_source, position.path, position.ms, face.match.score, crop, snapshot);
         emit sighted(face.match.personId, face.match.name);
-        if (m_watched.contains(face.match.personId))
+        if (alerts && m_watched.contains(face.match.personId))
             emit watchAlert(face.match.personId, face.match.name, face.match.score, crop);
     }
 
@@ -191,5 +225,34 @@ void CameraWatch::noteStranger(const QImage &frame, const Face &face, qint64 now
     if (id > 0) {
         match->visitorId = id;
         emit visitorSeen(id, isNew);
+        checkStranger(id, crop);
+    }
+}
+
+void CameraWatch::checkStranger(qint64 visitorId, const QImage &crop)
+{
+    if (!m_rules.alerts.active())
+        return;
+    const StrangerAlerts settings = strangerAlerts();
+    // تنبيه واحد لكل زائر في اليوم لكل سبب، مشترك بين كل الكاميرات
+    static QHash<qint64, QDate> dailyAlerted;
+    static QHash<qint64, QDate> nightAlerted;
+    const QDateTime now = QDateTime::currentDateTime();
+    const QDate today = now.date();
+    if (settings.night && settings.nightWindow.contains(now.time())) {
+        // ليلة تعبر منتصف الليل تُحسب ليلة واحدة باسم يوم بدايتها
+        const QDate night = settings.nightWindow.from > settings.nightWindow.to && now.time() < settings.nightWindow.to ? today.addDays(-1) : today;
+        if (nightAlerted.value(visitorId) != night) {
+            nightAlerted.insert(visitorId, night);
+            emit strangerAlert(visitorId, QStringLiteral("ظهر ليلاً الساعة \u2066%1\u2069").arg(now.toString(QStringLiteral("HH:mm"))), crop);
+            return;
+        }
+    }
+    if (settings.dailyCount > 0 && dailyAlerted.value(visitorId) != today) {
+        const int count = m_database->visitorSightingCount(visitorId, QDateTime(today, QTime(0, 0)));
+        if (count >= settings.dailyCount) {
+            dailyAlerted.insert(visitorId, today);
+            emit strangerAlert(visitorId, QStringLiteral("ظهر %1 مرات اليوم").arg(count), crop);
+        }
     }
 }

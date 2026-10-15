@@ -21,6 +21,7 @@ class QTimeEdit;
 class QMenu;
 class QSystemTrayIcon;
 class FancyButton;
+class Maintenance;
 class ImageView;
 class QLabel;
 class QLineEdit;
@@ -67,14 +68,11 @@ public:
     // لم يُغلق البرنامج إغلاقاً طبيعياً في التشغيل السابق (يُعرض تنبيه بعد تحميل النماذج)
     void setPreviousCrash(const QDateTime &started) { m_previousCrash = started; }
 
-    // العمل في الخلفية لمراقبة الكاميرا
-    static bool keepRunningInTray();
-    static bool startCameraOnLaunch();
-    static bool launchWithWindows();
 
 signals:
     // تنبيه مراقبة (لإشعار ويندوز حين تكون النافذة مخفية)؛ camera فارغ للملفات
-    void watchAlert(const QString &name, const QString &camera);
+    // level مستوى تنبيه الشخص (AlertSound::Level)
+    void watchAlert(const QString &name, const QString &camera, int level);
     // عطل يحتاج انتباه المستخدم (كاميرا منقطعة طويلاً، توقف التسجيل)؛ يُكتب في السجل ويصل إشعاراً
     void systemAlert(const QString &title, const QString &text);
 
@@ -103,6 +101,10 @@ private:
     void openVideo();
     void openCamera();          // قائمة الكاميرات المحفوظة والموصولة
     void startLastCamera();     // آخر كاميرا استُخدمت (Ctrl+Shift+C)
+    // المناطق وساعات التنبيه والتسجيل لكاميرا
+    void editCameraRules(const QString &source, const QString &name);
+    // مجهول ظهوره مريب (تكرر كثيراً اليوم أو ظهر ليلاً)
+    void showStrangerAlert(qint64 visitorId, const QString &reason, const QString &camera);
     void openMultiCamera();     // عرض عدة كاميرات معاً ومراقبتها
     void manageCameras(const QString &selectId = QString());
     void startVideo(const QString &source);
@@ -116,7 +118,7 @@ private:
     void showRecordFolderMenu();
     void setupTray();
     void showFromTray();
-    void addBackgroundMenu(QMenu *menu);
+    void openSettings();
     void quitApplication();
     void onImageAnalyzed();
     void onFrameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress);
@@ -325,6 +327,7 @@ private:
     QSet<QString> m_watched;
     QSet<QString> m_alerted; // من نُبِّه عنه في الصورة أو الفيديو الحالي
     CameraWatch *m_cameraWatch = nullptr; // ظهور الأشخاص والزوار المجهولين أمام الكاميرا الجارية
+    Maintenance *m_maintenance = nullptr; // حذف القديم والنسخ الاحتياطي التلقائي
     QList<FaceItem> m_cameraFaces;         // وجوه آخر إطار من الكاميرا (لربط التنبيه بوجهه)
     QFrame *m_alertBar = nullptr;
     QLabel *m_alertAvatar = nullptr;
@@ -333,6 +336,7 @@ private:
     int m_alertCount = 0;
     QTimer *m_alertPulse = nullptr;
     FancyButton *m_watchButton = nullptr;
+    FancyButton *m_alertLevelButton = nullptr;
     FancyButton *m_recentButton = nullptr; // إعدادات تخص الفيديو فقط فتختفي عند عرض صورة
 
     QLabel *m_databaseSubtitle = nullptr;

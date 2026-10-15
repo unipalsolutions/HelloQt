@@ -1,0 +1,53 @@
+name: Build Linux
+
+# بناء سريع بمترجم GCC بجانب بناء Windows (MSVC): يكشف مبكراً أخطاء يقرؤها مترجم دون الآخر،
+# ويشغّل الاختبارات التي لا تحتاج كاميرا ولا شاشة
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ qt6-base-dev libqt6sql6-sqlite libgl-dev libopencv-dev
+
+      - name: Cache models and ONNX Runtime
+        uses: actions/cache@v4
+        with:
+          path: .deps-cache
+          key: deps-linux-${{ hashFiles('cmake/*.cmake') }}
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DDEPS_DIR="$GITHUB_WORKSPACE/.deps-cache"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Tests
+        timeout-minutes: 15
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          base=https://raw.githubusercontent.com/ageitgey/face_recognition/master/examples
+          mkdir -p testdata
+          for name in obama.jpg obama2.jpg biden.jpg; do curl -sSfL "$base/$name" -o "testdata/$name"; done
+          failed=0
+          run() {
+            local name=$1; shift
+            if ./build/Malamih "$@"; then echo "::group::$name passed"; else echo "::group::$name FAILED"; failed=1; fi
+            cat "${@: -1}"
+            echo "::endgroup::"
+          }
+          run "Recognition" --self-test testdata/obama.jpg testdata/obama2.jpg "$PWD/self.txt"
+          run "Camera rules and maintenance" --rules-test "$PWD/rulestest" "$PWD/rules.txt"
+          run "Camera watch" --watch-test "$PWD/watchtest" "$PWD/watch.txt"
+          run "Backup" --backup-test "$PWD/backuptest" "$PWD/backup.txt"
+          run "Daily report" --daily-report-test "$PWD/dailytest" "$PWD/daily.txt"
+          run "Recording" --record-test "$PWD/recordtest" "$PWD/record.txt"
+          exit $failed

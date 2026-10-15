@@ -48,6 +48,7 @@ private:
     FancyButton *m_remove;
     FancyButton *m_open;
     FancyButton *m_snapshot;
+    FancyButton *m_clip;
     QList<Visitor> m_visitors;
     QList<Sighting> m_current;
 };

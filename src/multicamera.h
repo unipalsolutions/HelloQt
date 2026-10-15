@@ -1,5 +1,7 @@
 #pragma once
 
+#include "camerarules.h"
+
 #include "cameras.h"
 #include "facetypes.h"
 
@@ -56,10 +58,14 @@ public:
     bool isRunning() const { return !m_feeds.empty(); }
     bool isRecording() const;
     void setWatched(const QSet<QString> &ids);
+    // قواعد كاميرا عُدّلت أثناء التشغيل (المناطق وساعات التنبيه فوراً، وجدول التسجيل مع التسجيل التالي)
+    void reloadRules(const QString &source);
     void setGallery(std::shared_ptr<Gallery> gallery);
 
 signals:
-    void watchAlert(const QString &name, const QString &camera);
+    void watchAlert(const QString &name, const QString &camera, int level);
+    // مجهول ظهوره مريب أمام إحدى الكاميرات
+    void strangerAlert(qint64 visitorId, const QString &reason, const QString &camera);
     // انقطاع كاميرا طويلاً أو عودتها أو توقف تسجيلها (للسجل وإشعار النظام)
     void systemAlert(const QString &title, const QString &text);
     void stopped();
@@ -90,6 +96,8 @@ private:
         std::shared_ptr<Cameras::LiveReader> reader;
         CameraRecorder *recorder = nullptr;
         CameraWatch *watch = nullptr; // تأكيد الظهور وسجله والزوار المجهولون لهذه الكاميرا
+        // تُستبدل كاملة عند تعديلها (atomic_load/atomic_store)، فيقرؤها خيط التحليل دون قفل
+        std::shared_ptr<const CameraRules::Rules> rules;
         bool opening = false;
         QFuture<void> pending;           // فتح الكاميرا جارٍ في الخلفية
         std::shared_ptr<Opened> opened;
@@ -128,7 +136,7 @@ private:
     void toggleRecording();
     void startRecording(Feed &feed);
     void updateRecordButton();
-    void showAlert(Feed &feed, const QString &name, float score, const QImage &crop);
+    void showAlert(Feed &feed, const QString &personId, const QString &name, float score, const QImage &crop);
     void noteLost(Feed &feed, qint64 now);
     // رسالة مؤقتة في شريط الحالة (خطأ تسجيل)
     void notice(const QString &text);

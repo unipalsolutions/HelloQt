@@ -1,5 +1,6 @@
 #include "multicamera.h"
 
+#include "alertsound.h"
 #include "applog.h"
 #include "camerawatch.h"
 #include "carddelegates.h"
@@ -253,6 +254,7 @@ void MultiCameraWindow::start(const QStringList &sources)
         feed->recorder = new CameraRecorder(this);
         feed->watch = new CameraWatch(m_database, this);
         feed->watch->reset(source, feed->camera.name, feed->recorder);
+        feed->rules = std::make_shared<const CameraRules::Rules>(feed->watch->rules());
         feed->watch->setWatched(m_watched);
         Feed *raw = feed.get();
         connect(feed->recorder, &CameraRecorder::failed, this, [this, raw](const QString &error) {
@@ -261,7 +263,13 @@ void MultiCameraWindow::start(const QStringList &sources)
             updateRecordButton();
         });
         connect(feed->watch, &CameraWatch::watchAlert, this,
-                [this, raw](const QString &, const QString &name, float score, const QImage &crop) { showAlert(*raw, name, score, crop); });
+                [this, raw](const QString &personId, const QString &name, float score, const QImage &crop) {
+                    showAlert(*raw, personId, name, score, crop);
+                });
+        connect(feed->watch, &CameraWatch::strangerAlert, this, [this, raw](qint64 visitorId, const QString &reason, const QImage &) {
+            notice(QStringLiteral("زائر مجهول رقم %1 %2 أمام «%3»").arg(visitorId).arg(reason, raw->camera.name));
+            emit strangerAlert(visitorId, reason, raw->camera.name);
+        });
         m_feeds.push_back(std::move(feed));
     }
     if (m_feeds.empty()) {
@@ -563,8 +571,9 @@ void MultiCameraWindow::updateTitle(Feed &feed)
                                   " <span style='color:%4'>· %5</span>")
                        .arg(color, Theme::Text.name(), feed.camera.name.toHtmlEscaped(), Theme::Muted.name(), state.toHtmlEscaped());
     if (feed.recorder && feed.recorder->isRecording())
-        text += feed.recorder->isWaitingForMotion() ? QStringLiteral(" <span style='color:#fca5a5'>· بانتظار حركة</span>")
-                                                    : QStringLiteral(" <span style='color:#ff5c5c'>· ⏺ تسجيل</span>");
+        text += feed.recorder->isOffSchedule()        ? QStringLiteral(" <span style='color:#fca5a5'>· التسجيل خارج ساعاته</span>")
+            : feed.recorder->isWaitingForMotion() ? QStringLiteral(" <span style='color:#fca5a5'>· بانتظار حركة</span>")
+                                                  : QStringLiteral(" <span style='color:#ff5c5c'>· ⏺ تسجيل</span>");
     feed.title->setText(text);
 }
 
@@ -592,12 +601,16 @@ void MultiCameraWindow::analysisLoop()
                 gallery = m_gallery;
             }
             const float threshold = m_currentThreshold;
+            const std::shared_ptr<const CameraRules::Rules> rules = std::atomic_load(&feed.rules);
             QList<Face> faces;
             try {
                 for (const AnalyzedFace &analyzed : m_engine->analyze(frame, false)) {
                     Face face;
                     const cv::Rect2f &box = analyzed.detection.box;
                     face.box = QRectF(box.x, box.y, box.width, box.height);
+                    // خارج مناطق الكاميرا: لا يُعرض ولا يُطابق
+                    if (rules && !rules->accepts(face.box, QSize(frame.cols, frame.rows)))
+                        continue;
                     face.embedding = analyzed.embedding;
                     face.quality = analyzed.quality;
                     if (gallery && !analyzed.embedding.empty())
@@ -657,9 +670,14 @@ void MultiCameraWindow::noteLost(Feed &feed, qint64 now)
     AppLog::write(QStringLiteral("عدة كاميرات: انقطعت «%1»: %2").arg(feed.camera.name, feed.error));
 }
 
-void MultiCameraWindow::showAlert(Feed &feed, const QString &name, float score, const QImage &crop)
+void MultiCameraWindow::showAlert(Feed &feed, const QString &personId, const QString &name, float score, const QImage &crop)
 {
     ++m_alertCount;
+    const int level = m_database->alertLevel(personId);
+    if (level == AlertSound::NotifyOnly) {
+        emit watchAlert(name, feed.camera.name, level);
+        return;
+    }
     feed.alertUntil = nowMs() + AlertFrameMs;
     m_alertAvatar->setPixmap(circularPixmap(crop, 44));
     m_alert->setText(QStringLiteral("<span style='color:%1; font-weight:700; font-size:12pt'>تنبيه مراقبة: ظهر %2</span>"
@@ -668,8 +686,11 @@ void MultiCameraWindow::showAlert(Feed &feed, const QString &name, float score, 
                          .arg(qRound(score * 100))
                          .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss"))));
     m_alertBar->show();
-    QApplication::beep();
-    emit watchAlert(name, feed.camera.name);
+    if (level == AlertSound::High)
+        AlertSound::play(AlertSound::Sound::Alarm);
+    else if (level != AlertSound::Silent)
+        AlertSound::play(AlertSound::Sound::Chime);
+    emit watchAlert(name, feed.camera.name, level);
 }
 
 void MultiCameraWindow::toggleRecording()
@@ -689,6 +710,20 @@ void MultiCameraWindow::toggleRecording()
     updateRecordButton();
 }
 
+void MultiCameraWindow::reloadRules(const QString &source)
+{
+    for (const auto &feed : m_feeds) {
+        if (feed->source != source)
+            continue;
+        feed->watch->reloadRules();
+        std::atomic_store(&feed->rules, std::make_shared<const CameraRules::Rules>(feed->watch->rules()));
+        if (feed->recorder->isRecording()) {
+            feed->recorder->stop();
+            startRecording(*feed);
+        }
+    }
+}
+
 void MultiCameraWindow::startRecording(Feed &feed)
 {
     if (feed.recorder->isRecording() || !feed.reader)
@@ -696,6 +731,7 @@ void MultiCameraWindow::startRecording(Feed &feed)
     CameraRecorder::Options options = CameraRecorder::savedOptions();
     options.ownFilters = true;
     options.filters = filtersOf(feed.camera);
+    options.schedule = CameraRules::load(feed.camera.source()).recording;
     QString error;
     if (!feed.recorder->start(CameraRecorder::savedFolder(), feed.camera.name, feed.reader->fps(), options, &error))
         notice(QStringLiteral("تعذر تسجيل «%1»: %2").arg(feed.camera.name, error));

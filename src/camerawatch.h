@@ -1,5 +1,6 @@
 #pragma once
 
+#include "camerarules.h"
 #include "facetypes.h"
 #include "recorder.h"
 
@@ -20,6 +21,8 @@ class FaceDatabase;
 //     في إطار واحد)، فلا يطلق وجه مارّ يشبه أحد المراقَبين لحظةً تنبيهاً خاطئاً
 //   - كل ظهور يُكتب في سجل الشخص مع لقطة الإطار وموضعه في تسجيل الكاميرا، ويتكرر إن غاب ReappearMs
 //   - الوجوه غير المسجلة تُجمع زواراً مجهولين ببصماتها (الظهور المتكرر لوجه واحد تحت رقم واحد)
+//   - قواعد الكاميرا: الوجوه خارج مناطقها لا تُحسب، والتنبيه في ساعات جدولها فقط
+//   - تنبيه لمجهول تكرر ظهوره كثيراً في يوم أو ظهر ليلاً
 class CameraWatch : public QObject
 {
     Q_OBJECT
@@ -62,12 +65,29 @@ public:
     static bool visitorsEnabled();
     static void setVisitorsEnabled(bool enabled);
 
+    // تنبيه المجهول المتكرر (إعداد عام): dailyCount ظهور في اليوم نفسه (0 = لا تنبيه)، أو ظهور في ساعات الليل
+    struct StrangerAlerts
+    {
+        int dailyCount = 5;
+        bool night = false;
+        CameraRules::Window nightWindow{true, QTime(23, 0), QTime(5, 0)};
+    };
+    static StrangerAlerts strangerAlerts();
+    static void setStrangerAlerts(const StrangerAlerts &settings);
+
+    // تُقرأ قواعد الكاميرا عند reset؛ تُستدعى بعد تعديلها والكاميرا تعمل
+    void reloadRules();
+    const CameraRules::Rules &rules() const { return m_rules; }
+    bool alertsActive() const { return m_rules.alerts.active(); }
+
 signals:
     // ظهر شخص من قائمة المراقبة (ظهور مؤكد جديد)
     void watchAlert(const QString &personId, const QString &name, float score, const QImage &crop);
     // ظهور مؤكد جديد لشخص معروف
     void sighted(const QString &personId, const QString &name);
     void visitorSeen(qint64 visitorId, bool isNew);
+    // مجهول ظهوره مريب (تكرر كثيراً اليوم أو ظهر ليلاً)؛ reason وصف قصير
+    void strangerAlert(qint64 visitorId, const QString &reason, const QImage &crop);
 
 private:
     struct Presence
@@ -89,6 +109,7 @@ private:
     QImage cropOf(const QImage &frame, const Face &face) const;
     void noteStranger(const QImage &frame, const Face &face, qint64 now);
     CameraRecorder::Position recordingPosition() const;
+    void checkStranger(qint64 visitorId, const QImage &crop);
 
     FaceDatabase *m_database;
     QString m_source;
@@ -98,4 +119,5 @@ private:
     float m_threshold = 0.5f;
     QHash<QString, Presence> m_known;
     std::vector<Stranger> m_strangers;
+    CameraRules::Rules m_rules;
 };

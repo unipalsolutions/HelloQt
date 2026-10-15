@@ -11,7 +11,7 @@ set(MALAMIH_VERSION "${PROJECT_VERSION}" CACHE STRING "Version shown in the app 
 set(DEPS_DIR "${CMAKE_BINARY_DIR}/_deps" CACHE PATH "Folder for downloaded dependencies (ONNX Runtime, face models)")
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Sql Network)
-find_package(OpenCV 4.8 REQUIRED COMPONENTS core imgproc imgcodecs videoio)
+find_package(OpenCV 4.5 REQUIRED COMPONENTS core imgproc imgcodecs videoio)
 
 include(cmake/onnxruntime.cmake)
 include(cmake/models.cmake)
@@ -22,6 +22,20 @@ qt_add_executable(Malamih
     src/main.cpp
     src/applog.h
     src/applog.cpp
+    src/alertsound.h
+    src/alertsound.cpp
+    src/camerarules.h
+    src/camerarules.cpp
+    src/camerarulesdialog.h
+    src/camerarulesdialog.cpp
+    src/clipexport.h
+    src/clipexport.cpp
+    src/appsettings.h
+    src/appsettings.cpp
+    src/settingsdialog.h
+    src/settingsdialog.cpp
+    src/maintenance.h
+    src/maintenance.cpp
     src/camerawatch.h
     src/camerawatch.cpp
     src/visitorsdialog.h
@@ -34,6 +48,10 @@ qt_add_executable(Malamih
     src/gpucheck.cpp
     src/mainwindow.h
     src/mainwindow.cpp
+    src/mainwindow_p.h
+    src/mainwindow_camera.cpp
+    src/mainwindow_records.cpp
+    src/mainwindow_persons.cpp
     src/faceengine.h
     src/faceengine.cpp
     src/facedatabase.h
@@ -126,7 +144,7 @@ if(MSVC)
     target_compile_options(Malamih PRIVATE /utf-8)
 endif()
 if(WIN32)
-    target_link_libraries(Malamih PRIVATE psapi strmiids ole32 oleaut32 crypt32 mfplat mf mfuuid dxgi dbghelp)
+    target_link_libraries(Malamih PRIVATE psapi strmiids ole32 oleaut32 crypt32 mfplat mf mfuuid dxgi dbghelp winmm)
 endif()
 
 set_target_properties(Malamih PROPERTIES

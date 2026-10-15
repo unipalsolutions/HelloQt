@@ -937,7 +937,110 @@ bool FaceDatabase::upgradeSchema()
         if (!sightingColumns.contains(name) && !exec(QStringLiteral("ALTER TABLE sightings ADD COLUMN %1 TEXT").arg(name)))
             return false;
     }
-    return true;
+    if (!columns.contains(QStringLiteral("alert_level"))
+        && !exec(QStringLiteral("ALTER TABLE persons ADD COLUMN alert_level INTEGER NOT NULL DEFAULT 0")))
+        return false;
+    // حذف الظهور القديم حسب تاريخه
+    return exec(QStringLiteral("CREATE INDEX IF NOT EXISTS visitor_sightings_seen ON visitor_sightings(seen)"));
+}
+
+int FaceDatabase::alertLevel(const QString &personId) const
+{
+    if (!m_db.isOpen())
+        return 0;
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT alert_level FROM persons WHERE id = ?"));
+    query.addBindValue(personId.toLongLong());
+    return query.exec() && query.next() ? query.value(0).toInt() : 0;
+}
+
+bool FaceDatabase::setAlertLevel(const QString &personId, int level)
+{
+    if (!m_db.isOpen())
+        return false;
+    const bool ok = exec(QStringLiteral("UPDATE persons SET alert_level = ? WHERE id = ?"), {level, personId.toLongLong()});
+    if (ok)
+        emit personUpdated(personId);
+    return ok;
+}
+
+QHash<QString, int> FaceDatabase::alertLevels() const
+{
+    QHash<QString, int> levels;
+    if (!m_db.isOpen())
+        return levels;
+    QSqlQuery query(m_db);
+    query.setForwardOnly(true);
+    if (query.exec(QStringLiteral("SELECT id, alert_level FROM persons WHERE alert_level <> 0"))) {
+        while (query.next())
+            levels.insert(query.value(0).toString(), query.value(1).toInt());
+    }
+    return levels;
+}
+
+QString FaceDatabase::databaseFile() const
+{
+    return QDir(m_directory).filePath(QString::fromLatin1(DatabaseFile));
+}
+
+bool FaceDatabase::backupFile(const QString &databaseFile, const QString &target, QString *error)
+{
+    const QString connection = QStringLiteral("malamih-backup-%1").arg(QUuid::createUuid().toString(QUuid::Id128));
+    bool ok = false;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(databaseFile);
+        db.setConnectOptions(QStringLiteral("QSQLITE_BUSY_TIMEOUT=30000"));
+        if (!QFileInfo::exists(databaseFile) || !db.open()) {
+            if (error)
+                *error = QStringLiteral("تعذر فتح قاعدة البيانات: %1").arg(db.lastError().text());
+        } else {
+            QFile::remove(target);
+            QSqlQuery query(db);
+            ok = query.exec(QStringLiteral("VACUUM INTO '%1'").arg(QString(target).replace(QLatin1Char('\''), QStringLiteral("''"))));
+            if (!ok && error)
+                *error = query.lastError().text();
+            query.finish();
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(connection);
+    if (!ok)
+        QFile::remove(target);
+    return ok;
+}
+
+int FaceDatabase::removeCameraSightingsBefore(const QDateTime &before)
+{
+    if (!m_db.isOpen() || !before.isValid())
+        return 0;
+    const qint64 limit = before.toSecsSinceEpoch();
+    int removed = 0;
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("DELETE FROM sightings WHERE seen < ? AND camera IS NOT NULL AND camera <> ''"));
+    query.addBindValue(limit);
+    if (query.exec())
+        removed += std::max(0, query.numRowsAffected());
+    query.prepare(QStringLiteral("DELETE FROM visitor_sightings WHERE seen < ?"));
+    query.addBindValue(limit);
+    if (query.exec())
+        removed += std::max(0, query.numRowsAffected());
+    if (removed > 0) {
+        emit changed();
+        emit visitorsChanged();
+    }
+    return removed;
+}
+
+int FaceDatabase::visitorSightingCount(qint64 visitorId, const QDateTime &since) const
+{
+    if (!m_db.isOpen())
+        return 0;
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT COUNT(*) FROM visitor_sightings WHERE visitor_id = ? AND seen >= ?"));
+    query.addBindValue(visitorId);
+    query.addBindValue(since.isValid() ? since.toSecsSinceEpoch() : qint64(0));
+    return query.exec() && query.next() ? query.value(0).toInt() : 0;
 }
 
 namespace {

@@ -1,6 +1,10 @@
 #include "diagnostics.h"
 
+#include "alertsound.h"
+#include "camerarules.h"
 #include "cameras.h"
+#include "clipexport.h"
+#include "maintenance.h"
 #include "dailyreport.h"
 #include "camerawatch.h"
 #include "facedatabase.h"
@@ -28,6 +32,7 @@
 #include <QSqlQuery>
 #include <QTextStream>
 #include <QThread>
+#include <QThreadPool>
 #include <QtConcurrent>
 
 #include <opencv2/imgcodecs.hpp>
@@ -35,6 +40,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <functional>
 #include <random>
 
@@ -1637,6 +1643,206 @@ int gpuTest(const QString &image, QTextStream &out)
     return result.gpu.isEmpty() || result.reliable() ? 0 : 1;
 }
 
+
+// قواعد الكاميرات والصيانة والتنبيهات دون كاميرا ولا نماذج: المناطق والجداول، وتنبيه المجهول المتكرر،
+// وحذف الظهور واللقطات القديمة، والنسخ الاحتياطي التلقائي، وأصوات التنبيه، وتصدير مقطع الظهور
+int rulesTest(const QString &directory, QTextStream &out)
+{
+    QDir(directory).removeRecursively();
+    QDir().mkpath(directory);
+    bool allOk = true;
+    const auto check = [&](const char *name, bool ok) {
+        out << name << "=" << ok << "\n";
+        allOk = allOk && ok;
+    };
+
+    // 1) الفترات الزمنية، ومنها ما يعبر منتصف الليل
+    const CameraRules::Window night{true, QTime(22, 0), QTime(6, 0)};
+    const CameraRules::Window day{true, QTime(8, 0), QTime(17, 0)};
+    check("window", night.contains(QTime(23, 30)) && night.contains(QTime(5, 0)) && !night.contains(QTime(12, 0))
+                        && day.contains(QTime(9, 0)) && !day.contains(QTime(17, 0)) && CameraRules::Window{true, QTime(3, 0), QTime(3, 0)}.contains(QTime(15, 0))
+                        && CameraRules::Window{}.active());
+
+    // 2) المناطق وحفظها
+    CameraRules::Rules rules;
+    rules.zones = {QRectF(0, 0, 0.5, 1)};
+    const QSize frameSize(200, 100);
+    const bool includeOk = rules.accepts(QRectF(20, 20, 40, 40), frameSize) && !rules.accepts(QRectF(140, 20, 40, 40), frameSize);
+    rules.mode = CameraRules::ZoneMode::Exclude;
+    const bool excludeOk = !rules.accepts(QRectF(20, 20, 40, 40), frameSize) && rules.accepts(QRectF(140, 20, 40, 40), frameSize);
+    rules.recording = night;
+    const QString testSource = QStringLiteral("camera:rules/test 1");
+    CameraRules::save(testSource, rules);
+    const CameraRules::Rules loaded = CameraRules::load(testSource);
+    const bool storeOk = loaded.zones.size() == 1 && std::abs(loaded.zones.first().width() - 0.5) < 0.001
+        && loaded.mode == CameraRules::ZoneMode::Exclude && loaded.recording.enabled && loaded.recording.from == QTime(22, 0)
+        && !loaded.alerts.enabled;
+    CameraRules::save(testSource, {});
+    check("zones", includeOk && excludeOk && storeOk && CameraRules::load(testSource).isEmpty());
+
+    // 3) CameraWatch: وجه خارج المنطقة لا يُحسب، والتنبيه خارج ساعاته لا يصدر والظهور يُسجَّل
+    FaceDatabase database;
+    QString error;
+    if (!database.open(QDir(directory).filePath(QStringLiteral("db")), &error)) {
+        out << "error=" << error << "\n";
+        return 1;
+    }
+    const QString previousFolder = CameraRecorder::savedFolder();
+    CameraRecorder::setSavedFolder(QDir(directory).filePath(QStringLiteral("recordings")));
+    const bool previousVisitors = CameraWatch::visitorsEnabled();
+    const CameraWatch::StrangerAlerts previousStrangers = CameraWatch::strangerAlerts();
+    CameraWatch::setVisitorsEnabled(true);
+
+    Person watchedPerson;
+    watchedPerson.name = QStringLiteral("مراقَب");
+    watchedPerson.tags = FaceDatabase::withWatchTag(QString(), true);
+    const QString watchedId = database.addPerson(watchedPerson);
+    QImage frame(frameSize, QImage::Format_RGB32);
+    frame.fill(Qt::darkGray);
+    QImage crop(64, 64, QImage::Format_RGB32);
+    crop.fill(Qt::gray);
+    const auto known = [&](const QRectF &box) {
+        CameraWatch::Face face;
+        face.box = box;
+        face.match.status = MatchStatus::Confirmed;
+        face.match.personId = watchedId;
+        face.match.name = watchedPerson.name;
+        face.match.score = 0.55f;
+        face.quality = 0.8f;
+        face.crop = crop;
+        return face;
+    };
+    const QString zoneSource = QStringLiteral("camera:rules-zone");
+    CameraRules::Rules zoneRules;
+    zoneRules.zones = {QRectF(0, 0, 0.5, 1)};
+    // ساعات تنبيه لا تشمل الآن
+    zoneRules.alerts = {true, QTime::currentTime().addSecs(2 * 3600), QTime::currentTime().addSecs(3 * 3600)};
+    CameraRules::save(zoneSource, zoneRules);
+    CameraWatch watch(&database);
+    watch.reset(zoneSource, QStringLiteral("منطقة"), nullptr);
+    watch.setWatched(database.watchedIds());
+    watch.setThreshold(0.5f);
+    int alerts = 0;
+    QObject::connect(&watch, &CameraWatch::watchAlert, [&alerts] { ++alerts; });
+    for (int i = 0; i < 3; ++i)
+        watch.process(frame, {known(QRectF(140, 20, 40, 40))});
+    const qsizetype outside = database.sightings(watchedId, 100).size();
+    for (int i = 0; i < 2; ++i)
+        watch.process(frame, {known(QRectF(20, 20, 40, 40))});
+    const qsizetype inside = database.sightings(watchedId, 100).size();
+    check("watch_zones", outside == 0 && inside == 1);
+    check("alert_schedule", alerts == 0 && !watch.alertsActive());
+    CameraRules::save(zoneSource, {});
+
+    // 4) مستوى التنبيه لكل شخص
+    const bool levelOk = database.alertLevel(watchedId) == AlertSound::Normal && database.setAlertLevel(watchedId, AlertSound::High)
+        && database.alertLevel(watchedId) == AlertSound::High && database.alertLevels().value(watchedId) == AlertSound::High;
+    check("alert_level", levelOk);
+
+    // 5) تنبيه المجهول المتكرر: ظهوره مرتين اليوم (أمام كاميرتين) يكفي حين يكون الحد 2
+    CameraWatch::StrangerAlerts strangers;
+    strangers.dailyCount = 2;
+    strangers.night = false;
+    CameraWatch::setStrangerAlerts(strangers);
+    std::mt19937 random(11);
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+    std::vector<float> print(static_cast<size_t>(FaceEngine::EmbeddingSize));
+    for (float &value : print)
+        value = gauss(random);
+    FaceEngine::normalize(print);
+    const auto stranger = [&] {
+        CameraWatch::Face face;
+        face.box = QRectF(20, 20, 40, 40);
+        face.match.status = MatchStatus::Unknown;
+        face.embedding = print;
+        face.quality = 0.8f;
+        face.crop = crop;
+        return face;
+    };
+    int strangerAlerts = 0;
+    for (int camera = 0; camera < 2; ++camera) {
+        CameraWatch visitorWatch(&database);
+        visitorWatch.reset(QStringLiteral("camera:rules-visitor-%1").arg(camera), QStringLiteral("زوار"), nullptr);
+        visitorWatch.setThreshold(0.5f);
+        QObject::connect(&visitorWatch, &CameraWatch::strangerAlert, [&strangerAlerts] { ++strangerAlerts; });
+        visitorWatch.process(frame, {stranger()});
+        visitorWatch.process(frame, {stranger()});
+    }
+    out << "stranger_alerts=" << strangerAlerts << "\n";
+    check("stranger_alert", strangerAlerts == 1);
+
+    // 6) حذف ظهور الكاميرات القديم: ظهور صورة أو فيديو يبقى
+    database.addSighting(watchedId, QDir(directory).filePath(QStringLiteral("photo.jpg")), -1, 0.7f, crop);
+    const qsizetype before = database.sightings(watchedId, 100).size();
+    const int removedSightings = database.removeCameraSightingsBefore(QDateTime::currentDateTime().addSecs(60));
+    const QList<Sighting> remaining = database.sightings(watchedId, 100);
+    out << "sightings_before=" << before << "\nsightings_removed=" << removedSightings << "\n";
+    check("sighting_retention", before == 2 && removedSightings >= 3 && remaining.size() == 1 && remaining.first().camera.isEmpty()
+                                    && database.visitorSightingCount(database.visitors(QDateTime(), 1, 10).value(0).id, QDateTime()) == 0);
+
+    // 7) لقطات الظهور: مجلد يوم قديم يُحذف، ومجلد اليوم وملفات المستخدم تبقى
+    const QDir snapshots(CameraRecorder::snapshotsFolder());
+    QDir().mkpath(snapshots.filePath(QStringLiteral("2001-02-03")));
+    QDir().mkpath(snapshots.filePath(QStringLiteral("ملاحظات")));
+    for (const QString &name : {QStringLiteral("2001-02-03/old.jpg"), QStringLiteral("ملاحظات/keep.jpg")}) {
+        QFile file(snapshots.filePath(name));
+        file.open(QIODevice::WriteOnly);
+        file.write("x");
+    }
+    QThreadPool::globalInstance()->waitForDone(); // لقطات CameraWatch تُحفظ في الخلفية
+    const int todaySnapshots = int(QDir(snapshots.filePath(QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"))))
+                                       .entryList({QStringLiteral("*.jpg")}, QDir::Files)
+                                       .size());
+    const int removedSnapshots = CameraRecorder::removeExpiredSnapshots(QDate::currentDate().addDays(-7));
+    out << "snapshots_today=" << todaySnapshots << "\nsnapshots_removed=" << removedSnapshots << "\n";
+    check("snapshot_retention", removedSnapshots == 1 && !snapshots.exists(QStringLiteral("2001-02-03"))
+                                    && QFile::exists(snapshots.filePath(QStringLiteral("ملاحظات/keep.jpg"))) && todaySnapshots >= 1);
+
+    // 8) النسخ الاحتياطي التلقائي: نسخة صالحة ويبقى آخر keep فقط
+    const QString backups = QDir(directory).filePath(QStringLiteral("backups"));
+    QDir().mkpath(backups);
+    for (const QString &name : {QStringLiteral("ملامح-تلقائي-2001-01-01 00-00-00.malamih"), QStringLiteral("ملامح-تلقائي-2001-01-02 00-00-00.malamih")}) {
+        QFile file(QDir(backups).filePath(name));
+        file.open(QIODevice::WriteOnly);
+        file.write("old");
+    }
+    QString backupPath;
+    QString backupError;
+    const bool backedUp = Maintenance::backupNow(database.databaseFile(), backups, 2, &backupPath, &backupError);
+    const QStringList kept = Maintenance::autoBackups(backups);
+    const QPair<qint64, qint64> counts = FaceDatabase::inspectBackup(backupPath);
+    out << "backup_files=" << kept.size() << "\nbackup_persons=" << counts.first << "\n" << backupError;
+    check("auto_backup", backedUp && kept.size() == 2 && kept.first() == backupPath && counts.first == database.personCount()
+                             && kept.last().contains(QStringLiteral("2001-01-02")));
+
+    // 9) أصوات التنبيه ملفات WAV سليمة
+    const QByteArray chime = AlertSound::wav(AlertSound::Sound::Chime);
+    const QByteArray alarm = AlertSound::wav(AlertSound::Sound::Alarm);
+    check("sounds", chime.startsWith("RIFF") && chime.mid(8, 4) == "WAVE" && chime.size() > 10000 && alarm.size() > chime.size());
+
+    // 10) مقطع حول لحظة الظهور: 1 ثانية قبلها و1 بعدها من فيديو مدته 6 ثوانٍ
+    const QString video = QDir(directory).filePath(QStringLiteral("recording.avi"));
+    {
+        cv::VideoWriter writer(QFile::encodeName(video).toStdString(), cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), 10.0, cv::Size(160, 120));
+        for (int i = 0; i < 60; ++i) {
+            cv::Mat image(120, 160, CV_8UC3, cv::Scalar(i * 4, 80, 160));
+            writer.write(image);
+        }
+    }
+    const QString clip = QDir(directory).filePath(QStringLiteral("clip.mp4"));
+    const QString clipError = ClipExport::exportClip(video, 3000, clip, 1000, 1000);
+    cv::VideoCapture capture(QFile::encodeName(clip).toStdString());
+    const double clipFrames = capture.isOpened() ? capture.get(cv::CAP_PROP_FRAME_COUNT) : 0;
+    capture.release();
+    const QString missingError = ClipExport::exportClip(QDir(directory).filePath(QStringLiteral("missing.mp4")), 0, clip + QStringLiteral(".x"));
+    out << "clip_frames=" << clipFrames << "\n" << clipError;
+    check("clip", clipError.isEmpty() && clipFrames >= 15 && clipFrames <= 25 && !missingError.isEmpty());
+
+    CameraRecorder::setSavedFolder(previousFolder);
+    CameraWatch::setVisitorsEnabled(previousVisitors);
+    CameraWatch::setStrangerAlerts(previousStrangers);
+    return allOk ? 0 : 1;
+}
 } // namespace
 
 int run(const QStringList &args)
@@ -1651,7 +1857,7 @@ int run(const QStringList &args)
         && command != QLatin1String("--backup-test") && command != QLatin1String("--filters-test")
         && command != QLatin1String("--camera-test") && command != QLatin1String("--record-test")
         && command != QLatin1String("--watch-test") && command != QLatin1String("--daily-report-test")
-        && command != QLatin1String("--gpu-test"))
+        && command != QLatin1String("--gpu-test") && command != QLatin1String("--rules-test"))
         return -1;
 
     QFile output(args.last());
@@ -1696,6 +1902,9 @@ int run(const QStringList &args)
     // Malamih --daily-report-test <مجلد مؤقت> <ملف النتائج>
     if (command == QLatin1String("--daily-report-test") && args.size() == 4)
         return dailyReportTest(args.at(2), out);
+    // Malamih --rules-test <مجلد مؤقت> <ملف النتائج>
+    if (command == QLatin1String("--rules-test") && args.size() == 4)
+        return rulesTest(args.at(2), out);
     // Malamih --watch-test <مجلد مؤقت> <ملف النتائج>
     if (command == QLatin1String("--watch-test") && args.size() == 4)
         return watchTest(args.at(2), out);

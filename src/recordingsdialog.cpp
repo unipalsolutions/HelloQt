@@ -1,5 +1,7 @@
 #include "recordingsdialog.h"
 
+#include "clipexport.h"
+
 #include "cameras.h"
 #include "carddelegates.h"
 #include "facetypes.h"
@@ -305,10 +307,13 @@ RecordingsDialog::RecordingsDialog(const FaceDatabase *database, const QSet<QStr
     m_open = new FancyButton(Icons::Name::Film, QStringLiteral("فتح التسجيل"), FancyButton::Kind::Primary, this);
     m_open->setToolTip(QStringLiteral("فتح تسجيل الكاميرا عند لحظة الظهور المختار"));
     m_snapshot = new FancyButton(Icons::Name::Camera, QStringLiteral("لقطة الإطار"), FancyButton::Kind::Secondary, this);
+    m_clip = new FancyButton(Icons::Name::Export, QStringLiteral("تصدير المقطع…"), FancyButton::Kind::Secondary, this);
+    m_clip->setToolTip(QStringLiteral("حفظ 30 ثانية حول لحظة الظهور في ملف واحد جاهز للتسليم"));
     auto *folder = new FancyButton(Icons::Name::Folder, QStringLiteral("مجلد التسجيلات"), FancyButton::Kind::Secondary, this);
     auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     buttons->addWidget(m_open);
     buttons->addWidget(m_snapshot);
+    buttons->addWidget(m_clip);
     buttons->addWidget(folder);
     buttons->addStretch(1);
     buttons->addWidget(close);
@@ -347,6 +352,15 @@ RecordingsDialog::RecordingsDialog(const FaceDatabase *database, const QSet<QStr
         const int index = item ? item->data(Qt::UserRole + 70).toInt() : -1;
         if (index >= 0 && index < m_entries.size())
             QDesktopServices::openUrl(QUrl::fromLocalFile(m_entries.at(index).sighting.snapshot));
+    });
+    connect(m_clip, &QAbstractButton::clicked, this, [this] {
+        const QListWidgetItem *item = m_list->currentItem();
+        const int index = item ? item->data(Qt::UserRole + 70).toInt() : -1;
+        if (index < 0 || index >= m_entries.size())
+            return;
+        const Entry &entry = m_entries.at(index);
+        ClipExport::exportAround(this, entry.sighting.source, entry.sighting.positionMs,
+                                 QStringLiteral("%1 %2").arg(entry.name, entry.sighting.seen.toString(QStringLiteral("yyyy-MM-dd HH-mm"))));
     });
     connect(folder, &QAbstractButton::clicked, this,
             [] { QDesktopServices::openUrl(QUrl::fromLocalFile(CameraRecorder::savedFolder())); });
@@ -523,6 +537,7 @@ void RecordingsDialog::select(int index)
     const Sighting *sighting = valid ? &m_entries.at(index).sighting : nullptr;
     m_open->setEnabled(sighting && !sighting->source.isEmpty() && !sighting->source.startsWith(QStringLiteral("camera:")));
     m_snapshot->setEnabled(sighting && !sighting->snapshot.isEmpty() && QFileInfo::exists(sighting->snapshot));
+    m_clip->setEnabled(m_open->isEnabled() && sighting->positionMs >= 0);
 }
 
 void RecordingsDialog::openEntry(int index)

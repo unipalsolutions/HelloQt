@@ -271,6 +271,12 @@ void VideoWorker::setRegion(const QRectF &region)
     m_region = region.normalized().intersected(QRectF(0, 0, 1, 1));
 }
 
+void VideoWorker::setZones(const CameraRules::Rules &rules)
+{
+    QMutexLocker locker(&m_mutex);
+    m_zones = rules;
+}
+
 void VideoWorker::setEnhance(bool enhance)
 {
     QMutexLocker locker(&m_mutex);
@@ -581,6 +587,7 @@ void VideoWorker::run(const QString &source)
                        : qint64(capture.get(cv::CAP_PROP_POS_MSEC));
 
         QRectF region;
+        CameraRules::Rules zones;
         bool enhance = false;
         QList<QPair<int, int>> manualMerges;
         {
@@ -594,6 +601,7 @@ void VideoWorker::run(const QString &source)
             revision = currentRevision;
             threshold = m_threshold;
             region = m_region;
+            zones = m_zones;
             enhance = m_enhance;
             manualMerges.swap(m_manualMerges);
         }
@@ -662,6 +670,8 @@ void VideoWorker::run(const QString &source)
             face.box.y += float(area.y);
             for (cv::Point2f &point : face.landmarks)
                 point += cv::Point2f(float(area.x), float(area.y));
+            if (!zones.accepts(QRectF(face.box.x, face.box.y, face.box.width, face.box.height), QSize(work.cols, work.rows)))
+                continue;
             Detection detection;
             detection.face = face;
             detection.aligned = m_engine->align(work, face);

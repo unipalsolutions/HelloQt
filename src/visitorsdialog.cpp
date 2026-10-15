@@ -1,5 +1,7 @@
 #include "visitorsdialog.h"
 
+#include "clipexport.h"
+
 #include "cameras.h"
 #include "camerawatch.h"
 #include "carddelegates.h"
@@ -117,12 +119,15 @@ VisitorsDialog::VisitorsDialog(FaceDatabase *database, QWidget *parent)
     m_open = new FancyButton(Icons::Name::Film, QStringLiteral("فتح التسجيل"), FancyButton::Kind::Secondary, this);
     m_open->setToolTip(QStringLiteral("فتح تسجيل الكاميرا عند لحظة الظهور المختار"));
     m_snapshot = new FancyButton(Icons::Name::Camera, QStringLiteral("لقطة الإطار"), FancyButton::Kind::Secondary, this);
+    m_clip = new FancyButton(Icons::Name::Film, QStringLiteral("تصدير المقطع…"), FancyButton::Kind::Secondary, this);
+    m_clip->setToolTip(QStringLiteral("حفظ 30 ثانية من التسجيل حول لحظة الظهور في ملف واحد"));
     auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     buttons->addWidget(m_assign);
     buttons->addWidget(m_remove);
     buttons->addSpacing(12);
     buttons->addWidget(m_open);
     buttons->addWidget(m_snapshot);
+    buttons->addWidget(m_clip);
     buttons->addStretch(1);
     buttons->addWidget(close);
     layout->addLayout(buttons);
@@ -137,6 +142,11 @@ VisitorsDialog::VisitorsDialog(FaceDatabase *database, QWidget *parent)
     connect(m_snapshot, &QAbstractButton::clicked, this, [this] {
         if (const Sighting *sighting = currentSighting())
             QDesktopServices::openUrl(QUrl::fromLocalFile(sighting->snapshot));
+    });
+    connect(m_clip, &QAbstractButton::clicked, this, [this] {
+        if (const Sighting *sighting = currentSighting())
+            ClipExport::exportAround(this, sighting->source, sighting->positionMs,
+                                     QStringLiteral("زائر %1 %2").arg(currentVisitor()).arg(sighting->seen.toString(QStringLiteral("yyyy-MM-dd HH-mm"))));
     });
     connect(m_assign, &QAbstractButton::clicked, this, [this] {
         const qint64 id = currentVisitor();
@@ -280,6 +290,7 @@ void VisitorsDialog::updateButtons()
     m_remove->setEnabled(visitor);
     m_open->setEnabled(sighting && !sighting->source.isEmpty() && !sighting->source.startsWith(QStringLiteral("camera:")));
     m_snapshot->setEnabled(sighting && !sighting->snapshot.isEmpty() && QFileInfo::exists(sighting->snapshot));
+    m_clip->setEnabled(m_open->isEnabled() && sighting->positionMs >= 0);
 }
 
 void VisitorsDialog::openSighting()
