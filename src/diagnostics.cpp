@@ -1249,11 +1249,11 @@ int cameraTest(const QString &videoPath, QTextStream &out)
         stream.brand = QStringLiteral("custom");
         stream.path = url;
 
-        // قارئ البث الحي وحده
-        startServer();
-        QThread::msleep(800);
+        // قارئ البث الحي وحده. خادم ffmpeg قد يتأخر في الاستماع على جهاز بطيء، فيُعاد الاتصال حتى 3 مرات
         int read = 0;
-        {
+        for (int attempt = 1; attempt <= 3 && read == 0; ++attempt) {
+            startServer();
+            QThread::msleep(800 * attempt);
             Cameras::LiveReader reader(stream);
             QString error;
             if (reader.open(&error)) {
@@ -1261,9 +1261,10 @@ int cameraTest(const QString &videoPath, QTextStream &out)
                 while (read < 40 && reader.read(frame, 5000) && !frame.empty())
                     ++read;
             }
-            out << "live_reader_frames=" << read << " fps=" << reader.fps() << " " << error << "\n" << Qt::flush;
+            out << "live_reader_frames=" << read << " fps=" << reader.fps() << " attempt=" << attempt << " " << error << "\n"
+                << Qt::flush;
+            stopServer();
         }
-        stopServer();
 
         // الاكتشاف التلقائي من العنوان وحده يصل إلى صيغة الهاتف
         startServer();
