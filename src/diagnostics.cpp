@@ -6,6 +6,7 @@
 #include "clipexport.h"
 #include "maintenance.h"
 #include "dailyreport.h"
+#include "personprofile.h"
 #include "camerawatch.h"
 #include "facedatabase.h"
 #include "importdialog.h"
@@ -1606,7 +1607,13 @@ int dailyReportTest(const QString &directory, QTextStream &out)
     const QString watchedId = database.addPerson(watched);
     Person known;
     known.name = QStringLiteral("معروف التقرير");
+    known.phone = QStringLiteral("0599123456");
+    known.address = QStringLiteral("رام الله");
+    known.notes = QStringLiteral("ملاحظة للفحص");
     const QString knownId = database.addPerson(known);
+    std::vector<std::vector<float>> photoPrint(1, std::vector<float>(size_t(FaceEngine::EmbeddingSize), 0.0f));
+    photoPrint[0][1] = 1.0f;
+    database.addPhoto(knownId, face, photoPrint, 0.8f);
     database.addCameraSighting(watchedId, QStringLiteral("camera:0"), QString(), -1, 0.7f, face, QString());
     database.addCameraSighting(knownId, QStringLiteral("camera:0"), QString(), -1, 0.6f, face, QString());
     database.addCameraSighting(knownId, QStringLiteral("camera:1"), QString(), -1, 0.6f, face, QString());
@@ -1626,8 +1633,12 @@ int dailyReportTest(const QString &directory, QTextStream &out)
     QFile pdfFile(pdf);
     const QByteArray pdfHead = pdfFile.open(QIODevice::ReadOnly) ? pdfFile.read(5) : QByteArray();
     const qint64 pdfSize = QFileInfo(pdf).size();
-    out << "html=" << htmlOk << "\nhtml_content=" << content << "\npdf=" << pdfOk << "\npdf_size=" << pdfSize << "\n" << error << "\n";
-    return htmlOk && content && pdfOk && pdfHead == "%PDF-" && pdfSize > 2000 ? 0 : 1;
+    // ملف الشخص بصيغة PDF
+    const QString profile = QDir(directory).filePath(QStringLiteral("ملف.pdf"));
+    const bool profileOk = exportPersonPdf(database, knownId, profile) && QFileInfo(profile).size() > 2000;
+    out << "html=" << htmlOk << "\nhtml_content=" << content << "\npdf=" << pdfOk << "\npdf_size=" << pdfSize
+        << "\nprofile_pdf=" << profileOk << "\n" << error << "\n";
+    return htmlOk && content && pdfOk && pdfHead == "%PDF-" && pdfSize > 2000 && profileOk ? 0 : 1;
 }
 
 

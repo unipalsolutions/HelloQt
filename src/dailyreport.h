@@ -5,6 +5,7 @@
 #include <QString>
 
 class FaceDatabase;
+class QTextDocument;
 
 // تقرير يوم واحد من الكاميرات: من ظهر ومتى وأمام أي كاميرا، والتنبيهات، والزوار المجهولون،
 // وساعات التسجيل، وأحداث اليوم من سجل الأحداث (الانقطاع والأعطال). يُحفظ HTML (يُفتح في أي متصفح)
@@ -13,5 +14,9 @@ namespace DailyReport {
 
 bool write(const QString &path, const FaceDatabase &database, const QSet<QString> &watched, const QDate &day,
            QString *error = nullptr);
+
+// QTextDocument لا يطبّق dir=rtl من HTML فتبدأ الفقرات من اليسار: يُضبط الاتجاه والمحاذاة إلى اليمين
+// على كل فقرة وجدول بعد setHtml. أعمدة الجداول لا تنعكس، فتُكتب خلاياها معكوسة في HTML نفسه
+void makeRightToLeft(QTextDocument *document);
 
 } // namespace DailyReport

@@ -1,6 +1,7 @@
 #include "personprofile.h"
 
 #include "cameras.h"
+#include "dailyreport.h"
 #include "theme.h"
 
 #include <QDateTime>
@@ -170,22 +171,29 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
                     .arg(person.notes.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
 
     if (!person.photos.isEmpty()) {
-        html += QStringLiteral("<h3 style='color:#1e3a8a'>صور الوجه المسجلة</h3><table cellspacing='6'><tr>");
-        int column = 0;
+        // ستة في كل صف، تبدأ من اليمين: الخلايا تُكتب معكوسة ويُكمَل الصف الأخير بخلايا فارغة على اليسار
+        html += QStringLiteral("<h3 style='color:#1e3a8a'>صور الوجه المسجلة</h3><table width='100%' cellspacing='6'>");
+        QStringList cells;
+        const auto flush = [&] {
+            while (cells.size() < 6)
+                cells << QStringLiteral("<td width='16%'></td>");
+            std::reverse(cells.begin(), cells.end());
+            html += QStringLiteral("<tr>") + cells.join(QString()) + QStringLiteral("</tr>");
+            cells.clear();
+        };
         for (const FacePhoto &photo : person.photos) {
-            if (column == 6) {
-                html += QStringLiteral("</tr><tr>");
-                column = 0;
-            }
             const bool suspect = consistency.value(photo.id, 1.0f) < SuspectConsistency;
-            html += QStringLiteral("<td align='center'><img src='%1' width='92' height='92'><br>"
-                                   "<span style='font-size:8pt; color:%2'>جودة %3%%4</span></td>")
-                        .arg(addImage(database.photo(photo.id, 240)), suspect ? QStringLiteral("#e11d48") : QStringLiteral("#64748b"))
-                        .arg(qRound(photo.quality * 100))
-                        .arg(suspect ? QStringLiteral(" · مشكوك فيها") : QString());
-            ++column;
+            cells << QStringLiteral("<td align='center' width='16%'><img src='%1' width='92' height='92'><br>"
+                                    "<span style='font-size:8pt; color:%2'>جودة %3%%4</span></td>")
+                         .arg(addImage(database.photo(photo.id, 240)), suspect ? QStringLiteral("#e11d48") : QStringLiteral("#64748b"))
+                         .arg(qRound(photo.quality * 100))
+                         .arg(suspect ? QStringLiteral(" · مشكوك فيها") : QString());
+            if (cells.size() == 6)
+                flush();
         }
-        html += QStringLiteral("</tr></table>");
+        if (!cells.isEmpty())
+            flush();
+        html += QStringLiteral("</table>");
     }
 
     const QList<Sighting> sightings = database.sightings(personId, 40);
@@ -212,6 +220,7 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
     html += QStringLiteral("<p style='color:#94a3b8; font-size:8pt'>أُنشئ هذا الملف محلياً ببرنامج ملامح دون إرسال أي بيانات عبر الإنترنت.</p>");
     html += QStringLiteral("</body></html>");
     document.setHtml(html);
+    DailyReport::makeRightToLeft(&document);
 
     QPdfWriter writer(path);
     writer.setPageSize(QPageSize(QPageSize::A4));
