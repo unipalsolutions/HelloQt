@@ -9,6 +9,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QScrollArea>
 #include <QSlider>
 #include <QSpinBox>
 #include <QTimer>
@@ -31,7 +32,7 @@ QLabel *previewLabel(QWidget *parent)
 {
     auto *label = new QLabel(parent);
     label->setAlignment(Qt::AlignCenter);
-    label->setMinimumSize(240, 200);
+    label->setMinimumSize(200, 120);
     label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     label->setStyleSheet(QStringLiteral("background: #050d19; border-radius: 10px;"));
     return label;
@@ -79,7 +80,7 @@ VideoFiltersDialog::VideoFiltersDialog(const cv::Mat &frame, QWidget *parent)
         m_before->setText(QStringLiteral("لا يوجد إطار للمعاينة"));
         m_after->setText(QStringLiteral("افتح فيديو لترى أثر المعالجات"));
     }
-    layout->addLayout(previews, 1);
+    layout->addLayout(previews, 2);
 
     auto *columns = new QHBoxLayout;
     columns->setSpacing(24);
@@ -176,7 +177,19 @@ VideoFiltersDialog::VideoFiltersDialog(const cv::Mat &frame, QWidget *parent)
     right->addWidget(m_grayscale);
     right->addStretch();
     columns->addLayout(right, 1);
-    layout->addLayout(columns);
+    // الخيارات في منطقة قابلة للتمرير: على شاشة لابتوب صغيرة لا تنزل النافذة تحت شريط المهام
+    // ويبقى زر «تم» ظاهراً دائماً
+    auto *controls = new QWidget;
+    auto *controlsLayout = new QVBoxLayout(controls);
+    controlsLayout->setContentsMargins(0, 0, 6, 0);
+    controlsLayout->addLayout(columns);
+    auto *scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setStyleSheet(QStringLiteral("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"));
+    scroll->setWidget(controls);
+    layout->addWidget(scroll, 3);
 
     for (ToggleSwitch *toggle : {m_mirror, m_flip, m_deinterlace, m_autoLevels, m_grayscale, m_skipStill})
         connect(toggle, &QAbstractButton::toggled, this, &VideoFiltersDialog::commit);
@@ -186,8 +199,8 @@ VideoFiltersDialog::VideoFiltersDialog(const cv::Mat &frame, QWidget *parent)
     m_summary->setWordWrap(true);
     m_speed = new QLabel(this);
     m_speed->setObjectName(QStringLiteral("muted"));
-    layout->addWidget(m_summary);
-    layout->addWidget(m_speed);
+    controlsLayout->addWidget(m_summary);
+    controlsLayout->addWidget(m_speed);
 
     auto *buttons = new QHBoxLayout;
     auto *reset = new FancyButton(Icons::Name::Stop, QStringLiteral("إلغاء كل المعالجات"), FancyButton::Kind::Secondary, this);

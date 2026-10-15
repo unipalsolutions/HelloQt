@@ -4,7 +4,11 @@
 #include "performance.h"
 #include "theme.h"
 
+#include <algorithm>
+
 #include <QApplication>
+#include <QEvent>
+#include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -56,6 +60,47 @@ bool sendToRunningInstance(const QString &message)
 
 } // namespace
 
+// كل نافذة حوار تُفتح أكبر من المساحة المتاحة (شاشة لابتوب 768 بكسل مع شريط المهام) تُصغَّر
+// وتُنقل إلى داخلها، فلا يختفي أسفلها وأزرارها تحت شريط المهام
+class FitToScreen : public QObject
+{
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject *object, QEvent *event) override
+    {
+        if (event->type() == QEvent::Show) {
+            auto *dialog = qobject_cast<QDialog *>(object);
+            if (dialog && dialog->isWindow() && dialog->screen())
+                fit(dialog);
+        }
+        return QObject::eventFilter(object, event);
+    }
+
+private:
+    static void fit(QWidget *window)
+    {
+        const QRect available = window->screen()->availableGeometry();
+        // شريط العنوان والإطار حول النافذة (قبل ظهورها أول مرة قد لا يُعرفان بعد)
+        QSize frame = window->frameGeometry().size() - window->size();
+        if (frame.width() <= 0 || frame.height() <= 0)
+            frame = QSize(16, 40);
+        const QSize limit = available.size() - frame;
+        QSize size = window->size();
+        if (size.width() > limit.width() || size.height() > limit.height()) {
+            size = size.boundedTo(limit).expandedTo(window->minimumSize().boundedTo(limit));
+            window->resize(size);
+        }
+        const QSize outer = size + frame;
+        QPoint position = window->frameGeometry().topLeft();
+        position.setX(std::clamp(position.x(), available.left(), std::max(available.left(), available.right() + 1 - outer.width())));
+        position.setY(std::clamp(position.y(), available.top(), std::max(available.top(), available.bottom() + 1 - outer.height())));
+        if (position != window->frameGeometry().topLeft())
+            window->move(position);
+    }
+};
+
 int main(int argc, char *argv[])
 {
     // تحويلات العتاد في Media Foundation تمنع بعض كاميرات USB من الفتح أو تبطئه كثيراً
@@ -74,6 +119,7 @@ int main(int argc, char *argv[])
     migrateLegacyData();
     QApplication::setLayoutDirection(Qt::RightToLeft);
     Theme::apply(app);
+    app.installEventFilter(new FitToScreen(&app));
     qRegisterMetaType<FaceItem>();
     qRegisterMetaType<QList<FaceItem>>();
 
