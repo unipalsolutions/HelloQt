@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>ملامح — تعريف بالبرنامج</title>
+<style>
+:root {
+  --navy: #164263;
+  --deep: #0f2c45;
+  --blue: #1f5f8b;
+  --accent: #3fa3d8;
+  --soft: #f4f7fa;
+  --line: #dde2e8;
+  --text: #1d2733;
+  --muted: #5d6b7a;
+  --good: #2e9d5b;
+  --warn: #d48a12;
+}
+@page {
+  size: A4;
+  margin: 15mm 14mm 17mm;
+  @bottom-right { content: "ملامح · التعرف على الوجوه"; font: 7.5pt "Noto Sans Arabic"; color: #8a96a3; }
+  @bottom-left { content: counter(page); font: 7.5pt "Noto Sans Arabic"; color: #8a96a3; }
+}
+@page cover {
+  margin: 0;
+  @bottom-right { content: none; }
+  @bottom-left { content: none; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #fff; }
+body {
+  font-family: "Noto Sans Arabic", sans-serif;
+  font-size: 9.6pt;
+  line-height: 1.75;
+  color: var(--text);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+h1, h2, h3, h4 { font-family: "Noto Kufi Arabic", sans-serif; margin: 0; line-height: 1.5; }
+p { margin: 0 0 3mm; }
+.en { direction: ltr; unicode-bidi: isolate; font-family: "Noto Sans", "Liberation Sans", sans-serif; }
+
+/* ---------- الغلاف ---------- */
+.cover {
+  page: cover;
+  height: 297mm;
+  width: 210mm;
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  text-align: center;
+  background:
+    radial-gradient(ellipse 70% 40% at 50% 30%, rgba(63,163,216,.22), transparent 70%),
+    linear-gradient(180deg, #164263 0%, #133a58 50%, #0f2c45 100%);
+  padding: 18mm 16mm 0;
+}
+.cover::before {
+  content: "";
+  position: absolute; inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,.06) 1px, transparent 1px);
+  background-size: 6mm 6mm;
+}
+.cover > * { position: relative; }
+.cover .icon { width: 30mm; height: 30mm; filter: drop-shadow(0 4mm 7mm rgba(0,0,0,.4)); }
+.cover h1 { font-size: 40pt; margin-top: 2mm; line-height: 1.3; }
+.cover .latin { letter-spacing: 4px; font-size: 9.5pt; color: #9cc6e4; margin-bottom: 4mm; }
+.cover .tagline { font-family: "Noto Kufi Arabic"; font-size: 14.5pt; margin-bottom: 2.5mm; }
+.cover .desc { font-size: 10pt; color: #c9dcec; max-width: 150mm; margin: 0 auto 5mm; }
+.pills { display: flex; justify-content: center; gap: 2.5mm; flex-wrap: wrap; margin-bottom: 7mm; }
+.pills span { border: 1px solid rgba(255,255,255,.35); border-radius: 20mm; padding: .4mm 4mm; font-size: 8.5pt; background: rgba(255,255,255,.06); }
+.hero {
+  width: 168mm; margin: 0 auto;
+  border-radius: 3mm; overflow: hidden;
+  box-shadow: 0 6mm 16mm rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.15);
+}
+.hero img { display: block; width: 100%; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3.5mm; margin: 8mm auto 0; width: 168mm; }
+.stats div { border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.06); border-radius: 2mm; padding: 2.5mm 2mm; }
+.stats b { display: block; font-size: 15pt; font-family: "Noto Sans", "Liberation Sans", sans-serif; font-weight: 400; direction: ltr; }
+.stats small { font-size: 7.6pt; color: #c9dcec; line-height: 1.5; display: block; }
+.cover .date { position: absolute; bottom: 9mm; left: 0; right: 0; font-size: 7.8pt; color: #8fb2cc; }
+
+/* ---------- عناوين الأقسام ---------- */
+.section { break-before: page; }
+.sec-head { display: flex; align-items: center; gap: 3.5mm; margin-bottom: 5mm; }
+.sec-head .num {
+  width: 9mm; height: 9mm; border-radius: 1.6mm; background: var(--blue); color: #fff;
+  display: grid; place-items: center; font-family: "Noto Sans"; font-size: 11pt; flex: none;
+}
+.sec-head h2 { font-size: 17pt; color: var(--deep); line-height: 1.3; }
+.sec-head small { display: block; color: var(--muted); font-size: 8.3pt; }
+h3 { font-size: 11.5pt; color: var(--deep); margin: 6mm 0 3mm; }
+.lead { font-size: 10.3pt; }
+
+/* ---------- البطاقات ---------- */
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 3.5mm; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3.5mm; }
+.card {
+  border: 1px solid var(--line); border-radius: 2.2mm; background: #fff;
+  padding: 3.5mm 4mm; break-inside: avoid;
+  box-shadow: 0 .6mm 1.6mm rgba(20,50,80,.05);
+}
+.card h4 { font-size: 10.3pt; color: var(--blue); display: flex; align-items: center; gap: 2mm; margin-bottom: 1.5mm; }
+.ic { width: 6.5mm; height: 6.5mm; border-radius: 1.4mm; background: #e4eef6; display: inline-grid; place-items: center; font-size: 9.5pt; flex: none; font-family: "Noto Color Emoji"; }
+.card p { font-size: 8.8pt; color: var(--muted); margin: 0; line-height: 1.7; }
+.card ul { margin: 0; padding: 0 4.5mm 0 0; font-size: 8.7pt; color: #3c4a58; line-height: 1.75; }
+.card li::marker { color: var(--accent); }
+
+.steps .card { position: relative; padding-top: 6mm; margin-top: 3.5mm; }
+.steps .badge {
+  position: absolute; top: -3.5mm; right: 50%; transform: translateX(50%);
+  width: 7mm; height: 7mm; border-radius: 50%; background: var(--accent); color: #fff;
+  display: grid; place-items: center; font-size: 8.5pt; font-family: "Noto Sans"; border: 1mm solid #fff;
+}
+.steps .card h4 { color: var(--deep); }
+
+.dark {
+  background: linear-gradient(135deg, var(--navy), var(--deep)); color: #fff; border-radius: 2.5mm;
+  padding: 4.5mm 5mm; margin: 5mm 0; break-inside: avoid;
+}
+.dark h3 { color: #fff; margin: 0 0 2.5mm; }
+.dark h4 { font-size: 9.6pt; color: #9fd2f0; margin-bottom: .5mm; }
+.dark p { font-size: 8.6pt; color: #d3e2ee; margin: 0; line-height: 1.7; }
+
+.callout {
+  border-right: 1.2mm solid var(--accent); background: var(--soft); border-radius: 1.6mm;
+  padding: 3mm 4.5mm; font-size: 9pt; margin: 4mm 0; break-inside: avoid;
+}
+.callout b { color: var(--blue); }
+
+/* ---------- لقطات الشاشة ---------- */
+figure { margin: 5mm 0; break-inside: avoid; }
+.win {
+  border-radius: 2mm; overflow: hidden; background: #0b1424;
+  box-shadow: 0 1.4mm 4mm rgba(15,44,69,.22), 0 0 0 .3mm #c7d1dc;
+  position: relative;
+}
+.win .bar {
+  height: 5.6mm; background: #1b2a3e; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 3mm; color: #b9c8d8; font-size: 7pt;
+}
+.win .bar .ctl { direction: ltr; letter-spacing: 2.2mm; font-family: "DejaVu Sans"; font-size: 6.5pt; color: #8193a8; }
+.win .bar .t { display: flex; gap: 1.5mm; align-items: center; }
+.win .bar img { width: 3.6mm; height: 3.6mm; }
+.win > .shot { position: relative; }
+.win > .shot > img { display: block; width: 100%; }
+figcaption { font-size: 8.4pt; color: var(--muted); margin-top: 2mm; line-height: 1.65; }
+figcaption b { color: var(--deep); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; align-items: start; margin: 5mm 0; }
+.pair figure { margin: 0; }
+.crop { overflow: hidden; }
+.crop img { display: block; width: 100%; }
+
+/* أرقام الشرح فوق اللقطة */
+.pin {
+  position: absolute; width: 5.4mm; height: 5.4mm; border-radius: 50%;
+  background: #f5b82e; color: #1a1a1a; font: 700 7.6pt "Noto Sans";
+  display: grid; place-items: center; transform: translate(50%, -50%);
+  box-shadow: 0 0 0 .6mm rgba(0,0,0,.35), 0 .6mm 1.6mm rgba(0,0,0,.5);
+}
+.legend { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2mm 5mm; margin-top: 2.5mm; font-size: 8.4pt; color: #3c4a58; }
+.legend span { display: flex; gap: 2mm; align-items: baseline; }
+.legend i { font-style: normal; flex: none; width: 4.4mm; height: 4.4mm; border-radius: 50%; background: #f5b82e; color: #1a1a1a; font: 700 6.8pt "Noto Sans"; display: inline-grid; place-items: center; transform: translateY(.6mm); }
+
+/* ---------- المخططات ---------- */
+.flow { display: flex; align-items: stretch; gap: 0; margin: 3mm 0 2mm; }
+.flow .node {
+  flex: 1; border: 1px solid var(--line); background: #fff; border-radius: 2mm; padding: 3mm 2mm 2.5mm;
+  text-align: center; position: relative;
+}
+.flow .node .e { font-family: "Noto Color Emoji"; font-size: 15pt; line-height: 1.2; display: block; }
+.flow .node b { display: block; font-family: "Noto Kufi Arabic"; font-size: 8.8pt; color: var(--deep); margin: 1mm 0 .5mm; }
+.flow .node small { display: block; font-size: 7.4pt; color: var(--muted); line-height: 1.55; }
+.flow .arrow { width: 6mm; display: grid; place-items: center; color: var(--accent); font-size: 12pt; flex: none; }
+.flow .node.result { background: var(--soft); }
+.chips { display: flex; flex-direction: column; gap: 1mm; margin-top: 1.2mm; }
+.chip { border-radius: 1mm; font-size: 7.2pt; padding: .2mm 1mm; color: #fff; }
+.chip.ok { background: var(--good); } .chip.maybe { background: var(--warn); } .chip.no { background: #7d8a98; }
+.local-band {
+  border: 1px dashed var(--accent); border-radius: 2mm; text-align: center; font-size: 8.3pt; color: var(--blue);
+  padding: 1.2mm; background: #f2f9fd;
+}
+
+.net { break-inside: avoid; display: grid; grid-template-columns: 44mm 1fr 30mm 1fr 40mm; grid-template-rows: repeat(3, auto); align-items: center; row-gap: 3mm; margin: 4mm 0 2mm; }
+.net .src { border: 1px solid var(--line); border-radius: 2mm; padding: 2mm 2.5mm; background: #fff; display: flex; gap: 2mm; align-items: center; }
+.net .src .e, .net .hub .e, .net .pc .e { font-family: "Noto Color Emoji"; font-size: 14pt; line-height: 1; }
+.net .src b, .net .hub b, .net .pc b { font-family: "Noto Kufi Arabic"; font-size: 8.4pt; color: var(--deep); display: block; line-height: 1.5; }
+.net small { font-size: 7.2pt; color: var(--muted); display: block; line-height: 1.5; }
+.net .wire { height: 0; border-top: .6mm solid var(--accent); position: relative; margin: 0 1.5mm; }
+.net .wire span { position: absolute; top: -4.2mm; left: 0; right: 0; text-align: center; font-size: 6.9pt; color: var(--blue); white-space: nowrap; }
+.net .wire::after { content: ""; position: absolute; left: -1mm; top: -1.5mm; border: 1.2mm solid transparent; border-right: 1.8mm solid var(--accent); border-left: 0; }
+.net .hub { grid-column: 3; grid-row: 2 / span 2; text-align: center; border: 1px solid var(--line); border-radius: 2mm; padding: 3mm 1.5mm; background: var(--soft); align-self: stretch; display: grid; place-content: center; }
+.net .pc { grid-column: 5; grid-row: 1 / span 3; text-align: center; background: linear-gradient(135deg, var(--navy), var(--deep)); color: #fff; border-radius: 2.5mm; padding: 4mm 2mm; align-self: stretch; display: grid; place-content: center; }
+.net .pc b { color: #fff; font-size: 10pt; }
+.net .pc small { color: #c9dcec; }
+.net .pc img { width: 12mm; margin: 0 auto 1.5mm; }
+
+/* ---------- النتائج ---------- */
+.bars { margin: 2mm 0 1mm; }
+.bar-row { display: grid; grid-template-columns: 25mm 1fr 15mm; align-items: center; gap: 3mm; font-size: 8.6pt; margin: 1.6mm 0; }
+.track { height: 3.2mm; border-radius: 2mm; background: #e7ecf1; overflow: hidden; }
+.track i { display: block; height: 100%; border-radius: 2mm; background: #c3d1de; }
+.track i.now { background: var(--blue); }
+.bar-row b { direction: ltr; text-align: left; font-family: "Noto Sans"; }
+table { width: 100%; border-collapse: collapse; font-size: 8.7pt; margin: 2mm 0 4mm; break-inside: avoid; }
+th { background: #e4eef6; color: var(--deep); text-align: right; padding: 2mm 3mm; font-family: "Noto Kufi Arabic"; font-size: 8.4pt; }
+td { padding: 1.8mm 3mm; border-bottom: 1px solid #e8edf2; }
+.tag { display: inline-block; background: #e5f4ea; color: #23784a; border-radius: 1mm; padding: 0 2mm; font-size: 8pt; }
+.tag.mid { background: #fff3db; color: #9a6206; }
+.badge-note { display: inline-block; background: #fff3db; color: #9a6206; border-radius: 3mm; padding: 0 3mm; font-size: 7.8pt; font-family: "Noto Sans Arabic"; margin-right: 2mm; vertical-align: middle; }
+.stat3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3.5mm; margin-top: 4mm; }
+.stat3 .card { text-align: center; }
+.stat3 h4 { justify-content: center; color: var(--deep); }
+.stat3 .big { font: 400 15pt "Noto Sans"; color: var(--blue); direction: ltr; display: block; margin: .5mm 0; }
+
+/* ---------- خطوات البدء ---------- */
+.journey { display: grid; grid-template-columns: 1fr; gap: 3mm; margin-top: 3mm; }
+.jstep { display: grid; grid-template-columns: 9mm 1fr 74mm; gap: 4mm; align-items: center; border: 1px solid var(--line); border-radius: 2.2mm; padding: 3mm 3.5mm; break-inside: avoid; }
+.jstep .n { width: 8mm; height: 8mm; border-radius: 50%; background: var(--blue); color: #fff; display: grid; place-items: center; font: 10pt "Noto Sans"; }
+.jstep h4 { font-size: 10pt; color: var(--deep); margin-bottom: .8mm; }
+.jstep p { font-size: 8.5pt; color: var(--muted); margin: 0; line-height: 1.65; }
+.jstep .thumb { border-radius: 1.4mm; overflow: hidden; box-shadow: 0 0 0 .3mm #c7d1dc, 0 1mm 2.5mm rgba(15,44,69,.18); height: 30mm; background: #0b1424; }
+.jstep .thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+
+.closing {
+  margin-top: 6mm; text-align: center; background: linear-gradient(135deg, var(--navy), var(--deep)); color: #fff;
+  border-radius: 2.5mm; padding: 6mm; break-inside: avoid;
+}
+.closing h2 { font-size: 16pt; }
+.closing p { color: #c9dcec; margin: 0; }
+.note { font-size: 7.4pt; color: #8a96a3; margin-top: 4mm; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<!-- ======================= الغلاف ======================= -->
+<section class="cover">
+  <img class="icon" src="img/icon.png" alt="">
+  <h1>ملامح</h1>
+  <div class="latin en">MALAMIH</div>
+  <div class="tagline">التعرف على الوجوه… على جهازك، بالعربية، وبلا إنترنت</div>
+  <p class="desc">برنامج لنظام ويندوز يتعرف على الأشخاص في الصور والفيديو وكاميرات المراقبة، وينبّهك فور ظهور من تبحث عنه، ويحفظ سجلاً كاملاً بكل ظهور.</p>
+  <div class="pills"><span>صور</span><span>فيديو</span><span>كاميرات مباشرة</span><span>تنبيهات فورية</span><span>تسجيل</span><span>تقارير</span></div>
+  <div class="hero"><img src="img/recognition.jpg" alt=""></div>
+  <div class="stats">
+    <div><b>100%</b><small>محلي: لا تخرج أي صورة من الجهاز</small></div>
+    <div><b>97.9%</b><small>نجاح التعرف في 28 ظرفاً صعباً</small></div>
+    <div><b>16</b><small>كاميرا معاً في شاشة واحدة</small></div>
+    <div><b>&lt;1ms</b><small>للبحث في قاعدة 5,000 شخص</small></div>
+  </div>
+  <div class="date">تعريف بالبرنامج · أكتوبر 2026</div>
+</section>
+
+<!-- ======================= 1. ما هو ملامح ======================= -->
+<section class="section">
+  <div class="sec-head"><div class="num">1</div><div><h2>ما هو ملامح؟</h2><small>فكرة البرنامج في دقيقة</small></div></div>
+  <p class="lead">ملامح يعرف الوجوه كما يعرفها الإنسان. تعطيه صور الأشخاص الذين تريد أن يعرفهم، فيتعرف عليهم بعد ذلك أينما ظهروا: في صورة، أو مقطع فيديو، أو أمام كاميرا مراقبة تعمل الآن.</p>
+
+  <div class="grid3 steps">
+    <div class="card"><span class="badge">1</span><h4>عرّفه بالأشخاص</h4><p>أضف الشخص بياناته و3 إلى 5 صور لوجهه، أو استورد مجلداً كاملاً من الصور دفعة واحدة.</p></div>
+    <div class="card"><span class="badge">2</span><h4>افتح أو شغّل</h4><p>صورة، أو فيديو، أو كاميرا. البرنامج يكشف كل وجه ويضع عليه اسم صاحبه ونسبة التأكد.</p></div>
+    <div class="card"><span class="badge">3</span><h4>تابع وانتبه</h4><p>تنبيه فوري عند ظهور شخص مراقَب، وسجل لكل ظهور بالصورة والوقت والكاميرا.</p></div>
+  </div>
+
+  <div class="dark">
+    <h3>لماذا ملامح مختلف؟</h3>
+    <div class="grid3">
+      <div><h4>خصوصية كاملة</h4><p>كل التحليل على جهازك. لا سحابة، ولا اشتراك، ولا إنترنت.</p></div>
+      <div><h4>عربي من الأساس</h4><p>واجهة من اليمين لليسار، ورسائل وتقارير بالعربية الواضحة.</p></div>
+      <div><h4>يعمل مع ما عندك</h4><p>كاميرا اللابتوب، أو كاميرات المراقبة، أو جهاز التسجيل الموجود.</p></div>
+    </div>
+  </div>
+
+  <h3>لمن هذا البرنامج؟</h3>
+  <div class="grid2">
+    <div class="card"><h4><span class="ic">🏢</span>المنشآت والشركات</h4><p>معرفة من دخل ومتى، وتنبيه عند ظهور شخص غير مرغوب فيه، وتقرير يومي بالحضور.</p></div>
+    <div class="card"><h4><span class="ic">🛡️</span>الأمن والحراسة</h4><p>مراقبة عدة كاميرات من شاشة واحدة، مع قائمة مراقبة وتنبيهات بمستويات مختلفة.</p></div>
+    <div class="card"><h4><span class="ic">🔎</span>البحث في التسجيلات</h4><p>بدل مشاهدة ساعات من الفيديو: «أين ظهر هذا الشخص؟» يجيب عنها البرنامج في دقائق.</p></div>
+    <div class="card"><h4><span class="ic">🗂️</span>أرشيف الصور</h4><p>إيجاد كل صور شخص معيّن بين آلاف الصور في المجلدات، ونسخها إلى مكان واحد.</p></div>
+  </div>
+
+  <div class="callout"><b>مثال:</b> صاحب محل يضيف صور الأشخاص الممنوعين من الدخول. حين يقف أحدهم أمام كاميرا المدخل، يظهر تنبيه على الشاشة مع صوت، ويُحفظ مقطع الفيديو جاهزاً للتسليم.</div>
+</section>
+
+<!-- كيف يعمل -->
+<section class="section">
+  <h3 style="margin-top:0">كيف يتعرف ملامح على الوجه؟</h3>
+  <p>كل صورة أو لقطة فيديو تمر بخمس مراحل، كلها على جهازك وفي أجزاء من الثانية:</p>
+  <div class="flow">
+    <div class="node"><span class="e">📷</span><b>المصدر</b><small>صورة، فيديو، أو كاميرا مباشرة</small></div>
+    <div class="arrow">←</div>
+    <div class="node"><span class="e">🔍</span><b>كشف الوجوه</b><small>يجد كل وجه حتى الصغير والبعيد والمائل</small></div>
+    <div class="arrow">←</div>
+    <div class="node"><span class="e">📐</span><b>تعديل وتحسين</b><small>يعدّل زاوية الوجه ويوضّح المظلم والمشوش</small></div>
+    <div class="arrow">←</div>
+    <div class="node"><span class="e">🧬</span><b>بصمة الوجه</b><small>يحوّل الملامح إلى بصمة رقمية لا تُعاد صورةً</small></div>
+    <div class="arrow">←</div>
+    <div class="node"><span class="e">🗃️</span><b>المقارنة</b><small>بآلاف البصمات في القاعدة في أقل من جزء من الثانية</small></div>
+    <div class="arrow">←</div>
+    <div class="node result"><b style="margin-top:0">النتيجة</b>
+      <div class="chips"><span class="chip ok">مؤكد</span><span class="chip maybe">محتمل</span><span class="chip no">غير مسجل</span></div></div>
+  </div>
+  <div class="local-band">🔒 لا شيء من هذا يحتاج إنترنت: الصور والبصمات والسجلات تبقى على جهازك فقط</div>
+
+  <figure>
+    <div class="win">
+      <div class="bar"><span class="t"><img src="img/icon.png" alt="">ملامح — التعرف على الوجوه</span><span class="ctl">—☐✕</span></div>
+      <div class="shot">
+        <img src="img/recognition.jpg" alt="">
+        <span class="pin" style="right:33.6%;top:3.4%">1</span>
+        <span class="pin" style="right:17%;top:11.5%">2</span>
+        <span class="pin" style="right:9%;top:22%">3</span>
+        <span class="pin" style="right:18%;top:46%">4</span>
+        <span class="pin" style="right:74.8%;top:33.5%">5</span>
+        <span class="pin" style="right:75.7%;top:88.5%">6</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i>1</i>افتح صورة أو فيديو أو كاميرا، أو اسحب الملف إلى النافذة</span>
+      <span><i>2</i>حد التعرف: ارفعه للتشدد واخفضه للصور الرديئة</span>
+      <span><i>3</i>شريط تنبيه المراقبة: ظهر شخص من قائمة المراقبة</span>
+      <span><i>4</i>اسم كل شخص ونسبة التشابه فوق وجهه مباشرة</span>
+      <span><i>5</i>قائمة الوجوه المكتشفة مع تفاصيل الوجه المختار</span>
+      <span><i>6</i>وجه جديد؟ أضفه إلى القاعدة بنقرة</span>
+    </div>
+    <figcaption><b>شاشة التعرف:</b> صورة جماعية فيها 12 شخصاً؛ تعرف البرنامج على كل المسجلين، ونبّه فوراً إلى «سامر يوسف» لأنه في قائمة المراقبة (الإطار الأزرق وعلامة ⚠).</figcaption>
+  </figure>
+
+</section>
+
+<!-- ======================= 2. ماذا يستطيع ======================= -->
+<section class="section">
+  <div class="sec-head"><div class="num">2</div><div><h2>ماذا يستطيع أن يفعل؟</h2><small>المزايا الرئيسية، مع صور من البرنامج</small></div></div>
+
+  <div class="grid2">
+    <div class="card"><h4><span class="ic">👤</span>التعرف على الوجوه</h4><ul>
+      <li>يكشف كل الوجوه في الصورة، حتى الصغيرة والبعيدة.</li>
+      <li>ثلاث نتائج واضحة: مؤكد، محتمل، غير مسجل.</li>
+      <li>يعمل مع الكمامة والنظارة والزاوية المائلة والإضاءة الضعيفة.</li>
+      <li>تصحيح أي نتيجة بنقرة «هذا هو».</li></ul></div>
+    <div class="card"><h4><span class="ic">📹</span>الكاميرات</h4><ul>
+      <li>كاميرا USB، كاميرات المراقبة القديمة والحديثة، وأجهزة التسجيل DVR وNVR.</li>
+      <li>إعدادات جاهزة لأشهر الماركات (Hikvision، Dahua، Reolink…).</li>
+      <li>زر «اختبار» يوضح بالعربية سبب أي مشكلة في الاتصال.</li>
+      <li>يعيد الاتصال وحده إذا انقطعت الكاميرا.</li></ul></div>
+  </div>
+
+  <div style="break-inside:avoid">
+  <h3 style="margin-top:4mm">طرق توصيل الكاميرات</h3>
+  <div class="net">
+    <div class="src" style="grid-row:1"><span class="e">🎥</span><div><b>كاميرا USB أو كاميرا اللابتوب</b><small>تعمل مباشرة</small></div></div>
+    <div class="wire" style="grid-column:2 / span 3;grid-row:1"><span>كابل USB</span></div>
+    <div class="src" style="grid-row:2"><span class="e">📡</span><div><b>كاميرات IP</b><small>Hikvision، Dahua، Reolink…</small></div></div>
+    <div class="wire" style="grid-column:2;grid-row:2"><span>شبكة / Wi-Fi</span></div>
+    <div class="src" style="grid-row:3"><span class="e">📼</span><div><b>جهاز تسجيل DVR / NVR</b><small>مع الكاميرات القديمة والحديثة</small></div></div>
+    <div class="wire" style="grid-column:2;grid-row:3"><span>كابل شبكة</span></div>
+    <div class="hub"><span class="e">🛜</span><b>الراوتر</b><small>الشبكة المحلية</small></div>
+    <div class="wire" style="grid-column:4;grid-row:2 / span 2"><span>بث RTSP</span></div>
+    <div class="pc"><img src="img/icon.png" alt=""><b>جهاز ملامح</b><small>يحلل ويسجل وينبّه حتى 16 كاميرا</small></div>
+  </div>
+  <p style="font-size:8.6pt;color:var(--muted)">لا يلزم تغيير الكاميرات الموجودة: البرنامج يقرأ البث نفسه الذي يقرؤه جهاز التسجيل، ويقترح عنوان كل كاميرا حسب ماركتها، ويبحث عنها في الشبكة تلقائياً.</p>
+  </div>
+  <figure style="width:150mm;margin-left:auto;margin-right:auto">
+    <div class="win"><div class="bar"><span class="t"><img src="img/icon.png" alt="">الكاميرات</span><span class="ctl">—☐✕</span></div>
+      <div class="shot"><img src="img/cameras.jpg" alt=""></div></div>
+    <figcaption><b>إضافة كاميرا:</b> اختر الماركة فيكتب البرنامج عنوان البث وحده، مع «البحث في الشبكة» و«اكتشاف تلقائي» وزر «اختبار» يعرض صورة من الكاميرا قبل حفظها.</figcaption>
+  </figure>
+
+  <div class="grid2">
+    <div class="card"><h4><span class="ic">🖥️</span>عدة كاميرات معاً</h4><ul>
+      <li>حتى 16 كاميرا في شبكة واحدة على الشاشة.</li>
+      <li>تحليل وتسجيل وتنبيهات لكل كاميرا.</li>
+      <li>مناطق داخل الصورة تُراقَب أو تُتجاهل (باب، ممر، تلفاز).</li>
+      <li>جدول زمني لكل كاميرا: ساعات التنبيه وساعات التسجيل.</li></ul></div>
+    <div class="card"><h4><span class="ic">🔔</span>المراقبة والتنبيهات</h4><ul>
+      <li>قائمة مراقبة: شريط تنبيه وامض وصوت فور ظهور الشخص.</li>
+      <li>مستوى لكل شخص: عادي، إنذار عالٍ، صامت، أو إشعار ويندوز.</li>
+      <li>تنبيه عن زائر مجهول تكرر ظهوره أو ظهر ليلاً.</li>
+      <li>تأكيد الظهور في لقطتين قبل التنبيه، فتقل الإنذارات الكاذبة.</li></ul></div>
+  </div>
+
+  <figure>
+    <div class="win"><div class="bar"><span class="t"><img src="img/icon.png" alt="">ملامح — الكاميرات</span><span class="ctl">—☐✕</span></div>
+      <div class="shot"><img src="img/multi.jpg" alt=""></div></div>
+    <figcaption><b>شاشة الكاميرات المتعددة:</b> كل كاميرا في خانتها مع اسمها وحالة اتصالها، وتحليل وتسجيل مستقل لكل واحدة، و«تسجيل الكل» بزر واحد. هنا انقطع اتصال كاميرتين، فبقيت الأخريان تعملان والبرنامج يعيد المحاولة معهما تلقائياً.</figcaption>
+  </figure>
+
+  <div class="pair">
+    <figure>
+      <div class="win"><div class="bar"><span class="t">مناطق التحليل والجدول</span><span class="ctl">—☐✕</span></div>
+        <div class="shot"><img src="img/rules.jpg" alt=""></div></div>
+      <figcaption><b>مناطق التحليل:</b> ارسم على صورة الكاميرا المنطقة التي تُراقَب أو تُتجاهل، وحدد ساعات التنبيه والتسجيل.</figcaption>
+    </figure>
+    <figure>
+      <div class="win"><div class="bar"><span class="t">سجل التنبيهات</span><span class="ctl">—☐✕</span></div>
+        <div class="shot"><img src="img/alertlog.jpg" alt=""></div></div>
+      <figcaption><b>سجل التنبيهات:</b> كل ظهور لشخص مراقَب بصورته ونسبة التشابه والوقت والمصدر، مع حفظ اللقطة أو المقطع.</figcaption>
+    </figure>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><h4><span class="ic">⏺️</span>التسجيل</h4><ul>
+      <li>تسجيل الكاميرات في ملفات فيديو عادية.</li>
+      <li>خيار التسجيل عند الحركة فقط لتوفير المساحة.</li>
+      <li>حذف التسجيلات القديمة تلقائياً قبل امتلاء القرص.</li>
+      <li>حفظ 30 ثانية حول لحظة الظهور في مقطع جاهز للتسليم.</li></ul></div>
+    <div class="card"><h4><span class="ic">🕒</span>السجل والتاريخ</h4><ul>
+      <li>كل ظهور يُحفظ بالصورة والوقت والكاميرا.</li>
+      <li>متصفح تسجيلات بخط زمني لـ 24 ساعة لكل كاميرا.</li>
+      <li>«أين ظهر؟» يجمع كل ظهور لشخص خلال أسبوع.</li>
+      <li>الزوار المجهولون يُجمعون، ويمكن تسميتهم لاحقاً.</li></ul></div>
+    <div class="card"><h4><span class="ic">📇</span>ملف لكل شخص</h4><ul>
+      <li>البيانات الكاملة: الاسم، الهوية، الهاتف، العنوان، التصنيفات، الملاحظات.</li>
+      <li>مؤشر «قوة الملف» ونصيحة بما ينقصه من صور.</li>
+      <li>كشف الصور التي أضيفت لشخص آخر بالخطأ.</li>
+      <li>تنبيه إن كان الشخص مسجلاً مرتين، مع زر للدمج.</li></ul></div>
+    <div class="card"><h4><span class="ic">🎞️</span>تحليل الفيديو</h4><ul>
+      <li>خط زمني يظهر عليه متى ظهر كل شخص.</li>
+      <li>تحليل جزء محدد من الفيديو أو منطقة من الصورة.</li>
+      <li>تخطي اللقطات الساكنة فيصبح تحليل الساعات الطويلة أسرع بكثير.</li>
+      <li>تصدير كل ظهور شخص في مقطع واحد.</li></ul></div>
+  </div>
+
+  <figure>
+    <div class="win"><div class="bar"><span class="t"><img src="img/icon.png" alt="">ملامح — قاعدة البيانات</span><span class="ctl">—☐✕</span></div>
+      <div class="shot"><img src="img/profile.jpg" alt=""></div></div>
+    <figcaption><b>ملف الشخص:</b> البيانات والتصنيفات (مراقبة، ممنوع من الدخول)، ومؤشر قوة الملف 78%، وتنبيه بأن الشخص قد يكون مسجلاً مرتين مع زر «دمج الملفين»، وصوره مع جودة كل صورة.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="win"><div class="bar"><span class="t"><img src="img/icon.png" alt="">ملامح — تحليل فيديو</span><span class="ctl">—☐✕</span></div>
+      <div class="shot"><img src="img/video.jpg" alt=""></div></div>
+    <figcaption><b>تحليل الفيديو:</b> مقطع من كاميرا مدخل تعرّف فيه البرنامج على «كريم الحسن» و«سامر يوسف» (المراقَب). تحت الفيديو خط زمني بمسار لكل شخص يبيّن متى ظهر بالضبط؛ انقر على المسار للانتقال إلى اللحظة، أو صدّر كل ظهوره في مقطع واحد.</figcaption>
+  </figure>
+
+  <div class="grid2">
+    <div class="card"><h4><span class="ic">✨</span>تحسين الصور</h4><ul>
+      <li>توضيح الصور المظلمة والصغيرة والمشوشة.</li>
+      <li>تكبير الدقة حتى أربعة أضعاف.</li>
+      <li>معالجات للكاميرات الليلية والمائلة والقديمة.</li>
+      <li>قص تلقائي حول الوجه بمقاس الصورة الشخصية.</li></ul></div>
+    <div class="card"><h4><span class="ic">⚖️</span>المطابقة والبحث</h4><ul>
+      <li>مقارنة صورتين: هل هما الشخص نفسه؟ ونسبة التشابه.</li>
+      <li>البحث بصورة: أقرب عشرة أشخاص في القاعدة.</li>
+      <li>البحث عن شخص بين آلاف الصور في مجلد.</li>
+      <li>جمع أوضح صور الشخص من فيديو لتقوية ملفه.</li></ul></div>
+  </div>
+
+  <div class="pair">
+    <figure>
+      <div class="win"><div class="bar"><span class="t">تحسين الصور</span><span class="ctl">—☐✕</span></div>
+        <div class="shot"><img src="img/studio.jpg" alt=""></div></div>
+      <figcaption><b>تحسين الصور:</b> صورة صغيرة مظلمة مشوشة قبل وبعد التحسين، مع شريط مقارنة يُسحب بين النسختين.</figcaption>
+    </figure>
+    <figure>
+      <div class="win"><div class="bar"><span class="t">المطابقة</span><span class="ctl">—☐✕</span></div>
+        <div class="shot"><img src="img/match.jpg" alt=""></div></div>
+      <figcaption><b>مقارنة صورتين:</b> صورتان مختلفتان للشخص نفسه (إحداهما معكوسة ومائلة)، ونسبة التشابه وحكم واضح: «الشخص نفسه».</figcaption>
+    </figure>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><h4><span class="ic">📄</span>التقارير</h4><ul>
+      <li>تقرير يومي PDF: لكل كاميرا الظهور وساعات التسجيل والأحداث.</li>
+      <li>ملف الشخص PDF بصوره وبياناته وسجل ظهوره.</li>
+      <li>تقرير تحليل الفيديو للطباعة، وجداول Excel.</li>
+      <li>تصدير سجل التنبيهات.</li></ul></div>
+    <div class="card"><h4><span class="ic">🔒</span>الأمان والاعتمادية</h4><ul>
+      <li>نسخ احتياطي تلقائي يومي أو أسبوعي، واستعادة آمنة.</li>
+      <li>يعمل في الخلفية من أيقونة بجانب الساعة، ويبدأ مع ويندوز.</li>
+      <li>كلمات مرور الكاميرات محفوظة مشفرة.</li>
+      <li>صيانة ذاتية للتشغيل الطويل لأشهر دون امتلاء القرص.</li></ul></div>
+  </div>
+
+  <div class="pair">
+    <figure>
+      <div class="win"><div class="bar"><span class="t">معالجات الفيديو</span><span class="ctl">—☐✕</span></div>
+        <div class="shot"><img src="img/filters.jpg" alt=""></div></div>
+      <figcaption><b>معالجات الكاميرا:</b> إضاءة وتباين وإزالة تشويش وتدوير لكاميرا ليلية أو مقلوبة، مع معاينة قبل وبعد.</figcaption>
+    </figure>
+    <figure>
+      <div class="win"><div class="bar"><span class="t">الإعدادات</span><span class="ctl">—☐✕</span></div>
+        <div class="shot"><img src="img/settings.jpg" alt=""></div></div>
+      <figcaption><b>الإعدادات:</b> العمل في الخلفية، والتشغيل مع ويندوز، والنسخ الاحتياطي والصيانة، كلها من نافذة واحدة.</figcaption>
+    </figure>
+  </div>
+
+  <div class="dark">
+    <h3>سهل للجميع</h3>
+    <div class="grid3">
+      <div><h4>اسحب وأفلت</h4><p>اسحب أي صورة أو فيديو إلى النافذة، أو الصق صورة مباشرة.</p></div>
+      <div><h4>شروحات داخل البرنامج</h4><p>كل خطوة في توصيل الكاميرات مشروحة بلغة بسيطة.</p></div>
+      <div><h4>لا يثقل الجهاز</h4><p>اختر: خفيف أو متوازن أو أقصى سرعة، ويستفيد من كرت الشاشة إن وُجد.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 3. النتائج ======================= -->
+<section class="section">
+  <div class="sec-head"><div class="num">3</div><div><h2>النتائج بالأرقام</h2><small>اختبارات مقيسة على البرنامج نفسه</small></div></div>
+
+  <h3 style="margin-top:0">التعرف في أسوأ الظروف</h3>
+  <p>10 وجوه معروفة اختُبرت تحت 28 ظرفاً سيئاً (280 محاولة): ظلام، تشويش، كمامة، نظارة شمسية، زاوية علوية، وجه بعيد صغير، صورة مقلوبة، كاميرا مراقبة ليلية…</p>
+  <div class="bars">
+    <div class="bar-row"><span>قبل التحسينات</span><div class="track"><i style="width:94.6%"></i></div><b>94.6%</b></div>
+    <div class="bar-row"><span>الآن</span><div class="track"><i class="now" style="width:97.9%"></i></div><b>97.9%</b></div>
+  </div>
+
+  <div class="callout"><b>صفر أخطاء في الهوية:</b> لم يُنسب أي وجه إلى شخص آخر في أي ظرف، ولم يُتعرف على الشخص غير المسجل. الحالات القليلة التي فاتت كانت وجوهاً فقدت ملامحها تماماً من شدة التشويش أو الإضاءة.</div>
+
+  <table>
+    <tr><th>الظرف</th><th style="width:28mm">النتيجة</th></tr>
+    <tr><td>ظلام، تباين منخفض، صور رمادية، ألوان منحرفة</td><td><span class="tag">10 من 10</span></td></tr>
+    <tr><td>كمامة، نظارة شمسية، رأس مائل، صورة مدارة</td><td><span class="tag">10 من 10</span></td></tr>
+    <tr><td>كاميرا مرتفعة وزاوية علوية حادة</td><td><span class="tag">10 من 10</span></td></tr>
+    <tr><td>وجه بعيد صغير جداً في لقطة عالية الدقة</td><td><span class="tag">10 من 10</span></td></tr>
+    <tr><td>ضبابية الحركة</td><td><span class="tag">10 من 10</span></td></tr>
+    <tr><td>كاميرا مراقبة رديئة، وصورة مقلوبة</td><td><span class="tag">9 من 10</span></td></tr>
+    <tr><td>كاميرا مراقبة ليلية، وإضاءة زائدة جداً</td><td><span class="tag mid">8 من 10</span></td></tr>
+  </table>
+
+  <h3>ثبات التعرف في الفيديو</h3>
+  <p>نسبة اللقطات التي نُسب فيها وجه لشخص آخر، في فيديو فيه 6 أشخاص بنسخ رديئة (دقة منخفضة جداً، ظلام، إضاءة متغيرة):</p>
+  <div class="bars">
+    <div class="bar-row"><span>قبل التحسينات</span><div class="track"><i style="width:70%"></i></div><b>~7%</b></div>
+    <div class="bar-row"><span>الآن</span><div class="track"><i class="now" style="width:6%"></i></div><b>0–0.6%</b></div>
+  </div>
+  <p style="font-size:8pt;color:var(--muted)">■ قبل &nbsp;·&nbsp; <span style="color:var(--blue)">■</span> الآن &nbsp;·&nbsp; الخلط انخفض أكثر من 10 أضعاف</p>
+
+  <div class="stat3">
+    <div class="card"><h4>سرعة الفيديو</h4><span class="big">×8</span><p>أسرع من النسخة الأولى في تحليل فيديو عالي الدقة</p></div>
+    <div class="card"><h4>ذاكرة ثابتة</h4><span class="big">~480MB</span><p>طوال تحليل فيديو 10 دقائق دون أن تزيد</p></div>
+    <div class="card"><h4>قاعدة سريعة</h4><span class="big">0.6ms</span><p>للبحث عن وجه بين 1,000 شخص بصورهم</p></div>
+  </div>
+</section>
+
+<!-- ======================= 4. المتطلبات ======================= -->
+<section class="section">
+  <div class="sec-head"><div class="num">4</div><div><h2>ماذا تحتاج لتشغيله؟</h2><small>المتطلبات والبدء</small></div></div>
+
+  <table>
+    <tr><th style="width:32mm">البند</th><th>المطلوب</th></tr>
+    <tr><td>نظام التشغيل</td><td>ويندوز 10 أو 11 (64 بت)</td></tr>
+    <tr><td>الجهاز</td><td>أي لابتوب أو جهاز مكتبي حديث. كرت الشاشة اختياري ويسرّع العمل كثيراً</td></tr>
+    <tr><td>الإنترنت</td><td>غير مطلوب إطلاقاً</td></tr>
+    <tr><td>الكاميرات</td><td>كاميرا اللابتوب، كاميرا USB، كاميرات المراقبة وأجهزة التسجيل، أو كاميرا الهاتف</td></tr>
+    <tr><td>التثبيت</td><td>ملف تثبيت واحد، بالعربية</td></tr>
+  </table>
+
+  <h3>كم كاميرا يتحمل جهازك؟ <span class="badge-note">تقدير تقريبي</span></h3>
+  <table>
+    <tr><th>الجهاز</th><th style="width:60mm">كاميرات بتحليل مستمر مريح</th></tr>
+    <tr><td>لابتوب عادي بلا كرت شاشة</td><td>1–2</td></tr>
+    <tr><td>جهاز مكتبي بكرت شاشة متوسط</td><td>6–10</td></tr>
+    <tr><td>جهاز مخصص بكرت شاشة قوي</td><td>حتى 16 في الشبكة الواحدة</td></tr>
+  </table>
+
+  <h3>من التثبيت إلى أول تنبيه</h3>
+  <div class="journey">
+    <div class="jstep"><div class="n">1</div><div><h4>أضف الأشخاص</h4><p>من «قاعدة البيانات»: شخص جديد، ثم 3 إلى 5 صور لوجهه. ضع عليه تصنيف «مراقبة» إن أردت التنبيه عند ظهوره. مؤشر قوة الملف يخبرك إن كانت الصور كافية.</p></div><div class="thumb"><img src="img/t_profile.jpg" alt=""></div></div>
+    <div class="jstep"><div class="n">2</div><div><h4>أضف الكاميرا</h4><p>من «الكاميرا ← الكاميرات»: اختر الماركة واكتب عنوانها وكلمة المرور، ثم «اختبار». إن لم تعرف العنوان فاضغط «البحث في الشبكة».</p></div><div class="thumb"><img src="img/t_cameras.jpg" alt=""></div></div>
+    <div class="jstep"><div class="n">3</div><div><h4>حدد ما يُراقَب ومتى</h4><p>ارسم منطقة الباب أو الممر، وتجاهل التلفاز والنوافذ، واختر ساعات التنبيه والتسجيل لكل كاميرا.</p></div><div class="thumb"><img src="img/t_rules.jpg" alt=""></div></div>
+    <div class="jstep"><div class="n">4</div><div><h4>شغّل واترك البرنامج يعمل</h4><p>عند ظهور شخص من قائمة المراقبة يومض شريط التنبيه مع صوت، ويُحفظ الظهور في السجل مع مقطع جاهز للتسليم. ويمكن أن يبقى البرنامج بجانب الساعة ويبدأ مع ويندوز.</p></div><div class="thumb"><img src="img/t_alert.jpg" alt=""></div></div>
+  </div>
+
+  <h3>نصائح لأفضل نتيجة</h3>
+  <div class="grid2">
+    <div class="card"><h4><span class="ic">📸</span>صور التسجيل</h4><p>3 إلى 5 صور واضحة لكل شخص، بزوايا وإضاءة مختلفة.</p></div>
+    <div class="card"><h4><span class="ic">📐</span>مكان الكاميرا</h4><p>على مستوى قريب من الوجه، ومواجهة لمسار الناس، ولا تكون الإضاءة القوية خلف الشخص.</p></div>
+    <div class="card"><h4><span class="ic">📏</span>المسافة</h4><p>كاميرا عادية عند باب تعطي أفضل نتيجة حتى 4–6 أمتار تقريباً.</p></div>
+    <div class="card"><h4><span class="ic">🎚️</span>درجة التشدد</h4><p>ارفعها لتقليل الأخطاء في القواعد الكبيرة، واخفضها للصور الرديئة جداً.</p></div>
+  </div>
+
+  <div class="closing"><h2>ملامح</h2><p>يعرف الوجوه… ويحفظ خصوصيتك</p></div>
+
+  <p class="note">الصور في هذا الدليل لقطات حقيقية من البرنامج (الإصدار 3.0.0). وجوه الأشخاص فيها ليست لأشخاص حقيقيين، بل مولّدة بالذكاء الاصطناعي (نماذج StyleGAN من NVIDIA)، والأسماء والبيانات المرافقة لها تجريبية.</p>
+</section>
+
+</body>
+</html>
