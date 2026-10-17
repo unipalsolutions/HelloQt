@@ -188,6 +188,9 @@ int main(int argc, char *argv[])
     if (window.startHidden()) {
         // فُتح مع ويندوز: يبقى بجانب الساعة، ويظهر بالنقر على أيقونته
         window.setGeometry(QStyle::alignedRect(Qt::RightToLeft, Qt::AlignCenter, QSize(1320, 820).boundedTo(available.size()), available));
+    } else if (window.restoreWindowGeometry()) {
+        // حجم النافذة وموضعها كما تركهما المستخدم آخر مرة؛ restoreGeometry يعيدها داخل الشاشة إن تغيرت
+        window.show();
     } else if (available.width() < 1400 || available.height() < 860) {
         // شاشات اللابتوب: النافذة تملأ الشاشة والواجهة تصغّر نفسها لتظهر كل أجزائها
         window.setGeometry(available);

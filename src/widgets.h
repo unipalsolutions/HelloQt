@@ -23,6 +23,9 @@ public:
 
     QSize sizeHint() const override;
     void setIconName(Icons::Name icon);
+    // الزر الأساسي يتبدل حسب ما يفعله المستخدم
+    void setKind(Kind kind);
+    Kind kind() const { return m_kind; }
     // في الشاشات الضيقة تظهر الأيقونة وحدها، والنص في التلميح
     void setCompact(bool compact);
     bool isCompact() const { return m_compact; }

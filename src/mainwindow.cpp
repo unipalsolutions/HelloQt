@@ -2,8 +2,12 @@
 
 #include "mainwindow_p.h"
 #include "playbackbar.h"
+#include "startscreen.h"
 #include "videoaudio.h"
 #include "videomarkers.h"
+
+#include <QSplitter>
+#include <QStackedWidget>
 
 using namespace MainWindowHelpers;
 
@@ -325,6 +329,7 @@ void MainWindow::setupShortcuts()
         if (m_openVideoButton->isEnabled())
             openVideo();
     });
+    add(QKeySequence(Qt::CTRL | Qt::Key_W), [this] { closeCurrentFile(); });
     add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_C), [this] {
         if (m_cameraButton->isEnabled())
             startLastCamera();
@@ -418,6 +423,7 @@ void MainWindow::loadSettings()
     m_frameStepSpin->setValue(settings.value(QStringLiteral("frameStep"), 0).toInt());
     m_lastDirectory = settings.value(QStringLiteral("lastDirectory")).toString();
     m_faceSort->setCurrentIndex(std::clamp(settings.value(QStringLiteral("faceSort"), 0).toInt(), 0, m_faceSort->count() - 1));
+    restoreLayout();
 }
 
 void MainWindow::saveSettings() const
@@ -429,6 +435,7 @@ void MainWindow::saveSettings() const
     settings.setValue(QStringLiteral("frameStep"), m_frameStepSpin->value());
     settings.setValue(QStringLiteral("lastDirectory"), m_lastDirectory);
     settings.setValue(QStringLiteral("faceSort"), m_faceSort->currentIndex());
+    saveLayout();
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -467,8 +474,16 @@ bool MainWindow::startHidden() const
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 {
-    if (event->mimeData()->hasUrls() || event->mimeData()->hasImage())
+    if (event->mimeData()->hasUrls() || event->mimeData()->hasImage()) {
         event->acceptProposedAction();
+        m_startScreen->setDropHighlight(true);
+    }
+}
+
+void MainWindow::dragLeaveEvent(QDragLeaveEvent *event)
+{
+    m_startScreen->setDropHighlight(false);
+    QMainWindow::dragLeaveEvent(event);
 }
 
 void MainWindow::dropEvent(QDropEvent *event)
@@ -479,6 +494,7 @@ void MainWindow::dropEvent(QDropEvent *event)
             files << url.toLocalFile();
     }
     event->acceptProposedAction();
+    m_startScreen->setDropHighlight(false);
     if (!m_ready || m_videoRunning || m_analyzing)
         return;
 
@@ -715,7 +731,13 @@ QWidget *MainWindow::createRecognitionPage()
     m_recentButton = new FancyButton(Icons::Name::Clock, QStringLiteral("الأخيرة"), FancyButton::Kind::Secondary, page);
     m_recentButton->setToolTip(QStringLiteral("آخر الصور والفيديوهات التي فُتحت"));
     connect(m_recentButton, &QAbstractButton::clicked, this, &MainWindow::showRecentMenu);
-    m_headerButtons = {m_openImageButton, m_openVideoButton, m_recentButton, m_cameraButton, m_folderScanButton,
+    // بعد فتح ملف تجتمع أزرار الفتح في زر واحد، فتبقى أدوات الحالة الحالية وحدها ظاهرة
+    m_openMenuButton = new FancyButton(Icons::Name::Folder, QStringLiteral("فتح"), FancyButton::Kind::Secondary, page);
+    m_openMenuButton->setToolTip(QStringLiteral("فتح صورة أو فيديو أو كاميرا أو مجلد صور، أو أحد الملفات الأخيرة، "
+                                                "أو العودة إلى شاشة البداية (Ctrl+W)"));
+    m_openMenuButton->setVisible(false);
+    connect(m_openMenuButton, &QAbstractButton::clicked, this, &MainWindow::showOpenMenu);
+    m_headerButtons = {m_openImageButton, m_openVideoButton, m_recentButton, m_cameraButton, m_folderScanButton, m_openMenuButton,
                        m_pauseButton, m_recordButton, m_stopButton, m_enhanceImageButton, m_saveFacesButton};
 
     m_recognitionHeader = new QWidget(page);
@@ -737,10 +759,22 @@ QWidget *MainWindow::createRecognitionPage()
     layout->addWidget(m_recognitionHeader);
 
     // الإعدادات: مجموعات صغيرة تلتف إلى سطر جديد عندما تضيق النافذة
-    auto *settings = card(page);
-    m_settingsCard = settings;
+    // السطر الأول إعدادات الحالة الحالية، و«إعدادات التحليل» النادرة في لوحة تُطوى تحته
+    auto *settingsCard = card(page);
+    m_settingsCard = settingsCard;
+    auto *settingsColumn = new QVBoxLayout(settingsCard);
+    settingsColumn->setContentsMargins(16, 6, 16, 6);
+    settingsColumn->setSpacing(6);
+    auto *settings = new QWidget(settingsCard);
     auto *settingsLayout = new FlowLayout(settings, 18, 8);
-    settingsLayout->setContentsMargins(16, 8, 16, 8);
+    settingsLayout->setContentsMargins(0, 0, 0, 0);
+    settingsColumn->addWidget(settings);
+    m_advancedPanel = new QWidget(settingsCard);
+    auto *advancedLayout = new FlowLayout(m_advancedPanel, 18, 8);
+    advancedLayout->setContentsMargins(0, 6, 0, 2);
+    m_advancedPanel->setObjectName(QStringLiteral("advancedPanel"));
+    m_advancedPanel->setStyleSheet(QStringLiteral("#advancedPanel { border-top: 1px solid %1; }").arg(Theme::Border.name()));
+    settingsColumn->addWidget(m_advancedPanel);
     auto group = [settings](std::initializer_list<QWidget *> widgets) {
         auto *box = new QWidget(settings);
         auto *row = new QHBoxLayout(box);
@@ -766,6 +800,9 @@ QWidget *MainWindow::createRecognitionPage()
     connect(m_thresholdSlider, &QSlider::valueChanged, this, [this](int value) {
         m_thresholdValue->setText(QStringLiteral("%1%").arg(value));
         m_thresholdWarning->setVisible(value < 30);
+        // التحذير يبقى ظاهراً على زر اللوحة وإن كانت مطوية
+        if (m_advancedButton)
+            m_advancedButton->setIconName(value < 30 ? Icons::Name::Alert : Icons::Name::Sliders);
         m_videoWorker->setThreshold(threshold());
         refreshMatches();
         if (m_matchPage)
@@ -838,11 +875,12 @@ QWidget *MainWindow::createRecognitionPage()
     connect(m_filtersButton, &QAbstractButton::clicked, this, &MainWindow::openVideoFilters);
     updateFiltersButton();
 
-    settingsLayout->addWidget(group({new QLabel(QStringLiteral("حد التعرف"), settings), m_thresholdSlider, m_thresholdValue, m_thresholdWarning}));
     settingsLayout->addWidget(m_thoroughSwitch);
     settingsLayout->addWidget(m_enhanceSwitch);
     QWidget *frameStepGroup = group({new QLabel(QStringLiteral("إطار من كل"), settings), m_frameStepSpin});
     QWidget *regionGroup = group({m_filtersButton, m_regionButton, m_clearRegionButton, m_reanalyzeButton});
+    m_frameStepGroup = frameStepGroup;
+    m_regionGroup = regionGroup;
     auto *recordFolderButton = new FancyButton(Icons::Name::Folder, QStringLiteral("التسجيلات"), FancyButton::Kind::Secondary, settings);
     recordFolderButton->setToolTip(QStringLiteral("مجلد تسجيلات الكاميرا، والتسجيل عند الحركة فقط، ورسم الوجوه، وحذف القديم تلقائياً"));
     connect(recordFolderButton, &QAbstractButton::clicked, this, &MainWindow::showRecordFolderMenu);
@@ -852,7 +890,6 @@ QWidget *MainWindow::createRecognitionPage()
     connect(m_autoRecordSwitch, &QAbstractButton::toggled, this, [](bool on) { CameraRecorder::setAutoRecord(on); });
     m_recordGroup = group({new QLabel(QStringLiteral("تسجيل الكاميرا"), settings), m_autoRecordSwitch, recordFolderButton});
     m_videoSettings = {frameStepGroup, regionGroup};
-    settingsLayout->addWidget(frameStepGroup);
     m_gpuSwitch = new ToggleSwitch(QStringLiteral("كرت الشاشة"), settings);
     const QString gpu = FaceEngine::availableGpu();
     m_gpuSwitch->setChecked(Performance::gpuEnabled() && !gpu.isEmpty());
@@ -873,11 +910,24 @@ QWidget *MainWindow::createRecognitionPage()
     connect(m_gpuCheckButton, &QAbstractButton::clicked, this, [this] { verifyGpu(true); });
     auto *gpuCheck = m_gpuCheckButton;
     auto *gpuSwitch = m_gpuSwitch;
-    settingsLayout->addWidget(group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo, gpuSwitch, gpuCheck}));
+    QWidget *resourcesGroup = group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo, gpuSwitch, gpuCheck});
     settingsLayout->addWidget(regionGroup);
     settingsLayout->addWidget(m_recordGroup);
     m_recordGroup->setVisible(false);
-    layout->addWidget(settings);
+    m_advancedButton = new FancyButton(Icons::Name::Sliders, QStringLiteral("إعدادات التحليل"), FancyButton::Kind::Secondary, settings);
+    m_advancedButton->setCheckable(true);
+    m_advancedButton->setToolTip(QStringLiteral("الإعدادات الأقل استخداماً: حد التعرف، تحليل إطار من كل كم إطار، استهلاك المعالج، وكرت الشاشة"));
+    connect(m_advancedButton, &QAbstractButton::toggled, this, &MainWindow::setAdvancedSettingsVisible);
+    settingsLayout->addWidget(m_advancedButton);
+    // المجموعات تنتقل إلى اللوحة المطوية؛ أُنشئت بأب settings فيُعاد تعيين أبيها
+    QWidget *thresholdGroup = group({new QLabel(QStringLiteral("حد التعرف"), settings), m_thresholdSlider, m_thresholdValue, m_thresholdWarning});
+    for (QWidget *advanced : {thresholdGroup, frameStepGroup, resourcesGroup}) {
+        advanced->setParent(m_advancedPanel);
+        advancedLayout->addWidget(advanced);
+    }
+    m_advancedPanel->setVisible(false);
+    layout->addWidget(settingsCard);
+    layout->addWidget(createStatusStrip(page));
 
     m_progress = new QProgressBar(page);
     m_progress->setObjectName(QStringLiteral("thinProgress"));
@@ -947,12 +997,31 @@ QWidget *MainWindow::createRecognitionPage()
 
     // العرض والقائمة الجانبية
     auto *viewCard = card(page, QStringLiteral("viewCard"));
-    auto *viewLayout = new QVBoxLayout(viewCard);
-    viewLayout->setContentsMargins(2, 2, 2, 2);
-    m_view = new ImageView(viewCard);
+    auto *viewCardLayout = new QVBoxLayout(viewCard);
+    viewCardLayout->setContentsMargins(2, 2, 2, 2);
+    m_viewStack = new QStackedWidget(viewCard);
+    viewCardLayout->addWidget(m_viewStack);
+    m_startScreen = new StartScreen(m_viewStack);
+    m_viewStack->addWidget(m_startScreen);
+    connect(m_startScreen, &StartScreen::openImageRequested, this, &MainWindow::openImage);
+    connect(m_startScreen, &StartScreen::openVideoRequested, this, &MainWindow::openVideo);
+    connect(m_startScreen, &StartScreen::openCameraRequested, this, &MainWindow::openCamera);
+    connect(m_startScreen, &StartScreen::openFolderRequested, this, &MainWindow::openFolderScan);
+    connect(m_startScreen, &StartScreen::shortcutsRequested, this, &MainWindow::showShortcuts);
+    connect(m_startScreen, &StartScreen::fileRequested, this, [this](const QString &file) {
+        m_lastDirectory = QFileInfo(file).absolutePath();
+        openFile(file);
+    });
+    connect(m_startScreen, &StartScreen::cameraRequested, this, &MainWindow::startVideo);
+    auto *viewPage = new QWidget(m_viewStack);
+    auto *viewLayout = new QVBoxLayout(viewPage);
+    viewLayout->setContentsMargins(0, 0, 0, 0);
+    viewLayout->setSpacing(0);
+    m_viewStack->addWidget(viewPage);
+    m_view = new ImageView(viewPage);
     m_view->setMinimumSize(280, 180);
     viewLayout->addWidget(m_view, 1);
-    m_playbackBar = new PlaybackBar(viewCard);
+    m_playbackBar = new PlaybackBar(viewPage);
     m_playbackBar->setVisible(false);
     viewLayout->addWidget(m_playbackBar);
     m_rangeStart = m_playbackBar->rangeStartEdit();
@@ -1060,6 +1129,7 @@ QWidget *MainWindow::createRecognitionPage()
     connect(m_laneTimer, &QTimer::timeout, this, &MainWindow::rebuildTimelineLanes);
 
     auto *mediaSplitter = new QSplitter(Qt::Vertical, page);
+    m_mediaSplitter = mediaSplitter;
     mediaSplitter->setHandleWidth(10);
     mediaSplitter->setChildrenCollapsible(false);
     mediaSplitter->addWidget(viewCard);
@@ -1069,6 +1139,7 @@ QWidget *MainWindow::createRecognitionPage()
     mediaSplitter->setSizes({460, 230});
 
     auto *splitter = new QSplitter(Qt::Horizontal, page);
+    m_mainSplitter = splitter;
     splitter->setHandleWidth(12);
     splitter->setChildrenCollapsible(false);
     splitter->addWidget(mediaSplitter);
@@ -1102,6 +1173,7 @@ void MainWindow::setBusy(bool busy)
     m_saveFacesButton->setEnabled(!m_faces.isEmpty());
     m_enrollFaceButton->setEnabled(m_ready && m_faceList->currentRow() >= 0);
     updateVideoOptions();
+    updateWorkState();
 }
 
 void MainWindow::updateVideoOptions()
@@ -1317,6 +1389,9 @@ void MainWindow::startVideo(const QString &source)
     setBusy(true);
 
     m_videoWorker->setFrameStep(m_frameStepSpin->value());
+    m_analysisSpeed = 0.0;
+    m_analysisRemainingMs = -1;
+    m_analysisProgress = -1.0;
     m_videoClock.invalidate();
     m_videoStep = 1;
     m_videoPaused = false;
@@ -1428,9 +1503,13 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
         // السرعة بالنسبة لزمن التشغيل العادي: 2× تعني أن دقيقة من الفيديو تُحلَّل في نصف دقيقة
         const double speed = (positionMs - m_videoStartMs) / 1000.0 / seconds;
         status += QStringLiteral(" · السرعة %1×").arg(QLocale().toString(speed, 'f', 1));
-        if (endMs > positionMs && speed > 0.0)
-            status += QStringLiteral(" · المتبقي %1").arg(ImageIO::formatTime(qint64((endMs - positionMs) / speed)));
+        m_analysisSpeed = speed;
+        m_analysisRemainingMs = endMs > positionMs && speed > 0.0 ? qint64((endMs - positionMs) / speed) : -1;
+        if (m_analysisRemainingMs >= 0)
+            status += QStringLiteral(" · المتبقي %1").arg(ImageIO::formatTime(m_analysisRemainingMs));
     }
+    if (progress >= 0.0)
+        m_analysisProgress = progress;
     if (m_videoStep > 1)
         status += QStringLiteral(" · تحليل إطار من كل %1").arg(m_videoStep);
     status += QStringLiteral(" · وجوه في الإطار: %1 · أشخاص مختلفون: %2").arg(faces.size()).arg(m_faces.size());
@@ -2082,15 +2161,21 @@ void MainWindow::addRecentFile(const QString &path)
 
 void MainWindow::showRecentMenu()
 {
+    QMenu menu(this);
+    fillRecentMenu(&menu);
+    menu.exec(m_recentButton->mapToGlobal(QPoint(0, m_recentButton->height())));
+}
+
+void MainWindow::fillRecentMenu(QMenu *menu)
+{
     QSettings settings;
     const QStringList files = settings.value(QStringLiteral("recentFiles")).toStringList();
-    QMenu menu(this);
     if (files.isEmpty())
-        menu.addAction(QStringLiteral("لم يُفتح أي ملف بعد"))->setEnabled(false);
+        menu->addAction(QStringLiteral("لم يُفتح أي ملف بعد"))->setEnabled(false);
     for (const QString &file : files) {
         const QFileInfo info(file);
         const bool video = isVideoFile(file);
-        QAction *action = menu.addAction(Icons::icon(video ? Icons::Name::Video : Icons::Name::Image, Theme::Text, 18),
+        QAction *action = menu->addAction(Icons::icon(video ? Icons::Name::Video : Icons::Name::Image, Theme::Text, 18),
                                          QStringLiteral("\u2068%1\u2069").arg(info.fileName()), this, [this, file] {
                                              m_lastDirectory = QFileInfo(file).absolutePath();
                                              openFile(file);
@@ -2099,19 +2184,20 @@ void MainWindow::showRecentMenu()
         action->setEnabled(info.exists() && m_openImageButton->isEnabled());
     }
     if (!files.isEmpty()) {
-        menu.addSeparator();
-        menu.addAction(Icons::icon(Icons::Name::Trash, Theme::Text, 18), QStringLiteral("مسح القائمة"), this,
-                       [] { QSettings().remove(QStringLiteral("recentFiles")); });
+        menu->addSeparator();
+        menu->addAction(Icons::icon(Icons::Name::Trash, Theme::Text, 18), QStringLiteral("مسح القائمة"), this, [this] {
+            QSettings().remove(QStringLiteral("recentFiles"));
+            if (m_startScreen->isVisible())
+                m_startScreen->refresh();
+        });
     }
-    menu.setToolTipsVisible(true);
-    menu.exec(m_recentButton->mapToGlobal(QPoint(0, m_recentButton->height())));
+    menu->setToolTipsVisible(true);
 }
 
-void MainWindow::setVideoSettingsVisible(bool visible)
+void MainWindow::setVideoSettingsVisible(bool)
 {
-    for (QWidget *widget : std::as_const(m_videoSettings))
-        widget->setVisible(visible);
-    m_recordGroup->setVisible(visible && m_videoSource.startsWith(QStringLiteral("camera:")));
+    // ما يظهر يتبع حالة العمل (صورة، فيديو، كاميرا)
+    updateWorkState();
 }
 
 // يجهّز قائمة صور المجلد الذي فيه الصورة الحالية، بترتيب طبيعي (2 قبل 10) كما في مستكشف الملفات

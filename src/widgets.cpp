@@ -42,6 +42,15 @@ void FancyButton::setIconName(Icons::Name icon)
     update();
 }
 
+void FancyButton::setKind(Kind kind)
+{
+    if (m_kind == kind)
+        return;
+    m_kind = kind;
+    updateGeometry();
+    update();
+}
+
 QVariantAnimation *FancyButton::makeAnimation(double *value, int duration)
 {
     auto *animation = new QVariantAnimation(this);

@@ -3,6 +3,7 @@
 #include "facedatabase.h"
 #include "faceengine.h"
 #include "facetypes.h"
+#include "icons.h"
 #include "shotviewer.h"
 #include "videofilters.h"
 
@@ -15,7 +16,12 @@
 #include <QRectF>
 #include <QSet>
 
+#include <functional>
+
 class AnimatedStack;
+class StartScreen;
+class QSplitter;
+class QStackedWidget;
 class FaceCardDelegate;
 class FaceDetailsPanel;
 class QToolButton;
@@ -71,6 +77,7 @@ public:
     void openFile(const QString &path); // صورة أو فيديو
     // فُتح البرنامج مع ويندوز: يبقى بجانب الساعة دون نافذة إن أمكن
     bool startHidden() const;
+    bool restoreWindowGeometry(); // آخر حجم وموضع للنافذة؛ false إن لم يُحفظ شيء بعد
     // طلب من نسخة ثانية فُتحت: "show" أو "open:<مسار>" أو "startup" (لا شيء، البرنامج يعمل أصلاً)
     void activateFromOtherInstance(const QString &message);
     // لم يُغلق البرنامج إغلاقاً طبيعياً في التشغيل السابق (يُعرض تنبيه بعد تحميل النماذج)
@@ -86,6 +93,7 @@ signals:
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
+    void dragLeaveEvent(QDragLeaveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
@@ -107,6 +115,19 @@ private:
     QWidget *createRecognitionPage();
     QWidget *createDatabasePage();
     void updateResponsiveLayout();
+    // ما يعرضه شريط الأزرار والإعدادات: لا شيء مفتوح، صورة، فيديو ملف، كاميرا
+    enum class WorkState { Empty, Image, Video, Camera };
+    WorkState workState() const;
+    void updateWorkState();
+    QWidget *createStatusStrip(QWidget *parent);
+    void updateStatusStrip();
+    void setStatusAction(Icons::Name icon, const QString &text, const QString &tip, std::function<void()> action);
+    void showOpenMenu();
+    void fillRecentMenu(QMenu *menu);
+    void closeCurrentFile(); // يعود إلى شاشة البداية
+    void setAdvancedSettingsVisible(bool visible);
+    void restoreLayout();
+    void saveLayout() const;
 
     // التعرف
     void openImage();
@@ -424,6 +445,26 @@ private:
     bool m_videoFullscreen = false;
     bool m_wasMaximized = false;
     bool m_panelsHidden = false;
+    QStackedWidget *m_viewStack = nullptr;      // شاشة البداية أو العرض
+    StartScreen *m_startScreen = nullptr;
+    FancyButton *m_openMenuButton = nullptr;    // «فتح» يجمع أزرار الفتح بعد فتح ملف
+    QWidget *m_frameStepGroup = nullptr;
+    QWidget *m_regionGroup = nullptr;
+    FancyButton *m_advancedButton = nullptr;    // إظهار «إعدادات التحليل» النادرة أو طيّها
+    QWidget *m_advancedPanel = nullptr;
+    QWidget *m_statusStrip = nullptr;           // ماذا يجري، كم بقي، والخطوة المقترحة
+    QLabel *m_statusIcon = nullptr;
+    QLabel *m_statusTitle = nullptr;
+    QLabel *m_statusDetail = nullptr;
+    QLabel *m_statusHint = nullptr;
+    FancyButton *m_statusAction = nullptr;
+    std::function<void()> m_statusActionSlot;
+    QTimer *m_statusTimer = nullptr;
+    double m_analysisSpeed = 0.0;               // سرعة تحليل الفيديو بالنسبة لزمنه الحقيقي
+    qint64 m_analysisRemainingMs = -1;
+    double m_analysisProgress = -1.0;
+    QSplitter *m_mainSplitter = nullptr;
+    QSplitter *m_mediaSplitter = nullptr;
     QList<QPointer<QWidget>> m_fullscreenHidden; // ما أُخفي لملء الشاشة فيعود عند الخروج
     // معاينة الإطار عند المرور على الخط الزمني: آخر طلب فقط
     std::shared_ptr<cv::VideoCapture> m_previewCapture;

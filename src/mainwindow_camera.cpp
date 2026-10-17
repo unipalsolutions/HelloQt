@@ -262,7 +262,11 @@ void MainWindow::openCamera()
     menu.addSeparator();
     addRecordsMenu(menu.addMenu(icon(Icons::Name::History), QStringLiteral("السجلات والتقارير")));
     menu.addAction(icon(Icons::Name::Sliders), QStringLiteral("الإعدادات…"), this, &MainWindow::openSettings);
-    menu.exec(m_cameraButton->mapToGlobal(QPoint(0, m_cameraButton->height())));
+    // الزر قد يكون مخفياً حين تُفتح القائمة من «فتح» أو من شاشة البداية
+    if (m_cameraButton->isVisible())
+        menu.exec(m_cameraButton->mapToGlobal(QPoint(0, m_cameraButton->height())));
+    else
+        menu.exec(QCursor::pos());
 }
 
 void MainWindow::editCameraRules(const QString &source, const QString &name)

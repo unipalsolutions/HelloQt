@@ -362,7 +362,7 @@ void MainWindow::toggleVideoFullscreen()
         if (!fileVideoActive())
             return;
         m_fullscreenHidden.clear();
-        const QList<QWidget *> parts = {m_sidebar, m_recognitionHeader, m_settingsCard, m_sideCard, m_timelineCard,
+        const QList<QWidget *> parts = {m_sidebar, m_recognitionHeader, m_settingsCard, m_statusStrip, m_sideCard, m_timelineCard,
                                         m_progress->parentWidget(), statusBar()};
         for (QWidget *part : parts) {
             if (part && part->isVisible()) {
