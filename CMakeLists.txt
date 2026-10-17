@@ -11,6 +11,8 @@ set(MALAMIH_VERSION "${PROJECT_VERSION}" CACHE STRING "Version shown in the app 
 set(DEPS_DIR "${CMAKE_BINARY_DIR}/_deps" CACHE PATH "Folder for downloaded dependencies (ONNX Runtime, face models)")
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Sql Network)
+# صوت الفيديو اختياري: بدونه يعمل البرنامج كاملاً بلا صوت
+find_package(Qt6 QUIET OPTIONAL_COMPONENTS Multimedia)
 find_package(OpenCV 4.5 REQUIRED COMPONENTS core imgproc imgcodecs videoio)
 
 include(cmake/onnxruntime.cmake)
@@ -52,6 +54,7 @@ qt_add_executable(Malamih
     src/mainwindow_camera.cpp
     src/mainwindow_records.cpp
     src/mainwindow_persons.cpp
+    src/mainwindow_playback.cpp
     src/faceengine.h
     src/faceengine.cpp
     src/facedatabase.h
@@ -83,6 +86,12 @@ qt_add_executable(Malamih
     src/shotviewer.cpp
     src/timelineview.h
     src/timelineview.cpp
+    src/playbackbar.h
+    src/playbackbar.cpp
+    src/videoaudio.h
+    src/videoaudio.cpp
+    src/videomarkers.h
+    src/videomarkers.cpp
     src/matchpage.h
     src/matchpage.cpp
     src/personprofile.h
@@ -140,6 +149,14 @@ target_link_libraries(Malamih PRIVATE
     ${OpenCV_LIBS}
     onnxruntime
 )
+
+if(TARGET Qt6::Multimedia)
+    target_link_libraries(Malamih PRIVATE Qt6::Multimedia)
+    target_compile_definitions(Malamih PRIVATE MALAMIH_HAS_AUDIO)
+    message(STATUS "Video audio: Qt Multimedia found")
+else()
+    message(STATUS "Video audio: Qt Multimedia not found, building without sound")
+endif()
 
 # ترميز UTF-8 للملفات المصدرية مع MSVC
 if(MSVC)

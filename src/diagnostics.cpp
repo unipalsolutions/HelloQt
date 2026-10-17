@@ -18,6 +18,8 @@
 #include "report.h"
 #include "videoexport.h"
 #include "videofilters.h"
+#include "playbackbar.h"
+#include "videomarkers.h"
 #include "videoplayer.h"
 #include "videoworker.h"
 
@@ -305,6 +307,46 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     QTimer::singleShot(seconds * 1000, &loop, &QEventLoop::quit);
     loop.exec();
     const double elapsed = clock.elapsed() / 1000.0;
+    // مقاييس السلاسة قبل تجربة الأدوات (الإيقاف والسرعة يغيّرانها)
+    const int shownPlain = shown;
+    const double worstGapPlain = worstGapMs;
+    const qint64 playedPlain = playedMs;
+
+    // أدوات التشغيل: إطار بإطار، والسرعة، وتحليل الوقت المكتوب، والعلامات
+    const auto wait = [](int ms) {
+        QEventLoop pause;
+        QTimer::singleShot(ms, &pause, &QEventLoop::quit);
+        pause.exec();
+    };
+    player.pause();
+    wait(250);
+    const qint64 stepBase = playedMs;
+    player.stepFrames(1);
+    wait(300);
+    const qint64 stepForwardMs = playedMs - stepBase;
+    player.stepFrames(-1);
+    wait(300);
+    const qint64 stepBackMs = playedMs - stepBase;
+    const qint64 rateBase = playedMs;
+    player.setRate(2.0);
+    QElapsedTimer rateClock;
+    rateClock.start();
+    player.play();
+    wait(2000);
+    const double measuredRate = (playedMs - rateBase) / double(std::max<qint64>(1, rateClock.elapsed()));
+    player.setRate(1.0);
+    const bool parseOk = PlaybackBar::parseTime(QStringLiteral("1:23")) == 83000
+        && PlaybackBar::parseTime(QStringLiteral("01:02:03.5")) == 3723500
+        && PlaybackBar::parseTime(QStringLiteral("٨٣")) == 83000 && PlaybackBar::parseTime(QStringLiteral("1,5")) == 1500
+        && PlaybackBar::parseTime(QStringLiteral("٢:٠٥")) == 125000 && PlaybackBar::parseTime(QStringLiteral("abc")) < 0
+        && PlaybackBar::parseTime(QString()) < 0;
+    const QString markerVideo = QDir(QDir::tempPath()).filePath(QStringLiteral("malamih-marker-test.mp4"));
+    const QMap<qint64, QString> markers = {{1500, QStringLiteral("دخول")}, {64000, QString()}};
+    VideoMarkers::save(markerVideo, markers);
+    const bool markersOk = VideoMarkers::load(markerVideo) == markers;
+    VideoMarkers::save(markerVideo, {});
+    const bool markersCleared = VideoMarkers::load(markerVideo).isEmpty();
+
     player.close();
     worker->requestStop();
     thread.quit();
@@ -312,18 +354,26 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
 
     const double expected = std::min(elapsed, double(player.durationMs()) / 1000.0) * player.fps();
     out << "native_fps=" << player.fps() << "\n";
-    out << "shown_frames=" << shown << "\n";
-    out << "display_fps=" << shown / elapsed << "\n";
-    out << "display_ratio=" << (expected > 0 ? shown / expected : 0.0) << "\n";
-    out << "worst_gap_ms=" << worstGapMs << "\n";
-    out << "played_ms=" << playedMs << "\n";
+    out << "shown_frames=" << shownPlain << "\n";
+    out << "display_fps=" << shownPlain / elapsed << "\n";
+    out << "display_ratio=" << (expected > 0 ? shownPlain / expected : 0.0) << "\n";
+    out << "worst_gap_ms=" << worstGapPlain << "\n";
+    out << "played_ms=" << playedPlain << "\n";
     out << "analyzed_frames=" << analyzed << "\n";
     out << "analyzed_ms=" << analyzedMs << "\n";
-    out << "analysis_lag_ms=" << playedMs - analyzedMs << "\n";
+    out << "analysis_lag_ms=" << playedPlain - analyzedMs << "\n";
     out << "boxes=" << boxes << "\n";
     out << "analysis_finished=" << int(finished) << "\n";
+    out << "step_forward_ms=" << stepForwardMs << "\n";
+    out << "step_back_ms=" << stepBackMs << "\n";
+    out << "rate_2x_measured=" << measuredRate << "\n";
+    out << "parse_time_ok=" << int(parseOk) << "\n";
+    out << "markers_ok=" << int(markersOk && markersCleared) << "\n";
     out << "peak_memory_mb=" << peakMemoryMb() << "\n";
-    return shown > 0 && analyzed > 0 ? 0 : 1;
+    const qint64 frameMs = qint64(1000.0 / std::max(1.0, player.fps()));
+    const bool controlsOk = parseOk && markersOk && markersCleared && std::llabs(stepForwardMs - frameMs) <= 2 && std::llabs(stepBackMs) <= 2
+        && measuredRate > 1.6;
+    return shown > 0 && analyzed > 0 && controlsOk ? 0 : 1;
 }
 
 // يستخرج بصمة كل وجه في إطارات الفيديو كما هي، لدراسة توزيع التشابه في الفيديو الرديء

@@ -132,6 +132,27 @@ void VideoPlayer::seek(qint64 positionMs)
     m_wake.notify_all();
 }
 
+void VideoPlayer::stepFrames(int frames)
+{
+    if (m_live || frames == 0)
+        return;
+    const double interval = 1000.0 / m_fps;
+    const qint64 current = std::llround(double(m_position) / interval);
+    qint64 target = std::max<qint64>(0, current + frames);
+    if (m_durationMs > 0)
+        target = std::min<qint64>(target, qint64(double(m_durationMs) / interval) - 1);
+    pause();
+    seek(qint64(std::ceil(double(target) * interval)));
+}
+
+void VideoPlayer::setRate(double rate)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_rate = std::clamp(rate, 0.1, 16.0);
+    m_restartClock = true;
+    m_wake.notify_all();
+}
+
 void VideoPlayer::setStopAt(qint64 positionMs)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -181,13 +202,9 @@ void VideoPlayer::runFile(cv::VideoCapture &capture)
             restart = std::exchange(m_restartClock, false);
         }
         if (seekMs >= 0) {
-            if (seekMs > 0)
-                capture.set(cv::CAP_PROP_POS_MSEC, double(seekMs));
-            else
-                capture.set(cv::CAP_PROP_POS_FRAMES, 0.0);
-            next = std::max<qint64>(0, std::llround(capture.get(cv::CAP_PROP_POS_FRAMES)));
-            if (next == 0 && seekMs > 0)
-                next = qint64(double(seekMs) / interval);
+            // القفز برقم الإطار لا بالزمن، فيصل إلى الإطار نفسه الذي حلله التحليل عند هذا الموضع
+            next = qint64(std::floor(double(seekMs) / interval + 1e-6));
+            capture.set(cv::CAP_PROP_POS_FRAMES, double(next));
             if (capture.read(frame)) {
                 deliver(frame, qint64(double(next) * interval), true);
                 ++next;
@@ -208,15 +225,16 @@ void VideoPlayer::runFile(cv::VideoCapture &capture)
             emit reachedEnd();
             continue;
         }
-        const double target = anchorMs + elapsedMs();
+        const double rate = m_rate;
+        const double target = anchorMs + elapsedMs() * rate;
         if (nextMs > target) {
             // لم يحن موعده: انتظار يقطعه الإيقاف أو القفز
             std::unique_lock<std::mutex> lock(m_mutex);
-            m_wake.wait_for(lock, std::chrono::microseconds(qint64(std::min(nextMs - target, 50.0) * 1000.0)),
+            m_wake.wait_for(lock, std::chrono::microseconds(qint64(std::min((nextMs - target) / rate, 50.0) * 1000.0)),
                             [&] { return m_stop || m_seekMs >= 0 || !m_playing || m_restartClock; });
             continue;
         }
-        if (target - nextMs > MaxLagMs) {
+        if (target - nextMs > MaxLagMs * std::max(1.0, rate)) {
             anchor = Clock::now();
             anchorMs = nextMs;
         }

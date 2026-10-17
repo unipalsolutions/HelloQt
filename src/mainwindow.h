@@ -46,6 +46,8 @@ class MatchPage;
 class QFrame;
 class QStackedWidget;
 class StrengthMeter;
+class PlaybackBar;
+class VideoAudio;
 
 struct ImageAnalysis
 {
@@ -83,6 +85,7 @@ protected:
     void dropEvent(QDropEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     void onEngineLoaded();
@@ -181,6 +184,29 @@ private:
     void exportClip(const QList<QPair<qint64, qint64>> &segments, const QString &suggestedName);
     void saveVideoFrame(qint64 positionMs);
     void setTrimRange(qint64 startMs, qint64 endMs);
+    void exportTrimmedClip();
+
+    // أدوات التشغيل تحت الفيديو (mainwindow_playback.cpp)
+    void setupPlaybackBar();
+    void setupPlaybackShortcuts();
+    bool fileVideoActive() const; // فيديو ملف معروض في صفحة التعرف
+    void seekVideo(qint64 positionMs);
+    void jumpBy(qint64 deltaMs);
+    void stepFrame(int frames);
+    void jumpToEvent(int direction);
+    void navigateVideo(int step);
+    void updateVideoNavigation();
+    void checkAutoNext();
+    void addMarker(qint64 positionMs);
+    void editMarker(qint64 markerMs);
+    void removeMarker(qint64 markerMs);
+    qint64 markerNear(qint64 positionMs) const; // سالب إن لم توجد علامة قريبة
+    void toggleVideoFullscreen();
+    void togglePanels();
+    void showShortcuts();
+    void requestPreview(qint64 positionMs);
+    void onPreviewLoaded();
+    void syncAudio();
     void sortFaces();
     void applyFaceFilter();
     bool faceMatchesFilter(const FaceItem &face) const;
@@ -345,6 +371,25 @@ private:
     QComboBox *m_faceSort = nullptr;
     FancyButton *m_viewShotButton = nullptr;
     QList<QWidget *> m_videoSettings;
+    PlaybackBar *m_playbackBar = nullptr;
+    VideoAudio *m_audio = nullptr;
+    QWidget *m_recognitionHeader = nullptr;
+    QWidget *m_settingsCard = nullptr;
+    QWidget *m_sideCard = nullptr;
+    QComboBox *m_laneFilter = nullptr;          // تصفية مسارات الخط الزمني حسب الحالة
+    QMap<qint64, QString> m_markers;            // علامات الفيديو الحالي وملاحظاتها
+    QList<qint64> m_shotChanges;                // مواضع تغيّر اللقطة التي وجدها التحليل
+    QStringList m_videoSiblings;                // فيديوهات مجلد الفيديو الحالي بالترتيب الطبيعي
+    QString m_pendingVideo;                     // فيديو يُفتح بعد توقف التحليل الجاري
+    bool m_videoFullscreen = false;
+    bool m_wasMaximized = false;
+    bool m_panelsHidden = false;
+    QList<QPointer<QWidget>> m_fullscreenHidden; // ما أُخفي لملء الشاشة فيعود عند الخروج
+    // معاينة الإطار عند المرور على الخط الزمني: آخر طلب فقط
+    std::shared_ptr<cv::VideoCapture> m_previewCapture;
+    QString m_previewPath;
+    QFutureWatcher<QPair<qint64, QImage>> m_previewWatcher;
+    qint64 m_previewRequestMs = -1;
     // قائمة المراقبة: تنبيه فور ظهور شخص مراقَب
     QSet<QString> m_watched;
     QSet<QString> m_alerted; // من نُبِّه عنه في الصورة أو الفيديو الحالي

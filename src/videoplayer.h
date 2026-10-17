@@ -42,6 +42,11 @@ public:
     void pause();
     bool isPlaying() const { return m_playing; }
     void seek(qint64 positionMs);
+    // يتقدم أو يرجع عدداً من الإطارات متوقفاً
+    void stepFrames(int frames);
+    // سرعة التشغيل (1 = الأصلية)؛ التحليل لا يتأثر بها
+    void setRate(double rate);
+    double rate() const { return m_rate; }
     // يتوقف التشغيل عند هذا الموضع (نهاية الجزء المطلوب)؛ 0 = حتى نهاية الملف
     void setStopAt(qint64 positionMs);
     double fps() const { return m_fps; }
@@ -69,6 +74,7 @@ private:
     std::atomic<bool> m_playing{false};
     std::atomic<int> m_pending{0};
     std::atomic<qint64> m_position{0};
+    std::atomic<double> m_rate{1.0};
     bool m_live = false;
     QString m_path;
     std::shared_ptr<Cameras::FrameSlot> m_slot;

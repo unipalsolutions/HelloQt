@@ -17,11 +17,17 @@ struct TimelineLane
     QColor color;
     QPixmap avatar;
     QList<QPair<qint64, qint64>> segments;
+    QString detail;       // تلميح الاسم: الحالة وعدد الظهور ومدته
+    bool watched = false; // من قائمة المراقبة: حلقة حول الصورة
 };
 
-// خط زمني بأسلوب برامج المونتاج: مسطرة الزمن، شريط مصغرات الإطارات، مؤشر الموضع،
-// ومسار لكل شخص تظهر عليه فترات ظهوره. Ctrl+العجلة للتكبير، Shift+العجلة أو السحب بالزر الأوسط للتنقل.
-// مقبضا الاقتطاع (الأصفران) يُسحبان لتحديد الجزء المطلوب، أو I و O عند المؤشر، والزر الأيمن يفتح قائمة العمليات.
+class TimelinePreview;
+class QVariantAnimation;
+
+// خط زمني بأسلوب برامج المونتاج: مسطرة الزمن وعليها العلامات، شريط مصغرات الإطارات وتغيّرات اللقطات،
+// مؤشر الموضع، ومسار لكل شخص تظهر عليه فترات ظهوره. Ctrl+العجلة للتكبير، Shift+العجلة أو السحب بالزر
+// الأوسط للتنقل. مقبضا الاقتطاع (الأصفران) يُسحبان لتحديد الجزء المطلوب، والزر الأيمن يفتح قائمة العمليات.
+// المرور بالفأرة يعرض معاينة مصغرة للإطار عند ذلك الموضع
 class TimelineView : public QWidget
 {
     Q_OBJECT
@@ -46,6 +52,10 @@ public:
     void setLanes(const QList<TimelineLane> &lanes);
     void setSelectedLane(int id);
     void setLabelWidth(int width);
+    void setMarkers(const QMap<qint64, QString> &markers);
+    void setShotChanges(const QList<qint64> &changes);
+    // معاينة طُلبت بـ previewRequested؛ تُضاف أيضاً إلى شريط المصغرات إن كان مكانها فارغاً
+    void setPreviewFrame(qint64 ms, const QImage &frame);
 
     void zoomIn();
     void zoomOut();
@@ -60,6 +70,7 @@ signals:
     void laneActivated(int id, qint64 ms); // نقر مزدوج
     void rangeEdited(qint64 startMs, qint64 endMs); // اقتطاع بالسحب أو بالمفاتيح (0 = بلا حد)
     void contextMenuRequested(const QPoint &globalPos, qint64 ms, int laneId); // laneId سالب خارج المسارات
+    void previewRequested(qint64 ms); // لا توجد مصغرة قريبة من موضع الفأرة
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -71,6 +82,7 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void leaveEvent(QEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
 
 private:
     double trackLeft() const { return m_labelWidth; }
@@ -85,6 +97,10 @@ private:
     void ensurePlayheadVisible();
     int handleAt(const QPointF &pos) const; // 1 = بداية الاقتطاع، 2 = نهايته، 0 = لا شيء
     void editRange(qint64 startMs, qint64 endMs);
+    double currentScale() const;
+    void animateZoom(double msPerPixel, double anchorX);
+    void updatePreview(const QPointF &pos);
+    void hidePreview();
 
     qint64 m_duration = 0;
     double m_fps = 25.0;
@@ -108,4 +124,14 @@ private:
     QPointF m_panOrigin;
     double m_panStart = 0.0;
     double m_hoverX = -1.0;
+
+    QMap<qint64, QString> m_markers;
+    QList<qint64> m_shotChanges;
+    QMap<qint64, QImage> m_previews;
+    TimelinePreview *m_preview = nullptr;
+    qint64 m_hoverTime = -1;
+    qint64 m_requestedPreview = -1;
+    QVariantAnimation *m_zoomAnimation = nullptr;
+    double m_zoomTarget = 0.0;
+    double m_zoomAnchor = 0.0;
 };

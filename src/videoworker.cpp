@@ -648,8 +648,11 @@ void VideoWorker::run(const QString &source)
             tracks.clear(); // تغيّر مقياس الإحداثيات
             workScale = scale;
         }
-        if (sceneCuts.update(frame))
+        if (sceneCuts.update(frame)) {
             tracks.clear(); // لقطة جديدة: لا يُفترض أن الوجه في الموضع نفسه هو الشخص نفسه
+            if (!camera && processed > 1)
+                emit shotChanged(positionMs);
+        }
 
         // 1) كشف الوجوه داخل منطقة التحليل فقط، وربطها بالمسارات المفتوحة حسب تداخل الموضع
         cv::Rect area(0, 0, work.cols, work.rows);

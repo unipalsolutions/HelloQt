@@ -15,7 +15,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ qt6-base-dev libqt6sql6-sqlite libgl-dev libopencv-dev
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ qt6-base-dev qt6-multimedia-dev libqt6sql6-sqlite libgl-dev libopencv-dev
 
       - name: Cache models and ONNX Runtime
         uses: actions/cache@v4

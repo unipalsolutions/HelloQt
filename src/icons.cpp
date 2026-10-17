@@ -312,6 +312,97 @@ QPainterPath outline(Name name)
     case Name::Record:
         p.addEllipse(QPointF(12, 12), 6.5, 6.5);
         break;
+    case Name::Rewind:
+        p.moveTo(12, 6);
+        p.lineTo(4, 12);
+        p.lineTo(12, 18);
+        p.closeSubpath();
+        p.moveTo(20, 6);
+        p.lineTo(12, 12);
+        p.lineTo(20, 18);
+        p.closeSubpath();
+        break;
+    case Name::Forward:
+        p.moveTo(4, 6);
+        p.lineTo(12, 12);
+        p.lineTo(4, 18);
+        p.closeSubpath();
+        p.moveTo(12, 6);
+        p.lineTo(20, 12);
+        p.lineTo(12, 18);
+        p.closeSubpath();
+        break;
+    case Name::SkipBack:
+        line(5, 6, 5, 18);
+        p.moveTo(13, 6);
+        p.lineTo(7, 12);
+        p.lineTo(13, 18);
+        p.closeSubpath();
+        p.moveTo(20, 6);
+        p.lineTo(14, 12);
+        p.lineTo(20, 18);
+        p.closeSubpath();
+        break;
+    case Name::SkipNext:
+        line(19, 6, 19, 18);
+        p.moveTo(11, 6);
+        p.lineTo(17, 12);
+        p.lineTo(11, 18);
+        p.closeSubpath();
+        p.moveTo(4, 6);
+        p.lineTo(10, 12);
+        p.lineTo(4, 18);
+        p.closeSubpath();
+        break;
+    case Name::Volume:
+    case Name::Muted:
+        p.moveTo(3, 9.5);
+        p.lineTo(7, 9.5);
+        p.lineTo(12, 5);
+        p.lineTo(12, 19);
+        p.lineTo(7, 14.5);
+        p.lineTo(3, 14.5);
+        p.closeSubpath();
+        if (name == Name::Volume) {
+            p.arcMoveTo(QRectF(10, 8.5, 7, 7), 60);
+            p.arcTo(QRectF(10, 8.5, 7, 7), 60, -120);
+            p.arcMoveTo(QRectF(9, 5, 12, 14), 60);
+            p.arcTo(QRectF(9, 5, 12, 14), 60, -120);
+        } else {
+            line(15.5, 9, 21, 15);
+            line(21, 9, 15.5, 15);
+        }
+        break;
+    case Name::Fullscreen:
+        line(4, 9, 4, 4);
+        line(4, 4, 9, 4);
+        line(15, 4, 20, 4);
+        line(20, 4, 20, 9);
+        line(20, 15, 20, 20);
+        line(20, 20, 15, 20);
+        line(9, 20, 4, 20);
+        line(4, 20, 4, 15);
+        break;
+    case Name::Panels:
+        p.addRoundedRect(QRectF(3, 5, 18, 14), 2.5, 2.5);
+        line(15, 5, 15, 19);
+        line(17, 9, 19, 9);
+        line(17, 12, 19, 12);
+        break;
+    case Name::Keyboard:
+        p.addRoundedRect(QRectF(2.5, 6, 19, 12), 2.5, 2.5);
+        for (double x : {6.0, 9.5, 13.0, 16.5})
+            line(x, 10, x + 1, 10);
+        line(8, 14.5, 16, 14.5);
+        break;
+    case Name::Flag:
+        line(6, 3, 6, 21);
+        p.moveTo(6, 4);
+        p.lineTo(18, 4);
+        p.lineTo(15, 8.5);
+        p.lineTo(18, 13);
+        p.lineTo(6, 13);
+        break;
     }
     return p;
 }

@@ -3,11 +3,14 @@
 #include "imageio.h"
 #include "theme.h"
 
+#include <QGuiApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QScreen>
 #include <QToolTip>
+#include <QVariantAnimation>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -17,12 +20,75 @@ namespace {
 
 constexpr int RulerHeight = 22;
 constexpr int FilmHeight = 44;
-constexpr int LaneHeight = 26;
+constexpr int LaneHeight = 28;
 constexpr int Gap = 6;
 constexpr int ThumbnailHeight = FilmHeight * 2; // بدقة مضاعفة للشاشات عالية الكثافة
 constexpr int MaxThumbnails = 600;
+constexpr int MaxPreviews = 400;
+constexpr int PreviewWidth = 200;
+constexpr qint64 PreviewToleranceMs = 700; // مصغرة أبعد من هذا عن موضع الفأرة تُطلب من جديد
 
 } // namespace
+
+// معاينة الإطار فوق الخط الزمني عند المرور بالفأرة، كنافذة تلميح لا تأخذ التركيز ولا النقر
+class TimelinePreview : public QWidget
+{
+public:
+    explicit TimelinePreview(QWidget *owner)
+        : QWidget(owner, Qt::ToolTip | Qt::FramelessWindowHint)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setAttribute(Qt::WA_TranslucentBackground);
+    }
+
+    void setContent(const QImage &image, const QString &time, const QString &note)
+    {
+        m_image = image;
+        m_time = time;
+        m_note = note;
+        const int imageHeight = image.isNull() ? 0 : PreviewWidth * image.height() / std::max(1, image.width());
+        const int noteHeight = note.isEmpty() ? 0 : 20;
+        resize(PreviewWidth + 8, imageHeight + 26 + noteHeight + (image.isNull() ? 0 : 4));
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        QPainterPath frame;
+        frame.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 8, 8);
+        p.fillPath(frame, Theme::Surface);
+        p.setPen(QPen(Theme::Border, 1));
+        p.drawPath(frame);
+        int y = 4;
+        if (!m_image.isNull()) {
+            const int h = PreviewWidth * m_image.height() / std::max(1, m_image.width());
+            QPainterPath clip;
+            clip.addRoundedRect(QRectF(4, y, PreviewWidth, h), 5, 5);
+            p.setClipPath(clip);
+            p.drawImage(QRectF(4, y, PreviewWidth, h), m_image);
+            p.setClipping(false);
+            y += h + 2;
+        }
+        p.setPen(Theme::Text);
+        p.drawText(QRectF(4, y, PreviewWidth, 22), Qt::AlignCenter, m_time);
+        y += 22;
+        if (!m_note.isEmpty()) {
+            p.setPen(QColor(0xfa, 0xcc, 0x15));
+            p.drawText(QRectF(6, y, PreviewWidth - 4, 18), Qt::AlignCenter,
+                       p.fontMetrics().elidedText(m_note, Qt::ElideRight, PreviewWidth - 8));
+        }
+    }
+
+private:
+    QImage m_image;
+    QString m_time;
+    QString m_note;
+};
 
 TimelineView::TimelineView(QWidget *parent)
     : QWidget(parent)
@@ -31,8 +97,13 @@ TimelineView::TimelineView(QWidget *parent)
     setMouseTracking(true);
     setFocusPolicy(Qt::ClickFocus);
     setAttribute(Qt::WA_OpaquePaintEvent);
-    setToolTip(QStringLiteral("انقر للانتقال إلى لحظة · نقر مزدوج على مقطع شخص لعرض لقطاته\n"
-                              "Ctrl+العجلة للتكبير · Shift+العجلة أو السحب بالزر الأيمن للتنقل · ←/→ إطار"));
+    m_preview = new TimelinePreview(this);
+    m_zoomAnimation = new QVariantAnimation(this);
+    m_zoomAnimation->setDuration(180);
+    m_zoomAnimation->setEasingCurve(QEasingCurve::OutCubic);
+    // الحركة على لوغاريتم المقياس فيبدو التكبير متساوي السرعة
+    connect(m_zoomAnimation, &QVariantAnimation::valueChanged, this,
+            [this](const QVariant &value) { setZoom(std::exp(value.toDouble()), m_zoomAnchor); });
 }
 
 void TimelineView::clear()
@@ -42,6 +113,12 @@ void TimelineView::clear()
     m_analyzedUntil = -1;
     m_position = -1;
     m_thumbnails.clear();
+    m_previews.clear();
+    m_markers.clear();
+    m_shotChanges.clear();
+    m_requestedPreview = -1;
+    m_zoomAnimation->stop();
+    hidePreview();
     m_lanes.clear();
     m_selectedLane = -1;
     m_msPerPixel = 0.0;
@@ -131,6 +208,35 @@ void TimelineView::setSelectedLane(int id)
     update();
 }
 
+void TimelineView::setMarkers(const QMap<qint64, QString> &markers)
+{
+    m_markers = markers;
+    update();
+}
+
+void TimelineView::setShotChanges(const QList<qint64> &changes)
+{
+    m_shotChanges = changes;
+    update();
+}
+
+void TimelineView::setPreviewFrame(qint64 ms, const QImage &frame)
+{
+    if (frame.isNull())
+        return;
+    const QImage scaled = frame.height() > ThumbnailHeight ? frame.scaledToHeight(ThumbnailHeight, Qt::SmoothTransformation) : frame;
+    if (m_previews.size() >= MaxPreviews)
+        m_previews.erase(std::abs(m_previews.firstKey() - ms) > std::abs(m_previews.lastKey() - ms) ? m_previews.begin()
+                                                                                                    : std::prev(m_previews.end()));
+    m_previews.insert(ms, scaled);
+    if (wantsThumbnail(ms))
+        addThumbnail(ms, scaled);
+    if (m_requestedPreview == ms)
+        m_requestedPreview = -1;
+    if (m_preview->isVisible() && m_hoverX >= 0)
+        updatePreview(QPointF(m_hoverX, RulerHeight));
+}
+
 void TimelineView::setLabelWidth(int width)
 {
     m_labelWidth = width;
@@ -214,23 +320,40 @@ void TimelineView::ensurePlayheadVisible()
     }
 }
 
+double TimelineView::currentScale() const
+{
+    return m_msPerPixel > 0.0 ? m_msPerPixel : std::max(1.0, double(m_duration)) / trackWidth();
+}
+
+void TimelineView::animateZoom(double msPerPixel, double anchorX)
+{
+    if (m_duration <= 0)
+        return;
+    const double fitScale = double(m_duration) / trackWidth();
+    const double minScale = std::max(1000.0 / m_fps / 24.0, 1.0);
+    m_zoomTarget = std::clamp(msPerPixel, minScale, fitScale);
+    m_zoomAnchor = anchorX;
+    m_zoomAnimation->stop();
+    m_zoomAnimation->setStartValue(std::log(currentScale()));
+    m_zoomAnimation->setEndValue(std::log(m_zoomTarget));
+    m_zoomAnimation->start();
+}
+
 void TimelineView::zoomIn()
 {
-    const double scale = m_msPerPixel > 0.0 ? m_msPerPixel : double(m_duration) / trackWidth();
-    setZoom(scale / 2.0, m_position >= 0 ? xOf(m_position) : trackLeft() + trackWidth() / 2);
+    const double scale = m_zoomAnimation->state() == QAbstractAnimation::Running ? m_zoomTarget : currentScale();
+    animateZoom(scale / 2.0, m_position >= 0 && xOf(m_position) >= trackLeft() ? xOf(m_position) : trackLeft() + trackWidth() / 2);
 }
 
 void TimelineView::zoomOut()
 {
-    const double scale = m_msPerPixel > 0.0 ? m_msPerPixel : double(m_duration) / trackWidth();
-    setZoom(scale * 2.0, m_position >= 0 ? xOf(m_position) : trackLeft() + trackWidth() / 2);
+    const double scale = m_zoomAnimation->state() == QAbstractAnimation::Running ? m_zoomTarget : currentScale();
+    animateZoom(scale * 2.0, m_position >= 0 && xOf(m_position) >= trackLeft() ? xOf(m_position) : trackLeft() + trackWidth() / 2);
 }
 
 void TimelineView::fit()
 {
-    m_msPerPixel = 0.0;
-    m_viewStart = 0.0;
-    update();
+    animateZoom(double(m_duration) / trackWidth(), trackLeft());
 }
 
 void TimelineView::resizeEvent(QResizeEvent *event)
@@ -250,8 +373,8 @@ void TimelineView::paintEvent(QPaintEvent *)
     const double left = trackLeft();
     const double right = left + trackWidth();
     const QRectF track(left, 0, right - left, height());
-    QFont small = font();
-    small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
+    QFont caption = font();
+    caption.setPointSizeF(std::max(7.0, caption.pointSizeF() - 1.5));
 
     // عمود الأسماء
     p.fillRect(QRectF(0, 0, left - 4, height()), Theme::mix(Theme::Surface, Theme::Background, 0.5));
@@ -276,7 +399,7 @@ void TimelineView::paintEvent(QPaintEvent *)
             break;
         }
     }
-    p.setFont(small);
+    p.setFont(caption);
     const qint64 first = qint64(std::floor(m_viewStart / step)) * step;
     for (qint64 t = first; xOf(t) <= right; t += step) {
         const double x = xOf(t);
@@ -343,6 +466,32 @@ void TimelineView::paintEvent(QPaintEvent *)
         const double x = std::max(left, xOf(m_analyzedUntil));
         p.fillRect(QRectF(x, RulerHeight, right - x, FilmHeight), QColor(0, 0, 0, 90));
     }
+    // تغيّرات اللقطات: خط أبيض قصير أسفل شريط المصغرات
+    p.setPen(QPen(QColor(255, 255, 255, 170), 1.5));
+    for (qint64 t : std::as_const(m_shotChanges)) {
+        const double x = xOf(t);
+        if (x >= left && x <= right)
+            p.drawLine(QPointF(x, RulerHeight + FilmHeight - 9), QPointF(x, RulerHeight + FilmHeight));
+    }
+    // العلامات: راية صفراء على المسطرة وخط خفيف عبر الشريط
+    const QColor flag(0xfa, 0xcc, 0x15);
+    for (auto it = m_markers.cbegin(); it != m_markers.cend(); ++it) {
+        const double x = xOf(it.key());
+        if (x < left - 6 || x > right + 6)
+            continue;
+        p.setPen(QPen(QColor(flag.red(), flag.green(), flag.blue(), 110), 1));
+        p.drawLine(QPointF(x, RulerHeight), QPointF(x, RulerHeight + FilmHeight));
+        QPainterPath banner;
+        banner.moveTo(x, 3);
+        banner.lineTo(x + 8, 3);
+        banner.lineTo(x + 6, 7);
+        banner.lineTo(x + 8, 11);
+        banner.lineTo(x, 11);
+        banner.closeSubpath();
+        p.fillPath(banner, flag);
+        p.setPen(QPen(flag, 1.5));
+        p.drawLine(QPointF(x, 3), QPointF(x, RulerHeight));
+    }
 
     // ── مسارات الأشخاص ──
     const int top = lanesTop();
@@ -384,16 +533,21 @@ void TimelineView::paintEvent(QPaintEvent *)
             p.fillRect(QRectF(0, y, left - 4, LaneHeight), Theme::mix(Theme::Surface, Theme::Accent, 0.22));
         p.fillRect(QRectF(0, y + 4, 3, LaneHeight - 8), lane.color);
         if (!lane.avatar.isNull())
-            p.drawPixmap(QRectF(left - 4 - 6 - 20, y + 3, 20, 20), lane.avatar, lane.avatar.rect());
+            p.drawPixmap(QRectF(left - 4 - 6 - 22, y + 3, 22, 22), lane.avatar, lane.avatar.rect());
+        if (lane.watched) {
+            p.setPen(QPen(Theme::Accent2, 2));
+            p.setBrush(Qt::NoBrush);
+            p.drawEllipse(QRectF(left - 4 - 6 - 23, y + 2, 24, 24));
+        }
         p.setPen(selected ? Theme::Text : Theme::Muted);
-        p.setFont(small);
-        const QRectF textRect(8, y, left - 4 - 6 - 20 - 14, LaneHeight);
+        p.setFont(caption);
+        const QRectF textRect(8, y, left - 4 - 6 - 22 - 14, LaneHeight);
         p.drawText(textRect, Qt::AlignRight | Qt::AlignVCenter,
                    p.fontMetrics().elidedText(lane.name, Qt::ElideRight, int(textRect.width())));
     }
     p.restore();
     p.setPen(Theme::Muted);
-    p.setFont(small);
+    p.setFont(caption);
     p.drawText(QRectF(6, RulerHeight, left - 16, FilmHeight), Qt::AlignRight | Qt::AlignVCenter,
                m_lanes.isEmpty() ? QStringLiteral("الإطارات") : QStringLiteral("الأشخاص: %1").arg(m_lanes.size()));
     // مؤشر وجود مسارات أخرى بالتمرير
@@ -434,6 +588,7 @@ void TimelineView::paintEvent(QPaintEvent *)
 void TimelineView::mousePressEvent(QMouseEvent *event)
 {
     setFocus();
+    hidePreview();
     const QPointF pos = event->position();
     if (event->button() == Qt::RightButton) {
         // نقرة يمنى = قائمة العمليات، وسحب بالزر الأيمن = تنقل
@@ -474,6 +629,17 @@ void TimelineView::mousePressEvent(QMouseEvent *event)
                 return;
             }
         }
+        // النقر على مسار الشخص خارج مقاطعه يقفز إلى أقرب ظهور له
+        const QList<QPair<qint64, qint64>> &segments = m_lanes.at(lane).segments;
+        if (!segments.isEmpty()) {
+            auto distance = [t](const QPair<qint64, qint64> &s) { return t < s.first ? s.first - t : std::max<qint64>(0, t - s.second); };
+            const auto nearest = std::min_element(segments.cbegin(), segments.cend(),
+                                                  [&](const auto &a, const auto &b) { return distance(a) < distance(b); });
+            emit laneClicked(m_lanes.at(lane).id, nearest->first);
+            setPosition(nearest->first);
+            emit seekRequested(nearest->first);
+            return;
+        }
     }
     m_scrubbing = true;
     setPosition(t);
@@ -503,6 +669,14 @@ void TimelineView::mouseMoveEvent(QMouseEvent *event)
             setCursor(Qt::SizeHorCursor);
         else
             unsetCursor();
+        const int lane = laneAt(pos.y());
+        if (pos.x() < trackLeft()) {
+            hidePreview();
+            if (lane >= 0 && !m_lanes.at(lane).detail.isEmpty())
+                QToolTip::showText(event->globalPosition().toPoint(), m_lanes.at(lane).detail, this);
+        } else {
+            updatePreview(pos);
+        }
     }
     if (m_panning) {
         const double scale = m_msPerPixel > 0.0 ? m_msPerPixel : double(m_duration) / trackWidth();
@@ -516,6 +690,64 @@ void TimelineView::mouseMoveEvent(QMouseEvent *event)
         }
     }
     update();
+}
+
+void TimelineView::updatePreview(const QPointF &pos)
+{
+    if (m_duration <= 0 || pos.x() < trackLeft() || pos.x() > trackLeft() + trackWidth()) {
+        hidePreview();
+        return;
+    }
+    const qint64 t = timeAt(pos.x());
+    m_hoverTime = t;
+    auto nearest = [t](const QMap<qint64, QImage> &images) -> QPair<qint64, QImage> {
+        if (images.isEmpty())
+            return {-1, {}};
+        auto it = images.lowerBound(t);
+        if (it == images.end() || (it != images.begin() && t - std::prev(it).key() < it.key() - t))
+            it = std::prev(it);
+        return {it.key(), it.value()};
+    };
+    QPair<qint64, QImage> best = nearest(m_previews);
+    const QPair<qint64, QImage> thumb = nearest(m_thumbnails);
+    if (best.first < 0 || (thumb.first >= 0 && std::llabs(thumb.first - t) < std::llabs(best.first - t)))
+        best = thumb;
+    const bool close = best.first >= 0 && std::llabs(best.first - t) <= PreviewToleranceMs;
+    if (!close && (m_requestedPreview < 0 || std::llabs(m_requestedPreview - t) > PreviewToleranceMs / 2)) {
+        m_requestedPreview = t;
+        emit previewRequested(t);
+    }
+    // علامة قريبة من الفأرة تظهر ملاحظتها في المعاينة
+    QString note;
+    const double scale = currentScale();
+    for (auto it = m_markers.lowerBound(qint64(t - 8 * scale)); it != m_markers.cend() && it.key() <= t + 8 * scale; ++it) {
+        note = it.value().isEmpty() ? QStringLiteral("علامة") : it.value();
+        break;
+    }
+    QString time = ImageIO::formatTime(t);
+    if (scale < 200.0)
+        time += QStringLiteral(".%1").arg(t % 1000 / 100);
+    // صورة بعيدة (أثناء انتظار المطلوبة) أفضل من لا شيء إن كانت في حدود ثوانٍ
+    const bool usable = best.first >= 0 && std::llabs(best.first - t) <= std::max<qint64>(PreviewToleranceMs * 4, qint64(scale * 20));
+    m_preview->setContent(usable ? best.second : QImage(), time, note);
+    const QPoint anchor = mapToGlobal(QPoint(int(pos.x()), 0));
+    QPoint topLeft(anchor.x() - m_preview->width() / 2, anchor.y() - m_preview->height() - 6);
+    if (const QScreen *screen = QGuiApplication::screenAt(anchor)) {
+        const QRect area = screen->availableGeometry();
+        topLeft.setX(std::clamp(topLeft.x(), area.left(), std::max(area.left(), area.right() - m_preview->width())));
+        if (topLeft.y() < area.top())
+            topLeft.setY(mapToGlobal(QPoint(0, RulerHeight + FilmHeight + 6)).y());
+    }
+    m_preview->move(topLeft);
+    if (!m_preview->isVisible())
+        m_preview->show();
+}
+
+void TimelineView::hidePreview()
+{
+    m_hoverTime = -1;
+    if (m_preview && m_preview->isVisible())
+        m_preview->hide();
 }
 
 void TimelineView::mouseReleaseEvent(QMouseEvent *event)
@@ -579,8 +811,8 @@ void TimelineView::wheelEvent(QWheelEvent *event)
     const QPoint delta = event->angleDelta();
     const double x = event->position().x();
     if (event->modifiers() & Qt::ControlModifier) {
-        const double scale = m_msPerPixel > 0.0 ? m_msPerPixel : double(m_duration) / trackWidth();
-        setZoom(scale * std::pow(0.8, delta.y() / 120.0), std::max(x, trackLeft()));
+        const double scale = m_zoomAnimation->state() == QAbstractAnimation::Running ? m_zoomTarget : currentScale();
+        animateZoom(scale * std::pow(0.8, delta.y() / 120.0), std::max(x, trackLeft()));
     } else if ((event->modifiers() & Qt::ShiftModifier) || delta.x() != 0
                || event->position().y() < lanesTop() || m_lanes.size() <= visibleLaneCount()) {
         const double scale = m_msPerPixel > 0.0 ? m_msPerPixel : 0.0;
@@ -596,25 +828,8 @@ void TimelineView::wheelEvent(QWheelEvent *event)
 
 void TimelineView::keyPressEvent(QKeyEvent *event)
 {
-    if (m_duration <= 0 || m_position < 0)
-        return QWidget::keyPressEvent(event);
-    qint64 step = qint64(std::llround(1000.0 / m_fps));
-    if (event->modifiers() & Qt::ShiftModifier)
-        step = 5000;
-    qint64 target = m_position;
+    // الأسهم وHome وEnd وI وO تمر إلى النافذة، فتعمل كما تعمل من أي مكان آخر
     switch (event->key()) {
-    case Qt::Key_Right:
-        target += step;
-        break;
-    case Qt::Key_Left:
-        target -= step;
-        break;
-    case Qt::Key_Home:
-        target = 0;
-        break;
-    case Qt::Key_End:
-        target = m_duration - 1;
-        break;
     case Qt::Key_Plus:
     case Qt::Key_Equal:
         zoomIn();
@@ -622,27 +837,20 @@ void TimelineView::keyPressEvent(QKeyEvent *event)
     case Qt::Key_Minus:
         zoomOut();
         return;
-    case Qt::Key_I:
-        if (m_rangeEnd > 0 && m_position >= m_rangeEnd)
-            return;
-        editRange(m_position, m_rangeEnd);
-        return;
-    case Qt::Key_O:
-        if (m_position <= m_rangeStart)
-            return;
-        editRange(m_rangeStart, m_position);
-        return;
-
     default:
         return QWidget::keyPressEvent(event);
     }
-    target = std::clamp<qint64>(target, 0, m_duration - 1);
-    setPosition(target);
-    emit seekRequested(target);
+}
+
+void TimelineView::hideEvent(QHideEvent *event)
+{
+    hidePreview();
+    QWidget::hideEvent(event);
 }
 
 void TimelineView::leaveEvent(QEvent *event)
 {
+    hidePreview();
     m_hoverX = -1.0;
     update();
     QWidget::leaveEvent(event);

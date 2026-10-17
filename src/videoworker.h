@@ -74,6 +74,8 @@ signals:
     // صورة مصغرة لشريط الزمن، كل ثانية تقريباً من الجزء المحلل (للملفات حين لا تُرسل الإطارات)
     void thumbnailReady(qint64 positionMs, const QImage &thumbnail);
     void trackUpdated(const FaceItem &track);
+    // تغيّرت اللقطة عند هذا الموضع (قطع في المونتاج أو تبدّل الكاميرا)، للملفات فقط
+    void shotChanged(qint64 positionMs);
     // تبيّن أن هويتين لشخص واحد فدُمجتا؛ removedId لم يعد موجوداً
     void identitiesMerged(int keepId, int removedId);
     // الكاميرا: أشخاص غابوا طويلاً فنُسوا لتبقى الذاكرة ثابتة؛ تُحذف بطاقاتهم

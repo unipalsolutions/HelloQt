@@ -47,6 +47,16 @@ enum class Name {
     History,
     Copy,     // تكرار
     Record,   // دائرة ممتلئة لتسجيل الكاميرا
+    Rewind,   // قفز للخلف
+    Forward,  // قفز للأمام
+    SkipBack, // الملف السابق
+    SkipNext, // الملف التالي
+    Volume,
+    Muted,
+    Fullscreen,
+    Panels,   // إظهار اللوحات الجانبية أو إخفاؤها
+    Keyboard, // الاختصارات
+    Flag,     // علامة على الخط الزمني
 };
 
 void paint(QPainter &painter, Name name, const QRectF &rect, const QColor &color);
