@@ -129,6 +129,19 @@ jobs:
           if ($memory -gt 1500) { throw "Memory use too high: $memory MB" }
         shell: pwsh
 
+      - name: Player and archive scan tests
+        run: |
+          $out = Join-Path $PWD "player.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--player-test', 'testdata\clip.mp4', '10', $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "Player test failed" }
+          # مسح الأرشيف: إيقاف في منتصف الملف ثم متابعة من الموضع المحفوظ، والتقرير الموحّد
+          $out = Join-Path $PWD "archive.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--archive-test', 'testdata\clip.mp4', '1', '30', $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "Archive scan test failed" }
+        shell: pwsh
+
       - name: Large database test
         run: |
           $out = Join-Path $PWD "database.txt"

@@ -30,13 +30,13 @@ jobs:
         run: cmake --build build
 
       - name: Tests
-        timeout-minutes: 15
+        timeout-minutes: 20
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           base=https://raw.githubusercontent.com/ageitgey/face_recognition/master/examples
           mkdir -p testdata
-          for name in obama.jpg obama2.jpg biden.jpg; do curl -sSfL "$base/$name" -o "testdata/$name"; done
+          for name in obama.jpg obama2.jpg biden.jpg hamilton_clip.mp4; do curl -sSfL "$base/$name" -o "testdata/$name"; done
           failed=0
           run() {
             local name=$1; shift
@@ -50,5 +50,8 @@ jobs:
           run "Backup" --backup-test "$PWD/backuptest" "$PWD/backup.txt"
           run "Daily report" --daily-report-test "$PWD/dailytest" "$PWD/daily.txt"
           run "Recording" --record-test "$PWD/recordtest" "$PWD/record.txt"
+          run "Image filters" --filters-test testdata/obama.jpg "$PWD/filterstest" "$PWD/filters.txt"
+          run "Video player" --player-test testdata/hamilton_clip.mp4 10 "$PWD/player.txt"
+          run "Archive scan" --archive-test testdata/hamilton_clip.mp4 1 30 "$PWD/archive.txt"
           run "Speed" --bench - 5 "$PWD/bench.txt"
           exit $failed
