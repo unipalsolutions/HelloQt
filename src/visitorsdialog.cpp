@@ -121,7 +121,7 @@ VisitorsDialog::VisitorsDialog(FaceDatabase *database, QWidget *parent)
     m_snapshot = new FancyButton(Icons::Name::Camera, QStringLiteral("لقطة الإطار"), FancyButton::Kind::Secondary, this);
     m_clip = new FancyButton(Icons::Name::Film, QStringLiteral("تصدير المقطع…"), FancyButton::Kind::Secondary, this);
     m_clip->setToolTip(QStringLiteral("حفظ 30 ثانية من التسجيل حول لحظة الظهور في ملف واحد"));
-    auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
+    auto *close = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     buttons->addWidget(m_assign);
     buttons->addWidget(m_remove);
     buttons->addSpacing(12);

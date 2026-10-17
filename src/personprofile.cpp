@@ -130,23 +130,23 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
 
     const QHash<qint64, float> consistency = database.photoConsistency(personId);
     const ProfileStrength strength = profileStrength(person, consistency);
-    const QString strengthColor = strength.score >= 0.6 ? QStringLiteral("#16a34a")
-                                                        : (strength.score >= 0.35 ? QStringLiteral("#d97706") : QStringLiteral("#e11d48"));
+    const QString strengthColor = strength.score >= 0.6 ? QStringLiteral("#3e8a63")
+                                                        : (strength.score >= 0.35 ? QStringLiteral("#d98a10") : QStringLiteral("#d9542b"));
     // جداول QTextDocument لا تنعكس مع dir=rtl، فتُكتب الخلايا من اليسار إلى اليمين (الأخيرة هي اليمنى)
     const auto section = [](const QString &title, const QString &note = QString()) {
         return QStringLiteral("<table width='100%' cellspacing='0' cellpadding='0' style='margin-top:18px; margin-bottom:8px'><tr>"
-                              "<td width='30%' align='left' style='border-bottom:2px solid #2563eb; padding-bottom:4px; color:#64748b; font-size:9pt'>%2</td>"
-                              "<td width='70%' align='right' style='border-bottom:2px solid #2563eb; padding-bottom:4px; color:#1e3a8a; font-size:14pt; font-weight:bold'>%1</td>"
+                              "<td width='30%' align='left' style='border-bottom:2px solid #3e8a63; padding-bottom:4px; color:#7a6b5d; font-size:9pt'>%2</td>"
+                              "<td width='70%' align='right' style='border-bottom:2px solid #3e8a63; padding-bottom:4px; color:#2b231d; font-size:14pt; font-weight:bold'>%1</td>"
                               "</tr></table>")
             .arg(title, note);
     };
 
-    QString html = QStringLiteral("<html><body dir='rtl' style='color:#0f172a'>");
+    QString html = QStringLiteral("<html><body dir='rtl' style='color:#241c16'>");
 
     // الترويسة: الصورة والاسم يميناً، والبرنامج والتاريخ يساراً
-    html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='14' bgcolor='#1e3a8a'><tr>"
+    html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='14' bgcolor='#2b231d'><tr>"
                            "<td width='150' align='left' valign='bottom'><span style='color:#ffffff; font-size:12pt; font-weight:bold'>ملامح</span><br>"
-                           "<span style='color:#c7d2fe; font-size:8pt'>ملف شخص<br>⁦%2⁩</span></td>"
+                           "<span style='color:#e3d3c0; font-size:8pt'>ملف شخص<br>⁦%2⁩</span></td>"
                            "<td align='right' valign='middle'><span style='color:#ffffff; font-size:22pt; font-weight:bold'>%1</span><br>"
                            "<span style='color:#ffffff; background-color:%3; font-size:9pt; font-weight:bold'>&nbsp; ملف %4 · %5% &nbsp;</span></td>")
                 .arg(person.name.toHtmlEscaped(), QDateTime::currentDateTime().toString(QStringLiteral("yyyy/MM/dd HH:mm")), strengthColor,
@@ -182,19 +182,19 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
     html += section(QStringLiteral("البيانات"));
     html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='7'>");
     for (int i = 0; i < fields.size(); ++i) {
-        html += QStringLiteral("<tr%3><td align='right' style='border-bottom:1px solid #e2e8f0'>%2</td>"
-                               "<td width='140' align='right' style='border-bottom:1px solid #e2e8f0; color:#64748b'>%1</td></tr>")
+        html += QStringLiteral("<tr%3><td align='right' style='border-bottom:1px solid #ebe3d9'>%2</td>"
+                               "<td width='140' align='right' style='border-bottom:1px solid #ebe3d9; color:#7a6b5d'>%1</td></tr>")
                     .arg(fields.at(i).first, fields.at(i).second,
-                         i % 2 ? QStringLiteral(" bgcolor='#f8fafc'") : QString());
+                         i % 2 ? QStringLiteral(" bgcolor='#faf7f3'") : QString());
     }
     html += QStringLiteral("</table>");
     if (!person.notes.isEmpty())
         html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='10' style='margin-top:10px'><tr>"
-                               "<td bgcolor='#fffbeb' align='right' style='border-right:3px solid #f59e0b'>"
+                               "<td bgcolor='#fdf5e6' align='right' style='border-right:3px solid #f5a524'>"
                                "<span style='color:#92400e; font-weight:bold'>ملاحظات</span><br>%1</td></tr></table>")
                     .arg(person.notes.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
     if (!strength.tips.isEmpty()) {
-        html += QStringLiteral("<p style='color:#475569; font-size:9pt; margin-top:8px'>");
+        html += QStringLiteral("<p style='color:#5e5044; font-size:9pt; margin-top:8px'>");
         for (const QString &tip : strength.tips)
             html += QStringLiteral("• %1<br>").arg(tip.toHtmlEscaped());
         html += QStringLiteral("</p>");
@@ -216,8 +216,8 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
             const bool suspect = consistency.value(photo.id, 1.0f) < SuspectConsistency;
             cells << QStringLiteral("<td align='center' width='16%' bgcolor='%2'><img src='%1' width='84' height='84'><br>"
                                     "<span style='font-size:8pt; color:%3'>جودة %4%%5</span></td>")
-                         .arg(addImage(database.photo(photo.id, 240)), suspect ? QStringLiteral("#fff1f2") : QStringLiteral("#f1f5f9"),
-                              suspect ? QStringLiteral("#e11d48") : QStringLiteral("#64748b"))
+                         .arg(addImage(database.photo(photo.id, 240)), suspect ? QStringLiteral("#fdf0ea") : QStringLiteral("#f3eee8"),
+                              suspect ? QStringLiteral("#d9542b") : QStringLiteral("#7a6b5d"))
                          .arg(qRound(photo.quality * 100))
                          .arg(suspect ? QStringLiteral("<br>⚠ مشكوك فيها") : QString());
             if (cells.size() == 6)
@@ -231,7 +231,7 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
     const QList<Sighting> sightings = database.sightings(personId, 40);
     if (!sightings.isEmpty()) {
         html += section(QStringLiteral("سجل الظهور"), QStringLiteral("آخر %1").arg(sightings.size()));
-        const QString th = QStringLiteral("<th bgcolor='#1e3a8a' align='%1' style='color:#ffffff; font-size:9pt'>%2</th>");
+        const QString th = QStringLiteral("<th bgcolor='#2b231d' align='%1' style='color:#ffffff; font-size:9pt'>%2</th>");
         html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='6'><thead><tr>")
             + th.arg(QStringLiteral("center"), QStringLiteral("التشابه")) + th.arg(QStringLiteral("center"), QStringLiteral("الموضع"))
             + th.arg(QStringLiteral("right"), QStringLiteral("المصدر")) + th.arg(QStringLiteral("center"), QStringLiteral("التاريخ"))
@@ -242,23 +242,23 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
                 ? QTime(0, 0).addMSecs(int(sighting.positionMs)).toString(QStringLiteral("hh:mm:ss"))
                 : QStringLiteral("صورة");
             const int score = qRound(sighting.score * 100);
-            const QString cell = QStringLiteral("<td align='%1' style='border-bottom:1px solid #e2e8f0'>%2</td>");
-            html += QStringLiteral("<tr%1>").arg(index++ % 2 ? QStringLiteral(" bgcolor='#f8fafc'") : QString())
+            const QString cell = QStringLiteral("<td align='%1' style='border-bottom:1px solid #ebe3d9'>%2</td>");
+            html += QStringLiteral("<tr%1>").arg(index++ % 2 ? QStringLiteral(" bgcolor='#faf7f3'") : QString())
                 + cell.arg(QStringLiteral("center"), QStringLiteral("<b style='color:%1'>%2%</b>")
-                                                         .arg(score >= 60 ? QStringLiteral("#16a34a") : QStringLiteral("#d97706"))
+                                                         .arg(score >= 60 ? QStringLiteral("#3e8a63") : QStringLiteral("#d98a10"))
                                                          .arg(score))
                 + cell.arg(QStringLiteral("center"), QStringLiteral("⁦%1⁩").arg(position))
                 + cell.arg(QStringLiteral("right"), (sighting.source.startsWith(QStringLiteral("camera:"))
                                                           ? Cameras::displayName(sighting.source)
                                                           : QFileInfo(sighting.source).fileName()).toHtmlEscaped())
                 + cell.arg(QStringLiteral("center"), QStringLiteral("⁦%1⁩").arg(sighting.seen.toString(QStringLiteral("yyyy/MM/dd HH:mm"))))
-                + QStringLiteral("<td width='44' align='right' style='border-bottom:1px solid #e2e8f0'>%1</td></tr>")
+                + QStringLiteral("<td width='44' align='right' style='border-bottom:1px solid #ebe3d9'>%1</td></tr>")
                       .arg(sighting.thumbnail.isNull() ? QString()
                                                        : QStringLiteral("<img src='%1' width='34' height='34'>").arg(addImage(sighting.thumbnail)));
         }
         html += QStringLiteral("</table>");
     }
-    html += QStringLiteral("<p style='color:#94a3b8; font-size:8pt; margin-top:18px'>أُنشئ هذا الملف محلياً ببرنامج ملامح دون إرسال أي بيانات عبر الإنترنت.</p>");
+    html += QStringLiteral("<p style='color:#a99a8a; font-size:8pt; margin-top:18px'>أُنشئ هذا الملف محلياً ببرنامج ملامح دون إرسال أي بيانات عبر الإنترنت.</p>");
     html += QStringLiteral("</body></html>");
     document.setHtml(html);
     DailyReport::makeRightToLeft(&document);

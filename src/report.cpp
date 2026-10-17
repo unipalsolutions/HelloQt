@@ -87,32 +87,32 @@ QString formatDuration(qint64 ms)
 
 const char *const Style = R"(
 * { box-sizing: border-box; }
-body { font-family: "Segoe UI", Tahoma, Arial, sans-serif; margin: 0; background: #f4f7fb; color: #0f1d33; }
-header { background: linear-gradient(135deg, #0a1628, #13284a); color: #e6f0ff; padding: 28px 32px; }
+body { font-family: "Segoe UI", Tahoma, Arial, sans-serif; margin: 0; background: #f7f3ee; color: #241c16; }
+header { background: linear-gradient(135deg, #1f1914, #2f261f); color: #f4ede4; padding: 28px 32px; }
 header h1 { margin: 0 0 6px; font-size: 26px; }
-header .meta { color: #8aa3c7; font-size: 14px; }
+header .meta { color: #a99a8a; font-size: 14px; }
 main { padding: 24px 32px 40px; max-width: 1200px; margin: auto; }
 .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
 .stat { background: #fff; border-radius: 12px; padding: 14px 18px; min-width: 140px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-.stat b { display: block; font-size: 24px; color: #2f7cf6; }
-.stat span { color: #5b6b85; font-size: 13px; }
+.stat b { display: block; font-size: 24px; color: #3e8a63; }
+.stat span { color: #7a6b5d; font-size: 13px; }
 h2 { font-size: 19px; margin: 28px 0 12px; }
 table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-th, td { padding: 10px 12px; text-align: right; border-bottom: 1px solid #e6ecf5; font-size: 14px; vertical-align: middle; }
-th { background: #eef3fa; color: #3a4b66; font-weight: 600; }
+th, td { padding: 10px 12px; text-align: right; border-bottom: 1px solid #ebe3d9; font-size: 14px; vertical-align: middle; }
+th { background: #f3eee8; color: #5e5044; font-weight: 600; }
 td img { width: 56px; height: 56px; object-fit: cover; border-radius: 10px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
-.card { background: #fff; border-radius: 14px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-top: 4px solid #94a3b8; }
-.card.ok { border-top-color: #22d3ee; } .card.maybe { border-top-color: #3b82f6; }
+.card { background: #fff; border-radius: 14px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-top: 4px solid #a99a8a; }
+.card.ok { border-top-color: #4fbf87; } .card.maybe { border-top-color: #e0961c; }
 .card img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; }
 .card .name { font-weight: 600; margin: 8px 0 2px; }
-.card .info { color: #5b6b85; font-size: 12.5px; line-height: 1.6; }
-.pill { display: inline-block; padding: 1px 9px; border-radius: 99px; font-size: 12px; color: #fff; background: #94a3b8; }
-.pill.ok { background: #0891b2; } .pill.maybe { background: #3b82f6; }
-.bar { direction: ltr; position: relative; height: 10px; background: #e6ecf5; border-radius: 5px; margin-top: 6px; min-width: 160px; }
-.bar span { position: absolute; top: 0; bottom: 0; background: #2f7cf6; border-radius: 3px; }
-footer { color: #8aa3c7; font-size: 12px; text-align: center; padding: 20px; }
-@media print { header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .card, .stat, table { box-shadow: none; border: 1px solid #dde4ef; } }
+.card .info { color: #7a6b5d; font-size: 12.5px; line-height: 1.6; }
+.pill { display: inline-block; padding: 1px 9px; border-radius: 99px; font-size: 12px; color: #fff; background: #a99a8a; }
+.pill.ok { background: #3e8a63; } .pill.maybe { background: #e0961c; }
+.bar { direction: ltr; position: relative; height: 10px; background: #ebe3d9; border-radius: 5px; margin-top: 6px; min-width: 160px; }
+.bar span { position: absolute; top: 0; bottom: 0; background: #3e8a63; border-radius: 3px; }
+footer { color: #a99a8a; font-size: 12px; text-align: center; padding: 20px; }
+@media print { header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .card, .stat, table { box-shadow: none; border: 1px solid #e3d9cc; } }
 )";
 
 } // namespace
@@ -282,8 +282,8 @@ bool writeArchiveHtml(const QString &path, const QList<ArchivePerson> &persons, 
     out << "<!doctype html>\n<html lang=\"ar\" dir=\"rtl\"><head><meta charset=\"utf-8\">"
         << "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         << "<title>" << escape(QStringLiteral("تقرير ملامح — مسح الأرشيف")) << "</title><style>" << Style
-        << ".files { color: #5b6b85; font-size: 13px; line-height: 1.8; }\n"
-        << "td.times { font-size: 13px; color: #3a4b66; line-height: 1.7; }\n"
+        << ".files { color: #7a6b5d; font-size: 13px; line-height: 1.8; }\n"
+        << "td.times { font-size: 13px; color: #5e5044; line-height: 1.7; }\n"
         << "</style></head><body>\n";
     out << "<header><h1>" << escape(QStringLiteral("تقرير مسح الأرشيف")) << "</h1><div class=\"meta\">"
         << escape(QStringLiteral("%1 ملف · %2 من التسجيلات · %3")

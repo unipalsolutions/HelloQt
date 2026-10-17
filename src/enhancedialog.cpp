@@ -1,5 +1,6 @@
 #include "enhancedialog.h"
 
+#include "controls.h"
 #include "faceengine.h"
 #include "icons.h"
 #include "imageio.h"
@@ -370,7 +371,7 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     , m_engine(engine)
     , m_view(new BeforeAfterView(this))
     , m_info(new QLabel(this))
-    , m_upscale(new QComboBox(this))
+    , m_upscale(new SelectBox(this))
     , m_debounce(new QTimer(this))
 {
     setWindowTitle(title);
@@ -385,7 +386,7 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     panel->setFixedWidth(330);
     auto *side = new QVBoxLayout(panel);
     side->setContentsMargins(0, 0, 0, 0);
-    side->setSpacing(10);
+    side->setSpacing(8);
     auto *heading = new QLabel(QStringLiteral("تحسين الصورة"), panel);
     heading->setObjectName(QStringLiteral("sectionTitle"));
     side->addWidget(heading);
@@ -404,7 +405,7 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     auto *grid = new QGridLayout(controls);
     grid->setContentsMargins(0, 0, 0, 0);
     grid->setHorizontalSpacing(8);
-    grid->setVerticalSpacing(6);
+    grid->setVerticalSpacing(3);
     int row = 0;
     auto section = [&](const QString &text) {
         auto *label = new QLabel(text, controls);
@@ -431,26 +432,30 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     side->addWidget(controls);
 
     auto *turnRow = new QHBoxLayout;
-    auto *level = new FancyButton(Icons::Name::Scan, QStringLiteral("تسوية ميلان الوجه"), FancyButton::Kind::Secondary, panel);
-    level->setToolTip(QStringLiteral("يجعل خط العينين أفقياً تلقائياً"));
-    auto *turn = new FancyButton(Icons::Name::History, QStringLiteral("90°"), FancyButton::Kind::Secondary, panel);
+    auto *level = new FancyButton(Icons::Name::Level, QStringLiteral("تسوية ميلان الوجه"), FancyButton::Kind::Secondary, panel);
+    level->setToolTip(QStringLiteral("تسوية ميلان الوجه: يجعل خط العينين أفقياً تلقائياً"));
+    auto *turn = new FancyButton(Icons::Name::Rotate, QStringLiteral("90°"), FancyButton::Kind::Secondary, panel);
     turn->setToolTip(QStringLiteral("تدوير 90 درجة"));
-    auto *mirror = new FancyButton(Icons::Name::Compare, QStringLiteral("عكس"), FancyButton::Kind::Secondary, panel);
+    auto *mirror = new FancyButton(Icons::Name::Flip, QStringLiteral("عكس"), FancyButton::Kind::Secondary, panel);
     mirror->setToolTip(QStringLiteral("عكس الصورة أفقياً (صور كاميرا السيلفي)"));
-    turnRow->addWidget(level, 1);
-    turnRow->addWidget(turn);
-    turnRow->addWidget(mirror);
-    side->addLayout(turnRow);
-
-    auto *cropRow = new QHBoxLayout;
-    m_cropButton = new FancyButton(Icons::Name::Scan, QStringLiteral("قص"), FancyButton::Kind::Secondary, panel);
+    // صف أدوات واحد: القص بنصه لأنه يتحول إلى «تطبيق القص»، والبقية أيقونات وأسماؤها في التلميح
+    auto *cropRow = turnRow;
+    cropRow->setSpacing(6);
+    m_cropButton = new FancyButton(Icons::Name::Crop, QStringLiteral("قص"), FancyButton::Kind::Secondary, panel);
     m_cropButton->setToolTip(QStringLiteral("حدّد منطقة من الصورة بالسحب، ثم اضغط \"تطبيق القص\""));
-    auto *faceCrop = new FancyButton(Icons::Name::Users, QStringLiteral("حول الوجه"), FancyButton::Kind::Secondary, panel);
+    auto *faceCrop = new FancyButton(Icons::Name::Scan, QStringLiteral("حول الوجه"), FancyButton::Kind::Secondary, panel);
     faceCrop->setToolTip(QStringLiteral("قص تلقائي بنسبة صورة شخصية (3:4) حول أكبر وجه"));
-    m_clearCrop = new FancyButton(Icons::Name::Stop, QStringLiteral("إلغاء القص"), FancyButton::Kind::Secondary, panel);
+    m_clearCrop = new FancyButton(Icons::Name::Reject, QStringLiteral("إلغاء القص"), FancyButton::Kind::Secondary, panel);
+    m_clearCrop->setToolTip(QStringLiteral("إلغاء القص"));
+    for (FancyButton *button : {level, turn, mirror, faceCrop, m_clearCrop})
+        button->setCompact(true);
     cropRow->addWidget(m_cropButton, 1);
     cropRow->addWidget(faceCrop);
     cropRow->addWidget(m_clearCrop);
+    cropRow->addSpacing(6);
+    cropRow->addWidget(level);
+    cropRow->addWidget(turn);
+    cropRow->addWidget(mirror);
     side->addLayout(cropRow);
     connect(m_cropButton, &QAbstractButton::clicked, this, [this] { setCropMode(!m_cropMode); });
     connect(faceCrop, &QAbstractButton::clicked, this, &EnhanceDialog::cropToFace);
@@ -464,18 +469,23 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     side->addWidget(m_info);
     side->addStretch();
 
-    auto *reset = new FancyButton(Icons::Name::Stop, QStringLiteral("إعادة الضبط"), FancyButton::Kind::Secondary, panel);
-    auto *saveButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ…"), FancyButton::Kind::Secondary, panel);
-    auto *copyButton = new FancyButton(Icons::Name::Copy, QStringLiteral("نسخ"), FancyButton::Kind::Secondary, panel);
+    // أزرار الحفظ خارج منطقة التمرير حتى تبقى ظاهرة في الشاشات القصيرة
+    auto *footer = new QWidget(this);
+    auto *footerLayout = new QVBoxLayout(footer);
+    footerLayout->setContentsMargins(20, 10, 0, 0);
+    footerLayout->setSpacing(8);
+    auto *reset = new FancyButton(Icons::Name::Undo, QStringLiteral("إعادة الضبط"), FancyButton::Kind::Secondary, footer);
+    auto *saveButton = new FancyButton(Icons::Name::Save, QStringLiteral("حفظ…"), FancyButton::Kind::Secondary, footer);
+    auto *copyButton = new FancyButton(Icons::Name::Copy, QStringLiteral("نسخ"), FancyButton::Kind::Secondary, footer);
     auto *actions = new QHBoxLayout;
-    actions->addWidget(reset);
-    actions->addWidget(saveButton);
-    actions->addWidget(copyButton);
-    side->addLayout(actions);
-    m_close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, panel);
+    actions->addWidget(reset, 1);
+    actions->addWidget(saveButton, 1);
+    actions->addWidget(copyButton, 1);
+    footerLayout->addLayout(actions);
+    m_close = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, footer);
     connect(m_close, &QAbstractButton::clicked, this, &QDialog::reject);
     if (!useText.isEmpty()) {
-        auto *use = new FancyButton(Icons::Name::Search, useText, FancyButton::Kind::Primary, panel);
+        auto *use = new FancyButton(Icons::Name::Search, useText, FancyButton::Kind::Primary, footer);
         connect(use, &QAbstractButton::clicked, this, [this] {
             if (m_source.empty())
                 return;
@@ -485,10 +495,10 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
             else
                 accept();
         });
-        side->addWidget(use);
+        footerLayout->addWidget(use);
         m_needImage << use;
     }
-    side->addWidget(m_close);
+    footerLayout->addWidget(m_close);
     m_needImage << autoButton << controls << level << turn << mirror << reset << saveButton << copyButton << m_cropButton << faceCrop;
     m_view->onEmptyClick = [this] { openImage(); };
     // داخل النافذة الرئيسية يمرّر اختصارها اللصق إلى هنا؛ في النافذة المنفصلة يكون الاختصار خاصاً بها
@@ -500,8 +510,13 @@ EnhanceDialog::EnhanceDialog(const cv::Mat &image, const FaceEngine *engine, con
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *column = new QVBoxLayout;
+    column->setSpacing(0);
+    column->addWidget(scroll, 1);
+    column->addWidget(footer);
+    footer->setFixedWidth(350);
     scroll->setFixedWidth(350);
-    layout->addWidget(scroll);
+    layout->addLayout(column);
     layout->addWidget(m_view, 1);
 
     m_debounce->setSingleShot(true);
@@ -621,7 +636,7 @@ void EnhanceDialog::updateEnabled()
 void EnhanceDialog::updateCropButtons()
 {
     m_cropButton->setText(m_cropMode ? QStringLiteral("تطبيق القص") : QStringLiteral("قص"));
-    m_cropButton->setIconName(m_cropMode ? Icons::Name::Check : Icons::Name::Scan);
+    m_cropButton->setIconName(m_cropMode ? Icons::Name::Check : Icons::Name::Crop);
     m_clearCrop->setEnabled(!m_source.empty() && (m_cropMode || cropActive()));
 }
 

@@ -77,7 +77,7 @@ VideoFilters::Settings filtersOf(const Cameras::Camera &camera)
 QString tileStyle(bool alert)
 {
     return QStringLiteral("QFrame#cameraTile { background: %1; border: 2px solid %2; border-radius: 10px; }")
-        .arg(Theme::Surface.name(), alert ? QStringLiteral("#ff5c5c") : Theme::Border.name());
+        .arg(Theme::Surface.name(), alert ? Theme::Danger.name() : Theme::Border.name());
 }
 
 } // namespace
@@ -121,7 +121,7 @@ MultiCameraWindow::MultiCameraWindow(FaceEngine *engine, FaceDatabase *database,
     layout->addLayout(bar);
 
     m_alertBar = new QFrame;
-    m_alertBar->setStyleSheet(QStringLiteral("QFrame { background: #3a1020; border: 1px solid #ff5c5c; border-radius: 10px; }"
+    m_alertBar->setStyleSheet(QStringLiteral("QFrame { background: #3a1d14; border: 1px solid #d9542b; border-radius: 10px; }"
                                              "QLabel { border: none; background: transparent; }"));
     auto *alertLayout = new QHBoxLayout(m_alertBar);
     alertLayout->setContentsMargins(10, 6, 10, 6);
@@ -555,13 +555,13 @@ void MultiCameraWindow::updateTitle(Feed &feed)
     QString state;
     QString color;
     if (feed.reader) {
-        color = QStringLiteral("#22d3ee");
+        color = Theme::Accent2.name();
         state = feed.shownFps > 0.0 ? QStringLiteral("%1 إطاراً/ث").arg(qRound(feed.shownFps)) : QStringLiteral("متصلة");
     } else if (feed.opening) {
         color = Theme::Warning.name();
         state = feed.attempts > 1 ? QStringLiteral("إعادة الاتصال (%1)…").arg(feed.attempts - 1) : QStringLiteral("جارٍ الاتصال…");
     } else {
-        color = QStringLiteral("#ff5c5c");
+        color = Theme::Danger.name();
         state = feed.error.isEmpty() ? QStringLiteral("غير متصلة") : feed.error;
         if (state.size() > 48)
             state = state.left(46) + QStringLiteral("…");
@@ -571,9 +571,9 @@ void MultiCameraWindow::updateTitle(Feed &feed)
                                   " <span style='color:%4'>· %5</span>")
                        .arg(color, Theme::Text.name(), feed.camera.name.toHtmlEscaped(), Theme::Muted.name(), state.toHtmlEscaped());
     if (feed.recorder && feed.recorder->isRecording())
-        text += feed.recorder->isOffSchedule()        ? QStringLiteral(" <span style='color:#fca5a5'>· التسجيل خارج ساعاته</span>")
-            : feed.recorder->isWaitingForMotion() ? QStringLiteral(" <span style='color:#fca5a5'>· بانتظار حركة</span>")
-                                                  : QStringLiteral(" <span style='color:#ff5c5c'>· ⏺ تسجيل</span>");
+        text += feed.recorder->isOffSchedule()        ? QStringLiteral(" <span style='color:#f0a58a'>· التسجيل خارج ساعاته</span>")
+            : feed.recorder->isWaitingForMotion() ? QStringLiteral(" <span style='color:#f0a58a'>· بانتظار حركة</span>")
+                                                  : QStringLiteral(" <span style='color:#e8774f'>· ⏺ تسجيل</span>");
     feed.title->setText(text);
 }
 
@@ -681,7 +681,7 @@ void MultiCameraWindow::showAlert(Feed &feed, const QString &personId, const QSt
     feed.alertUntil = nowMs() + AlertFrameMs;
     m_alertAvatar->setPixmap(circularPixmap(crop, 44));
     m_alert->setText(QStringLiteral("<span style='color:%1; font-weight:700; font-size:12pt'>تنبيه مراقبة: ظهر %2</span>"
-                                    "<br><span style='color:#cfe0ff'>أمام «%3» · التشابه %4% · الساعة ⁦%5⁩</span>")
+                                    "<br><span style='color:#e8dccd'>أمام «%3» · التشابه %4% · الساعة ⁦%5⁩</span>")
                          .arg(Theme::Accent2.name(), name.toHtmlEscaped(), feed.camera.name.toHtmlEscaped())
                          .arg(qRound(score * 100))
                          .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss"))));

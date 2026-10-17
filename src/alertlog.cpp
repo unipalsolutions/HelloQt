@@ -121,7 +121,7 @@ AlertLogDialog::AlertLogDialog(const FaceDatabase *database, QWidget *parent)
     m_person = new FancyButton(Icons::Name::Users, QStringLiteral("ملف الشخص"), FancyButton::Kind::Secondary, this);
     m_export = new FancyButton(Icons::Name::Export, QStringLiteral("تصدير CSV…"), FancyButton::Kind::Secondary, this);
     m_export->setToolTip(QStringLiteral("حفظ السجل المعروض في ملف يُفتح ببرنامج Excel"));
-    auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
+    auto *close = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     buttons->addWidget(m_open);
     buttons->addWidget(m_snapshot);
     buttons->addWidget(m_clip);

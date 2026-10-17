@@ -61,6 +61,11 @@ enum class Name {
     List,     // عرض قائمة
     Reject,   // علامة ×
     More,     // ثلاث نقاط: أدوات إضافية
+    Rotate,   // سهم دائري مع عقارب الساعة
+    Flip,     // مثلثان متقابلان حول خط: عكس أفقي
+    Crop,     // زاويتا القص المتقاطعتان
+    Undo,     // سهم راجع: إعادة الضبط
+    Level,    // خط أفقي داخل دائرة: تسوية الميلان
 };
 
 void paint(QPainter &painter, Name name, const QRectF &rect, const QColor &color);

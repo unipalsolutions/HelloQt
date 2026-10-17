@@ -17,7 +17,8 @@ class FancyButton : public QAbstractButton
     Q_OBJECT
 
 public:
-    enum class Kind { Primary, Secondary, Danger, Nav };
+    // Tab: جزء من شريط تبويبات على شكل كبسولة داخل إطار tabStrip
+    enum class Kind { Primary, Secondary, Danger, Nav, Tab };
 
     FancyButton(Icons::Name icon, const QString &text, Kind kind, QWidget *parent = nullptr);
 
@@ -50,6 +51,10 @@ private:
     QVariantAnimation *m_pressAnimation;
     QVariantAnimation *m_checkAnimation;
 };
+
+// يجمع أزرار Tab في إطار كبسولي واحد (tabStrip)
+class QFrame;
+QFrame *makeTabStrip(const QList<FancyButton *> &tabs, QWidget *parent);
 
 // يرتب العناصر في سطر واحد، وينقل ما لا يتسع منها إلى سطر جديد بدل أن يختفي في الشاشات الصغيرة
 class FlowLayout : public QLayout

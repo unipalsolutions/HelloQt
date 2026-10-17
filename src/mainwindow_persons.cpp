@@ -87,7 +87,49 @@ QWidget *MainWindow::createDatabasePage()
     detailsLayout->setContentsMargins(22, 20, 22, 18);
     detailsLayout->setSpacing(14);
 
-    auto *profile = new QHBoxLayout;
+    // حالة «لم يُختر أحد»: أيقونة في دائرة مضيئة ونص قصير وزر لإضافة شخص
+    m_personEmpty = new QWidget(detailsCard);
+    auto *emptyLayout = new QVBoxLayout(m_personEmpty);
+    emptyLayout->setSpacing(10);
+    emptyLayout->addStretch(3);
+    auto *emptyIcon = new QLabel(m_personEmpty);
+    {
+        const qreal dpr = devicePixelRatioF();
+        QPixmap badge(QSize(88, 88) * dpr);
+        badge.setDevicePixelRatio(dpr);
+        badge.fill(Qt::transparent);
+        QPainter painter(&badge);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QRadialGradient glow(QPointF(44, 44), 44);
+        glow.setColorAt(0.0, Theme::withAlpha(Theme::Accent, 90));
+        glow.setColorAt(1.0, Theme::withAlpha(Theme::Accent, 25));
+        painter.setPen(QPen(Theme::withAlpha(Theme::Accent2, 60), 1.0));
+        painter.setBrush(glow);
+        painter.drawEllipse(QRectF(1, 1, 86, 86));
+        Icons::paint(painter, Icons::Name::Users, QRectF(26, 26, 36, 36), Theme::Accent2);
+        painter.end();
+        emptyIcon->setPixmap(badge);
+    }
+    emptyIcon->setAlignment(Qt::AlignCenter);
+    emptyLayout->addWidget(emptyIcon);
+    auto *emptyTitle = label(QStringLiteral("اختر شخصاً لعرض ملفه"), QStringLiteral("sectionTitle"), m_personEmpty);
+    emptyTitle->setAlignment(Qt::AlignCenter);
+    emptyLayout->addWidget(emptyTitle);
+    m_personEmptyText = label(QString(), QStringLiteral("muted"), m_personEmpty);
+    m_personEmptyText->setAlignment(Qt::AlignCenter);
+    m_personEmptyText->setWordWrap(true);
+    m_personEmptyText->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    emptyLayout->addWidget(m_personEmptyText);
+    auto *emptyAdd = new FancyButton(Icons::Name::UserPlus, QStringLiteral("شخص جديد"), FancyButton::Kind::Primary, m_personEmpty);
+    connect(emptyAdd, &QAbstractButton::clicked, this, &MainWindow::addPerson);
+    emptyLayout->addSpacing(6);
+    emptyLayout->addWidget(emptyAdd, 0, Qt::AlignCenter);
+    emptyLayout->addStretch(4);
+    detailsLayout->addWidget(m_personEmpty, 1);
+
+    m_personProfile = new QWidget(detailsCard);
+    auto *profile = new QHBoxLayout(m_personProfile);
+    profile->setContentsMargins(0, 0, 0, 0);
     profile->setSpacing(18);
     m_personAvatar = new QLabel(detailsCard);
     m_personAvatar->setFixedSize(96, 96);
@@ -100,7 +142,7 @@ QWidget *MainWindow::createDatabasePage()
     profile->addWidget(m_personDetails, 1);
     m_strengthMeter = new StrengthMeter(detailsCard);
     profile->addWidget(m_strengthMeter, 0, Qt::AlignTop);
-    detailsLayout->addLayout(profile);
+    detailsLayout->addWidget(m_personProfile);
 
     // تنبيه احتمال التكرار: شخص آخر في القاعدة يشبهه بدرجة عالية
     m_duplicateBanner = card(detailsCard, QStringLiteral("statCard"));
@@ -181,13 +223,10 @@ QWidget *MainWindow::createDatabasePage()
     detailsLayout->addWidget(m_personActions);
 
     auto *photosHeader = new QHBoxLayout;
-    m_photosTab = new FancyButton(Icons::Name::Image, QStringLiteral("صور الوجه"), FancyButton::Kind::Nav, detailsCard);
-    m_sightingsTab = new FancyButton(Icons::Name::History, QStringLiteral("سجل الظهور"), FancyButton::Kind::Nav, detailsCard);
-    for (FancyButton *tab : {m_photosTab, m_sightingsTab}) {
-        tab->setAutoExclusive(true);
-        tab->setFixedWidth(170);
-        photosHeader->addWidget(tab);
-    }
+    m_photosTab = new FancyButton(Icons::Name::Image, QStringLiteral("صور الوجه"), FancyButton::Kind::Tab, detailsCard);
+    m_sightingsTab = new FancyButton(Icons::Name::History, QStringLiteral("سجل الظهور"), FancyButton::Kind::Tab, detailsCard);
+    m_profileTabs = makeTabStrip({m_photosTab, m_sightingsTab}, detailsCard);
+    photosHeader->addWidget(m_profileTabs);
     m_photosTab->setChecked(true);
     m_photosHint = label(QStringLiteral("كلما زادت الصور وتنوعت زادت دقة التعرف"), QStringLiteral("muted"), detailsCard);
     photosHeader->addWidget(m_photosHint, 1);
@@ -396,17 +435,18 @@ void MainWindow::showPersonDetails()
     m_removePhotoButton->setVisible(!id.isEmpty() && photosShown);
     m_coverButton->setVisible(!id.isEmpty() && photosShown);
     m_strengthMeter->setVisible(!id.isEmpty());
-    m_photosTab->setVisible(!id.isEmpty());
-    m_sightingsTab->setVisible(!id.isEmpty());
+    m_profileTabs->setVisible(!id.isEmpty());
     m_profileStack->setVisible(!id.isEmpty());
     m_duplicateBanner->setVisible(false);
     m_duplicateId.clear();
 
+    m_personEmpty->setVisible(id.isEmpty());
+    m_personProfile->setVisible(!id.isEmpty());
     if (id.isEmpty()) {
         m_personAvatar->setPixmap(QPixmap());
-        m_personDetails->setText(QStringLiteral("<div style='font-size:15pt; font-weight:600'>اختر شخصاً</div>"
-                                                "<div style='color:#a99a8a'>اختر شخصاً من القائمة لعرض بياناته وصوره، "
-                                                "أو اضغط \"شخص جديد\" لإضافة شخص.</div>"));
+        const qint64 count = m_database.personCount();
+        m_personEmptyText->setText(count > 0 ? QStringLiteral("في القاعدة \u2066%1\u2069 أشخاص. اختر أحدهم من القائمة لعرض بياناته وصوره وسجل ظهوره،\nأو أضف شخصاً جديداً.").arg(count)
+                                             : QStringLiteral("القاعدة فارغة. أضف أول شخص مع صورة واضحة لوجهه ليبدأ التعرف عليه."));
         m_photosTab->setText(QStringLiteral("صور الوجه"));
         m_sightingsTab->setText(QStringLiteral("سجل الظهور"));
         return;

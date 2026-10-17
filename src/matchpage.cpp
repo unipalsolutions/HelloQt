@@ -35,9 +35,9 @@ namespace {
 
 // ألوان الحكم: نفس الشخص، محتمل، مختلف
 const QColor SameColor = Theme::Success;
-const QColor PossibleColor = Theme::Accent;
-const QColor DifferentColor(0xfb, 0x71, 0x85);
-const QColor UncertainColor(0xfb, 0xbf, 0x24);
+const QColor PossibleColor = Theme::Warning;
+const QColor DifferentColor = Theme::Danger;
+const QColor UncertainColor = Theme::Warning;
 
 // حدود المقارنة المباشرة بين صورتين لنموذج ArcFace: بصمات شخصين مختلفين نادراً ما تتجاوز 0.28
 // (أعلى ما قيس بين شخصين مختلفين في اختباراتنا 0.17)، أما الشخص نفسه بين صورة واضحة ولقطة فيديو
@@ -196,7 +196,7 @@ protected:
             dim.addRect(target);
             QPainterPath hole;
             hole.addRoundedRect(mapBox(m_boxes[m_selected]).adjusted(-6, -6, 6, 6), 8, 8);
-            p.fillPath(dim.subtracted(hole), QColor(4, 10, 22, 110));
+            p.fillPath(dim.subtracted(hole), withAlpha(Theme::Viewport, 130));
         }
         p.restore();
 
@@ -366,7 +366,8 @@ protected:
     {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        const double size = std::min(width() - 20.0, (height() - 10.0) * 1.6);
+        // القوس ينزل تحت المركز بمقدار sin(20°) من نصف القطر، فيتسع له الارتفاع كاملاً
+        const double size = std::min(width() - 20.0, (height() - 14.0) / 0.68);
         const QRectF arcRect(width() / 2.0 - size / 2, 10, size, size);
         const double thick = std::max(10.0, size * 0.075);
         // القوس 220 درجة يبدأ من أسفل اليسار
@@ -410,8 +411,8 @@ protected:
             p.drawEllipse(tip, thick * 0.32, thick * 0.32);
         }
         // علامة حد التأكيد
-        p.setPen(QPen(Text, 2, Qt::SolidLine, Qt::RoundCap));
-        p.drawLine(pointAt(m_threshold, 2), pointAt(m_threshold, -thick - 3));
+        p.setPen(QPen(withAlpha(Text, 150), 2, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(pointAt(m_threshold, 1), pointAt(m_threshold, -thick - 1));
 
         // النسبة في الوسط
         QFont font = p.font();
@@ -456,14 +457,10 @@ MatchPage::MatchPage(const FaceEngine *engine, FaceDatabase *database, std::func
     m_subtitle = makeLabel(QStringLiteral("قارن بين وجهين، أو ابحث في القاعدة عن أقرب الأشخاص لصورة"), QStringLiteral("subtitle"), this);
     titles->addWidget(m_subtitle);
     header->addLayout(titles, 1);
-    auto *compareTab = new FancyButton(Icons::Name::Compare, QStringLiteral("مقارنة صورتين"), FancyButton::Kind::Nav, this);
-    auto *searchTab = new FancyButton(Icons::Name::Search, QStringLiteral("البحث في القاعدة"), FancyButton::Kind::Nav, this);
-    for (FancyButton *tab : {compareTab, searchTab}) {
-        tab->setFixedWidth(200);
-        tab->setAutoExclusive(true);
-        header->addWidget(tab);
-    }
+    auto *compareTab = new FancyButton(Icons::Name::Compare, QStringLiteral("مقارنة صورتين"), FancyButton::Kind::Tab, this);
+    auto *searchTab = new FancyButton(Icons::Name::Search, QStringLiteral("البحث في القاعدة"), FancyButton::Kind::Tab, this);
     m_tabs = {compareTab, searchTab};
+    header->addWidget(makeTabStrip(m_tabs, this), 0, Qt::AlignVCenter);
     compareTab->setChecked(true);
     layout->addLayout(header);
 
@@ -619,8 +616,6 @@ void MatchPage::setReady(bool ready)
 void MatchPage::setCompact(bool compact)
 {
     m_subtitle->setVisible(!compact);
-    for (FancyButton *tab : std::as_const(m_tabs))
-        tab->setFixedWidth(compact ? 170 : 200);
 }
 
 void MatchPage::refresh()

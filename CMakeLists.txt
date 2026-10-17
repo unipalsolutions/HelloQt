@@ -150,7 +150,7 @@ endif()
 target_compile_definitions(Malamih PRIVATE MALAMIH_VERSION="${MALAMIH_VERSION}")
 qt_add_resources(Malamih app_resources
     PREFIX "/"
-    FILES resources/app-256.png resources/app-512.png
+    FILES resources/app-256.png resources/app-512.png resources/chevron-down.png resources/check.png
 )
 
 target_link_libraries(Malamih PRIVATE

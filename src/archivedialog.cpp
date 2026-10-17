@@ -248,7 +248,7 @@ ArchiveScanDialog::ArchiveScanDialog(const FaceEngine *engine, FaceDatabase *dat
     m_csv = new FancyButton(Icons::Name::Export, QStringLiteral("جدول Excel (CSV)…"), FancyButton::Kind::Secondary, this);
     connect(m_html, &QAbstractButton::clicked, this, [this] { saveReport(false); });
     connect(m_csv, &QAbstractButton::clicked, this, [this] { saveReport(true); });
-    auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
+    auto *close = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     connect(close, &QAbstractButton::clicked, this, &ArchiveScanDialog::reject);
     buttons->addWidget(m_html);
     buttons->addWidget(m_csv);

@@ -135,7 +135,7 @@ QPixmap shotIcon(const QImage &crop, int size, bool checked)
     const QImage scaled = crop.scaled(size, size, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
     p.drawImage(QPointF((size - scaled.width()) / 2.0, (size - scaled.height()) / 2.0), scaled);
     if (!checked)
-        p.fillRect(QRectF(0, 0, size, size), QColor(7, 17, 31, 140));
+        p.fillRect(QRectF(0, 0, size, size), Theme::withAlpha(Theme::Viewport, 140));
     p.restore();
     const double w = size * 0.035;
     if (checked) {
@@ -147,10 +147,10 @@ QPixmap shotIcon(const QImage &crop, int size, bool checked)
     const QPointF c(size * 0.84, size * 0.16);
     const double r = size * 0.1;
     p.setPen(checked ? Qt::NoPen : QPen(QColor(255, 255, 255, 200), w * 0.7));
-    p.setBrush(checked ? Theme::Success : QColor(7, 17, 31, 150));
+    p.setBrush(checked ? Theme::Success : Theme::withAlpha(Theme::Viewport, 150));
     p.drawEllipse(c, r, r);
     if (checked)
-        Icons::paint(p, Icons::Name::Check, QRectF(c.x() - r * 0.7, c.y() - r * 0.7, r * 1.4, r * 1.4), QColor(7, 17, 31));
+        Icons::paint(p, Icons::Name::Check, QRectF(c.x() - r * 0.7, c.y() - r * 0.7, r * 1.4, r * 1.4), Theme::Viewport);
     return pixmap;
 }
 
@@ -216,7 +216,7 @@ HarvestDialog::HarvestDialog(const FaceEngine *engine, const QString &videoPath,
     };
     connect(m_selectAll, &QAbstractButton::clicked, this, [setAll] { setAll(true); });
     connect(m_selectNone, &QAbstractButton::clicked, this, [setAll] { setAll(false); });
-    auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
+    auto *close = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     connect(close, &QAbstractButton::clicked, this, &HarvestDialog::reject);
     m_add = new FancyButton(Icons::Name::PhotoAdd, QStringLiteral("إضافة المحدد"), FancyButton::Kind::Primary, this);
     connect(m_add, &QAbstractButton::clicked, this, &QDialog::accept);

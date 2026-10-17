@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QFont>
 #include <QPalette>
+#include <QProxyStyle>
 #include <QStyleFactory>
 
 #include <algorithm>
@@ -33,6 +34,7 @@ QFrame#sidebar { background: @sidebar; border: none; border-left: 1px solid @bor
 QFrame#card { background: @surface; border: 1px solid @border; border-radius: 16px; }
 QFrame#viewCard { background: @viewport; border: 1px solid @border; border-radius: 16px; }
 QFrame#statCard { background: @surfaceHigh; border: 1px solid @border; border-radius: 14px; }
+QFrame#tabStrip { background: @surface; border: 1px solid @border; border-radius: 21px; }
 QFrame#separator { background: @border; max-width: 1px; min-width: 1px; }
 QLabel { background: transparent; }
 QLabel#title { font-size: 20pt; font-weight: 700; }
@@ -86,7 +88,33 @@ QPushButton {
 QPushButton:hover { border-color: @borderHover; background: @surfaceHover; }
 QPushButton:default { background: @accent; border-color: @accent; color: white; }
 QPushButton:default:hover { background: @accentHover; }
-QCheckBox { spacing: 8px; }
+QCheckBox, QRadioButton { spacing: 8px; }
+QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1px solid @borderHover; background: @surfaceHigh; }
+QCheckBox::indicator:hover { border-color: @accent2; }
+QCheckBox::indicator:checked { background: @accent; border-color: @accent; image: url(:/resources/check.png); }
+QCheckBox::indicator:disabled { background: @surface; border-color: @border; }
+QRadioButton::indicator { width: 16px; height: 16px; border-radius: 9px; border: 1px solid @borderHover; background: @surfaceHigh; }
+QRadioButton::indicator:checked { border: 5px solid @accent; background: white; }
+/* السهم في الطرف الأيسر كقوائم SelectBox؛ القائمة المنسدلة تنعكس مع الاتجاه العربي وحقل التاريخ لا ينعكس */
+QComboBox::drop-down, QDateTimeEdit::drop-down { subcontrol-origin: padding; width: 28px; border: none; background: transparent; }
+QComboBox::drop-down { subcontrol-position: center right; }
+QDateTimeEdit::drop-down { subcontrol-position: center left; }
+QComboBox::down-arrow, QDateTimeEdit::down-arrow { image: url(:/resources/chevron-down.png); width: 14px; height: 14px; }
+QHeaderView { background: transparent; border: none; }
+QHeaderView::section {
+    background: @surfaceHigh; color: @muted; border: none; border-bottom: 1px solid @border;
+    padding: 8px 10px; font-weight: 600;
+}
+QTableView, QTreeView, QTableWidget, QTreeWidget {
+    background: @surface; alternate-background-color: @surfaceAlt; border: 1px solid @border; border-radius: 12px;
+    gridline-color: @border; selection-background-color: @accentSoft; selection-color: @text; outline: 0;
+}
+QTableCornerButton::section { background: @surfaceHigh; border: none; }
+QMenu { background: @surface; border: 1px solid @border; padding: 6px; }
+QMenu::item { padding: 7px 26px 7px 18px; border-radius: 8px; }
+QMenu::item:selected { background: @accentSoft; }
+QMenu::item:disabled { color: @muted; }
+QMenu::separator { height: 1px; background: @border; margin: 5px 8px; }
 QToolButton#tab {
     background: transparent; color: @muted; border: 1px solid @border; border-radius: 13px; padding: 3px 10px;
 }
@@ -106,6 +134,7 @@ QToolButton#chip:checked { border-color: @highlight; background: @highlightSoft;
         {QStringLiteral("@borderHover"), mix(Border, Muted, 0.45)},
         {QStringLiteral("@surfaceHover"), mix(SurfaceHigh, Border, 0.6)},
         {QStringLiteral("@viewport"), Viewport},
+        {QStringLiteral("@surfaceAlt"), mix(Surface, SurfaceHigh, 0.45)},
         {QStringLiteral("@surfaceHigh"), SurfaceHigh}, {QStringLiteral("@surface"), Surface},
         {QStringLiteral("@sidebar"), Sidebar},         {QStringLiteral("@border"), Border},
         {QStringLiteral("@accent2"), Accent2},         {QStringLiteral("@accent"), Accent},
@@ -118,9 +147,23 @@ QToolButton#chip:checked { border-color: @highlight; background: @highlightSoft;
     return css;
 }
 
+// Fusion دون أيقونات Qt القديمة على أزرار «حفظ» و«إلغاء» في النوافذ الحوارية
+class SoftStyle : public QProxyStyle
+{
+public:
+    SoftStyle() : QProxyStyle(QStyleFactory::create(QStringLiteral("Fusion"))) {}
+
+    int styleHint(StyleHint hint, const QStyleOption *option, const QWidget *widget, QStyleHintReturn *data) const override
+    {
+        if (hint == SH_DialogButtonBox_ButtonsHaveIcons)
+            return 0;
+        return QProxyStyle::styleHint(hint, option, widget, data);
+    }
+};
+
 void apply(QApplication &app)
 {
-    QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+    QApplication::setStyle(new SoftStyle);
 
     QPalette palette;
     palette.setColor(QPalette::Window, Background);

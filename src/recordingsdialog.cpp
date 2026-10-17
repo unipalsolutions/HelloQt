@@ -310,7 +310,7 @@ RecordingsDialog::RecordingsDialog(const FaceDatabase *database, const QSet<QStr
     m_clip = new FancyButton(Icons::Name::Export, QStringLiteral("تصدير المقطع…"), FancyButton::Kind::Secondary, this);
     m_clip->setToolTip(QStringLiteral("حفظ 30 ثانية حول لحظة الظهور في ملف واحد جاهز للتسليم"));
     auto *folder = new FancyButton(Icons::Name::Folder, QStringLiteral("مجلد التسجيلات"), FancyButton::Kind::Secondary, this);
-    auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
+    auto *close = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     buttons->addWidget(m_open);
     buttons->addWidget(m_snapshot);
     buttons->addWidget(m_clip);

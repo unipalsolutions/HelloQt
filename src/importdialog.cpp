@@ -261,7 +261,7 @@ ImportDialog::ImportDialog(const FaceEngine *engine, FaceDatabase *database, flo
         m_pause->setText(m_state->paused ? QStringLiteral("استئناف") : QStringLiteral("إيقاف مؤقت"));
         updateSummary();
     });
-    m_close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
+    m_close = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     connect(m_close, &QAbstractButton::clicked, this, &ImportDialog::reject);
     buttons->addWidget(m_start);
     buttons->addWidget(m_pause);

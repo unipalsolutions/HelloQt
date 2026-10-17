@@ -177,7 +177,7 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
         QStringList cells;
         for (const QString &title : titles) {
             const bool center = title.startsWith(QLatin1Char('^'));
-            cells << QStringLiteral("<th bgcolor=\"#1e3a8a\" align=\"%1\">%2</th>")
+            cells << QStringLiteral("<th bgcolor=\"#2b231d\" align=\"%1\">%2</th>")
                          .arg(center ? QStringLiteral("center") : QStringLiteral("right"), center ? title.mid(1) : title);
         }
         return QStringLiteral("<table class=\"grid\" width=\"100%\" cellspacing=\"0\" cellpadding=\"6\"><thead>") + tr(cells)
@@ -186,8 +186,8 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
     // صفوف متناوبة اللون، والمراقَب بلون تحذير
     const auto rowAttributes = [](int index, bool alert) {
         if (alert)
-            return QStringLiteral(" class=\"watched\" bgcolor=\"#fff1f2\"");
-        return index % 2 ? QStringLiteral(" bgcolor=\"#f8fafc\"") : QString();
+            return QStringLiteral(" class=\"watched\" bgcolor=\"#fdf0ea\"");
+        return index % 2 ? QStringLiteral(" bgcolor=\"#faf7f3\"") : QString();
     };
     const auto section = [&tr](const QString &title, const QString &note = QString()) {
         return QStringLiteral("<table class=\"section\" width=\"100%\" cellspacing=\"0\" cellpadding=\"0\">")
@@ -200,29 +200,29 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
 
     QString html;
     html += QStringLiteral("<html dir=\"rtl\"><head><meta charset=\"utf-8\"><title>تقرير يوم %1</title><style>"
-                           "body { font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 10pt; color: #0f172a; %2 }"
+                           "body { font-family: 'Segoe UI', Tahoma, sans-serif; font-size: 10pt; color: #241c16; %2 }"
                            "table.grid { border-collapse: collapse; }"
                            "th { color: #ffffff; font-size: 9pt; font-weight: bold; padding: 7px 8px; }"
-                           "table.grid td { border-bottom: 1px solid #e2e8f0; padding: 6px 8px; vertical-align: middle; }"
-                           "tr.watched td { color: #be123c; font-weight: bold; }"
+                           "table.grid td { border-bottom: 1px solid #ebe3d9; padding: 6px 8px; vertical-align: middle; }"
+                           "tr.watched td { color: #b8431f; font-weight: bold; }"
                            "table.section { margin-top: 20px; margin-bottom: 8px; }"
-                           "table.section td { border-bottom: 2px solid #2563eb; padding-bottom: 4px; }"
-                           "td.title { color: #1e3a8a; font-size: 14pt; font-weight: bold; }"
-                           "td.note { color: #64748b; font-size: 9pt; }"
-                           ".empty { color: #94a3b8; margin: 6px 0; }"
+                           "table.section td { border-bottom: 2px solid #3e8a63; padding-bottom: 4px; }"
+                           "td.title { color: #2b231d; font-size: 14pt; font-weight: bold; }"
+                           "td.note { color: #7a6b5d; font-size: 9pt; }"
+                           ".empty { color: #a99a8a; margin: 6px 0; }"
                            ".num { font-size: 22pt; font-weight: bold; }"
-                           ".label { color: #475569; font-size: 9pt; }"
+                           ".label { color: #5e5044; font-size: 9pt; }"
                            "</style></head><body dir=\"rtl\">")
                 .arg(day.toString(QStringLiteral("yyyy/MM/dd")),
                      mirror ? QStringLiteral("margin: 0;") : QStringLiteral("max-width: 980px; margin: 24px auto; padding: 0 16px;"));
 
     // الترويسة
-    html += QStringLiteral("<table width=\"100%\" cellspacing=\"0\" cellpadding=\"16\" bgcolor=\"#1e3a8a\">");
+    html += QStringLiteral("<table width=\"100%\" cellspacing=\"0\" cellpadding=\"16\" bgcolor=\"#2b231d\">");
     html += tr({QStringLiteral("<td width=\"65%\" align=\"right\"><span style=\"color:#ffffff; font-size:20pt; font-weight:bold\">تقرير الكاميرات اليومي</span><br>"
-                               "<span style=\"color:#c7d2fe; font-size:11pt\">%1 ⁦%2⁩</span></td>")
+                               "<span style=\"color:#e3d3c0; font-size:11pt\">%1 ⁦%2⁩</span></td>")
                     .arg(QLocale(QLocale::Arabic).dayName(day.dayOfWeek()), day.toString(QStringLiteral("yyyy/MM/dd"))),
                 QStringLiteral("<td width=\"35%\" align=\"left\" valign=\"bottom\"><span style=\"color:#ffffff; font-size:13pt; font-weight:bold\">ملامح</span><br>"
-                               "<span style=\"color:#c7d2fe; font-size:8pt\">أُنشئ ⁦%1⁩ · الإصدار ⁦%2⁩</span></td>")
+                               "<span style=\"color:#e3d3c0; font-size:8pt\">أُنشئ ⁦%1⁩ · الإصدار ⁦%2⁩</span></td>")
                     .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy/MM/dd HH:mm")), QApplication::applicationVersion())});
     html += QStringLiteral("</table>");
 
@@ -232,15 +232,15 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
                               "<span class=\"num\" style=\"color:%3\">%1</span><br><span class=\"label\">%2</span></td>")
             .arg(value, label, color, background);
     };
-    const QString blue = QStringLiteral("#2563eb");
-    const QString pale = QStringLiteral("#eff6ff");
+    const QString blue = QStringLiteral("#3e8a63");
+    const QString pale = QStringLiteral("#eef6f1");
     html += QStringLiteral("<table width=\"100%\" cellspacing=\"6\" cellpadding=\"10\" style=\"margin-top: 10px\">");
     html += tr({stat(QStringLiteral("أشخاص معروفون"), QString::number(persons.size()), blue, pale),
                 stat(QStringLiteral("مرات ظهورهم"), QString::number(known), blue, pale),
-                alerts > 0 ? stat(QStringLiteral("تنبيهات مراقبة"), QString::number(alerts), QStringLiteral("#e11d48"), QStringLiteral("#fff1f2"))
-                           : stat(QStringLiteral("تنبيهات مراقبة"), QStringLiteral("0"), QStringLiteral("#16a34a"), QStringLiteral("#f0fdf4")),
-                stat(QStringLiteral("زوار مجهولون"), QString::number(visitors.size()), QStringLiteral("#d97706"), QStringLiteral("#fffbeb")),
-                stat(QStringLiteral("ساعات التسجيل"), hours(recordedMs), QStringLiteral("#7c3aed"), QStringLiteral("#f5f3ff"))});
+                alerts > 0 ? stat(QStringLiteral("تنبيهات مراقبة"), QString::number(alerts), QStringLiteral("#d9542b"), QStringLiteral("#fdf0ea"))
+                           : stat(QStringLiteral("تنبيهات مراقبة"), QStringLiteral("0"), QStringLiteral("#3e8a63"), QStringLiteral("#eef6f1")),
+                stat(QStringLiteral("زوار مجهولون"), QString::number(visitors.size()), QStringLiteral("#d98a10"), QStringLiteral("#fdf5e6")),
+                stat(QStringLiteral("ساعات التسجيل"), hours(recordedMs), QStringLiteral("#9a6b3f"), QStringLiteral("#f6efe7"))});
     html += QStringLiteral("</table>");
 
     // الكاميرات
@@ -286,7 +286,7 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
         int index = 0;
         for (const PersonRow &row : std::as_const(rows)) {
             const QString name = row.watched
-                ? QStringLiteral("%1<br><span style=\"font-size:8pt; font-weight:normal; color:#e11d48\">⚠ مراقَب</span>").arg(escape(row.name))
+                ? QStringLiteral("%1<br><span style=\"font-size:8pt; font-weight:normal; color:#d9542b\">⚠ مراقَب</span>").arg(escape(row.name))
                 : escape(row.name);
             html += tr({QStringLiteral("<td width=\"52\">%1</td>").arg(images.tag(row.face)), td(name), td(time(row.first), true),
                         td(time(row.last), true), td(QString::number(row.count), true),
@@ -341,7 +341,7 @@ QString build(const FaceDatabase &database, const QSet<QString> &watched, const 
         }
         html += QStringLiteral("</table>");
     }
-    html += QStringLiteral("<p style=\"color:#94a3b8; font-size:8pt; margin-top:18px\">أُنشئ هذا التقرير محلياً ببرنامج ملامح دون إرسال أي بيانات عبر الإنترنت.</p>");
+    html += QStringLiteral("<p style=\"color:#a99a8a; font-size:8pt; margin-top:18px\">أُنشئ هذا التقرير محلياً ببرنامج ملامح دون إرسال أي بيانات عبر الإنترنت.</p>");
     html += QStringLiteral("</body></html>");
     return html;
 }

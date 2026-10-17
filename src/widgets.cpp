@@ -7,6 +7,8 @@
 #include <QEnterEvent>
 #include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
+#include <QFrame>
+#include <QHBoxLayout>
 #include <QPainter>
 #include <QPainterPath>
 #include <QParallelAnimationGroup>
@@ -28,7 +30,9 @@ FancyButton::FancyButton(Icons::Name icon, const QString &text, Kind kind, QWidg
 {
     setText(text);
     setCursor(Qt::PointingHandCursor);
-    setCheckable(kind == Kind::Nav);
+    setCheckable(kind == Kind::Nav || kind == Kind::Tab);
+    if (kind == Kind::Tab)
+        setAutoExclusive(true);
     setSizePolicy(kind == Kind::Nav ? QSizePolicy::Expanding : QSizePolicy::Fixed, QSizePolicy::Fixed);
 
     connect(this, &QAbstractButton::pressed, this, [this] { animate(m_pressAnimation, m_press, 1.0); });
@@ -87,6 +91,8 @@ QSize FancyButton::sizeHint() const
     if (m_compact)
         return m_kind == Kind::Nav ? QSize(46, 46) : QSize(42, 40);
     const int textWidth = fontMetrics().horizontalAdvance(text());
+    if (m_kind == Kind::Tab)
+        return QSize(textWidth + 62, 34);
     if (m_kind == Kind::Nav)
         return QSize(textWidth + 70, 46);
     return QSize(textWidth + (text().isEmpty() ? 22 : 56), 40);
@@ -177,11 +183,27 @@ void FancyButton::paintEvent(QPaintEvent *)
         iconColor = mix(Muted, Accent2, m_check > 0 ? m_check : m_hover * 0.5);
         break;
     }
+    case Kind::Tab: {
+        // الكبسولة المختارة مرفوعة قليلاً بلون أفتح، وغير المختارة شفافة تضيء عند المرور
+        QPainterPath pill;
+        pill.addRoundedRect(bounds, bounds.height() / 2, bounds.height() / 2);
+        if (m_check > 0.01) {
+            p.fillPath(pill, withAlpha(mix(SurfaceHigh, Border, 0.35), int(255 * m_check)));
+            p.setPen(QPen(withAlpha(mix(Border, Muted, 0.35), int(255 * m_check)), 1.0));
+            p.drawPath(pill);
+        } else {
+            p.fillPath(pill, withAlpha(SurfaceHigh, int(200 * m_hover)));
+        }
+        const double active = std::max(m_hover * 0.6, m_check);
+        foreground = mix(Muted, Text, active);
+        iconColor = mix(Muted, Accent2, std::max(m_check, m_hover * 0.5));
+        break;
+    }
     }
 
     // الأيقونة بجانب النص، تبدأ من اليمين في الواجهة العربية
     QFont font = this->font();
-    font.setWeight(m_kind == Kind::Nav ? QFont::DemiBold : QFont::Medium);
+    font.setWeight(m_kind == Kind::Nav || (m_kind == Kind::Tab && m_check > 0.5) ? QFont::DemiBold : QFont::Medium);
     p.setFont(font);
     const QFontMetricsF metrics(font);
     const QString label = m_compact ? QString() : text();
@@ -198,6 +220,21 @@ void FancyButton::paintEvent(QPaintEvent *)
     const double textX = rtl ? iconX - spacing - textWidth : iconX + iconSize + spacing;
     p.setPen(foreground);
     p.drawText(QRectF(textX, bounds.top(), textWidth, bounds.height()), Qt::AlignCenter, label);
+}
+
+QFrame *makeTabStrip(const QList<FancyButton *> &tabs, QWidget *parent)
+{
+    auto *strip = new QFrame(parent);
+    strip->setObjectName(QStringLiteral("tabStrip"));
+    auto *layout = new QHBoxLayout(strip);
+    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setSpacing(2);
+    for (FancyButton *tab : tabs) {
+        tab->setParent(strip);
+        layout->addWidget(tab);
+    }
+    strip->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    return strip;
 }
 
 // ───────────── FlowLayout ─────────────

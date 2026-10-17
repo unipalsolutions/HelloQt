@@ -198,7 +198,7 @@ void MainWindow::showDailyReport()
     auto *buttons = new QHBoxLayout;
     auto *pdf = new FancyButton(Icons::Name::Export, QStringLiteral("حفظ PDF…"), FancyButton::Kind::Primary, &dialog);
     auto *html = new FancyButton(Icons::Name::Export, QStringLiteral("حفظ HTML…"), FancyButton::Kind::Secondary, &dialog);
-    auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, &dialog);
+    auto *close = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, &dialog);
     buttons->addWidget(pdf);
     buttons->addWidget(html);
     buttons->addStretch(1);

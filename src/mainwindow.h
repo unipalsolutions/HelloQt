@@ -518,6 +518,10 @@ private:
     FancyButton *m_harvestButton = nullptr;
     FancyButton *m_photosTab = nullptr;
     FancyButton *m_sightingsTab = nullptr;
+    QFrame *m_profileTabs = nullptr;
+    QWidget *m_personEmpty = nullptr;
+    QWidget *m_personProfile = nullptr;
+    QLabel *m_personEmptyText = nullptr;
     QStackedWidget *m_profileStack = nullptr;
     QListWidget *m_sightingList = nullptr;
     StrengthMeter *m_strengthMeter = nullptr;

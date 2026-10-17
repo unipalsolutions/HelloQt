@@ -989,7 +989,7 @@ QWidget *MainWindow::createRecognitionPage()
     m_alertText->setWordWrap(true);
     auto *alertShow = new FancyButton(Icons::Name::Search, QStringLiteral("عرض"), FancyButton::Kind::Primary, m_alertBar);
     alertShow->setToolTip(QStringLiteral("تحديد الوجه وعرضه"));
-    auto *alertClose = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, m_alertBar);
+    auto *alertClose = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, m_alertBar);
     connect(alertShow, &QAbstractButton::clicked, this, [this] {
         const int row = m_faceRows.value(m_alertFaceId, -1);
         if (row < 0 || row >= m_faces.size())

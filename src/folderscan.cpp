@@ -193,7 +193,7 @@ FolderScanDialog::FolderScanDialog(const FaceEngine *engine, FaceDatabase *datab
     m_record = new FancyButton(Icons::Name::History, QStringLiteral("تسجيل في سجل الظهور"), FancyButton::Kind::Secondary, this);
     m_record->setToolTip(QStringLiteral("يضيف الصور التي تأكد فيها التعرف إلى سجل ظهور كل شخص"));
     connect(m_record, &QAbstractButton::clicked, this, &FolderScanDialog::recordSightings);
-    auto *close = new FancyButton(Icons::Name::Stop, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
+    auto *close = new FancyButton(Icons::Name::Reject, QStringLiteral("إغلاق"), FancyButton::Kind::Secondary, this);
     connect(close, &QAbstractButton::clicked, this, &FolderScanDialog::reject);
     buttons->addWidget(m_copy);
     buttons->addWidget(m_record);

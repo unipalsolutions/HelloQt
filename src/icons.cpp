@@ -422,6 +422,43 @@ QPainterPath outline(Name name)
         for (double x : {6.0, 12.0, 18.0})
             p.addEllipse(QPointF(x, 12), 1.6, 1.6);
         break;
+    case Name::Rotate:
+        p.moveTo(19.5, 12);
+        p.arcTo(QRectF(4.5, 4.5, 15, 15), 0, 290);
+        line(19.5, 12, 21.5, 9.5);
+        line(19.5, 12, 17, 10);
+        break;
+    case Name::Flip:
+        line(12, 3, 12, 21);
+        p.moveTo(9, 7);
+        p.lineTo(3.5, 17);
+        p.lineTo(9, 17);
+        p.closeSubpath();
+        p.moveTo(15, 7);
+        p.lineTo(20.5, 17);
+        p.lineTo(15, 17);
+        p.closeSubpath();
+        break;
+    case Name::Crop:
+        line(7, 2.5, 7, 17);
+        line(7, 17, 21.5, 17);
+        line(2.5, 7, 17, 7);
+        line(17, 7, 17, 21.5);
+        break;
+    case Name::Undo:
+        p.moveTo(5, 9);
+        p.lineTo(15, 9);
+        p.arcTo(QRectF(10, 9, 10, 10), 90, -180);
+        p.lineTo(8, 19);
+        line(5, 9, 8.5, 5.5);
+        line(5, 9, 8.5, 12.5);
+        break;
+    case Name::Level:
+        p.addEllipse(QPointF(12, 12), 9, 9);
+        line(3, 12, 8.5, 12);
+        line(15.5, 12, 21, 12);
+        p.addEllipse(QPointF(12, 12), 1.8, 1.8);
+        break;
     }
     return p;
 }

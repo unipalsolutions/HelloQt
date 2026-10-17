@@ -121,7 +121,7 @@ void FaceDetailsPanel::showDetails(const Details &d)
     titles->addWidget(status);
     if (d.watched) {
         auto *watched = new QLabel(QStringLiteral("⚠ في قائمة المراقبة"), m_content);
-        watched->setStyleSheet(QStringLiteral("color: #f87171; font-weight: 600;"));
+        watched->setStyleSheet(QStringLiteral("color: #e8774f; font-weight: 600;"));
         titles->addWidget(watched);
     }
     auto *scores = new QLabel(QStringLiteral("التشابه %1% · جودة الوجه %2%").arg(d.score).arg(d.quality), m_content);
