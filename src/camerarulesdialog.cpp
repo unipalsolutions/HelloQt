@@ -76,7 +76,7 @@ void ZoneCanvas::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.fillRect(rect(), QColor(0x05, 0x0d, 0x19));
+    painter.fillRect(rect(), QColor(0x0e, 0x0b, 0x09));
     const QRectF area = imageRect();
     if (!m_image.isNull())
         painter.drawImage(area, m_image);
@@ -92,7 +92,7 @@ void ZoneCanvas::paintEvent(QPaintEvent *)
                       zone.height() * area.height());
     };
     // وضع «داخل المناطق فقط»: ما خارجها يُعتّم ليظهر ما سيُتجاهل
-    const QColor zoneColor = m_exclude ? QColor(0xff, 0x5c, 0x5c) : QColor(0x22, 0xd3, 0xee);
+    const QColor zoneColor = m_exclude ? QColor(0xff, 0x5c, 0x5c) : QColor(0x4f, 0xbf, 0x87);
     if (!m_exclude && !m_zones.isEmpty()) {
         QPainterPath outside;
         outside.addRect(area);

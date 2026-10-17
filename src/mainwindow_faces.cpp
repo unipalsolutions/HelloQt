@@ -66,7 +66,7 @@ void MainWindow::setupFacePanel(QWidget *side, QVBoxLayout *sideLayout)
     m_faceFilter->setPlaceholderText(QStringLiteral("بحث بالاسم…"));
     m_faceFilter->setClearButtonEnabled(true);
     m_faceFilter->addAction(Icons::icon(Icons::Name::Search, Theme::Muted, 18), QLineEdit::LeadingPosition);
-    m_faceSort = new QComboBox(side);
+    m_faceSort = new SelectBox(side);
     m_faceSort->addItems({QStringLiteral("حسب الظهور"), QStringLiteral("الأكثر ظهوراً"), QStringLiteral("الأوضح"),
                           QStringLiteral("المعروفون أولاً")});
     m_faceSort->setToolTip(QStringLiteral("ترتيب القائمة"));
@@ -78,38 +78,36 @@ void MainWindow::setupFacePanel(QWidget *side, QVBoxLayout *sideLayout)
     searchRow->addWidget(m_faceSort, 2);
     sideLayout->addLayout(searchRow);
 
-    // تبويبات الحالة بعدّاداتها، تلتف إلى سطر ثانٍ في اللوحة الضيقة
-    auto *tabsHost = new QWidget(side);
-    auto *tabs = new FlowLayout(tabsHost, 4, 4);
-    tabs->setContentsMargins(0, 0, 0, 0);
-    m_faceTabs = new QButtonGroup(this);
-    m_faceTabs->setExclusive(true);
+    // تبويبات الحالة بعدّاداتها: أزرار متلاصقة تنزلق بينها الكبسولة
     const QStringList tips{QStringLiteral("كل الوجوه"), QStringLiteral("طابقوا شخصاً في القاعدة بثقة"),
                            QStringLiteral("يشبهون شخصاً في القاعدة دون تأكيد: راجعهم وأكّد أو ارفض"),
                            QStringLiteral("ليسوا في القاعدة"), QStringLiteral("من قائمة المراقبة")};
-    for (int i = 0; i < tips.size(); ++i) {
-        auto *tab = new QToolButton(tabsHost);
-        tab->setObjectName(QStringLiteral("tab"));
-        tab->setCheckable(true);
-        tab->setCursor(Qt::PointingHandCursor);
-        tab->setToolTip(tips.at(i));
-        tab->setFocusPolicy(Qt::NoFocus);
-        m_faceTabs->addButton(tab, i);
-        tabs->addWidget(tab);
-        m_faceTabButtons << tab;
-    }
-    // حجم البطاقات في آخر سطر التبويبات
+    m_faceTabs = new SegmentedControl({QStringLiteral("الكل"), QStringLiteral("معروف"), QStringLiteral("محتمل"),
+                                       QStringLiteral("مجهول"), QStringLiteral("مراقَب")},
+                                      side);
+    m_faceTabs->setExpanding(true);
+    // لا تفرض التبويبات عرضاً أكبر من اللوحة؛ النص الطويل يُختصر
+    m_faceTabs->setMinimumWidth(180);
+    for (int i = 0; i < tips.size(); ++i)
+        m_faceTabs->setItemToolTip(i, tips.at(i));
+    sideLayout->addWidget(m_faceTabs);
+    auto *tabsHost = new QWidget(side);
+    auto *tabs = new QHBoxLayout(tabsHost);
+    tabs->setContentsMargins(0, 0, 0, 0);
+    tabs->setSpacing(6);
+    tabs->addWidget(label(QStringLiteral("حجم البطاقات"), QStringLiteral("muted"), tabsHost));
+    // حجم البطاقات تحت التبويبات
     m_cardSizeSlider = new QSlider(Qt::Horizontal, tabsHost);
     m_cardSizeSlider->setRange(80, 160);
     m_cardSizeSlider->setSingleStep(10);
     m_cardSizeSlider->setPageStep(20);
-    m_cardSizeSlider->setFixedWidth(64);
+    m_cardSizeSlider->setMinimumWidth(64);
     m_cardSizeSlider->setToolTip(QStringLiteral("حجم البطاقات"));
     m_cardSizeSlider->setFocusPolicy(Qt::NoFocus);
     tabs->addWidget(m_cardSizeSlider);
     const int savedTab = std::clamp(settings.value(QStringLiteral("faces/tab"), 0).toInt(), 0, int(tips.size()) - 1);
-    m_faceTabButtons.at(savedTab)->setChecked(true);
-    connect(m_faceTabs, &QButtonGroup::idClicked, this, [this](int id) {
+    m_faceTabs->setCurrentIndex(savedTab);
+    connect(m_faceTabs, &SegmentedControl::currentChanged, this, [this](int id) {
         QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("faces/tab"), id);
         applyFaceFilter();
     });
@@ -156,8 +154,8 @@ void MainWindow::setupFacePanel(QWidget *side, QVBoxLayout *sideLayout)
     // العمليات الجماعية: تظهر حين يُحدد أكثر من وجه
     m_bulkBar = new QFrame(side);
     m_bulkBar->setObjectName(QStringLiteral("bulkBar"));
-    m_bulkBar->setStyleSheet(QStringLiteral("QFrame#bulkBar { background: rgba(47, 124, 246, 36); border: 1px solid %1; border-radius: 10px; }")
-                                 .arg(Theme::Accent.name()));
+    m_bulkBar->setStyleSheet(QStringLiteral("QFrame#bulkBar { background: %2; border: 1px solid %1; border-radius: 10px; }")
+                                 .arg(Theme::Accent.name(), Theme::mix(Theme::Surface, Theme::Accent, 0.15).name()));
     auto *bulk = new QHBoxLayout(m_bulkBar);
     bulk->setContentsMargins(8, 4, 8, 4);
     bulk->setSpacing(4);
@@ -282,7 +280,7 @@ int MainWindow::faceTab(const FaceItem &face) const
 
 bool MainWindow::faceMatchesFilter(const FaceItem &face) const
 {
-    const int tab = m_faceTabs ? m_faceTabs->checkedId() : 0;
+    const int tab = m_faceTabs ? m_faceTabs->currentIndex() : 0;
     if (tab > 0) {
         const int kind = faceTab(face);
         // المراقَبون معروفون أيضاً، فيظهرون في التبويبين
@@ -305,14 +303,14 @@ void MainWindow::applyFaceFilter()
     if (m_faceList->currentRow() >= 0 && m_faceList->isRowHidden(m_faceList->currentRow()))
         m_faceList->setCurrentRow(-1);
     m_laneTimer->start();
-    const bool filtered = !m_faceFilter->text().trimmed().isEmpty() || m_faceTabs->checkedId() > 0;
+    const bool filtered = !m_faceFilter->text().trimmed().isEmpty() || m_faceTabs->currentIndex() > 0;
     m_faceCount->setText(filtered ? QStringLiteral("%1 / %2").arg(shown).arg(m_faces.size()) : QString::number(m_faces.size()));
     updateFaceTabs();
 }
 
 void MainWindow::updateFaceCount()
 {
-    if (m_faceFilter->text().trimmed().isEmpty() && m_faceTabs->checkedId() <= 0)
+    if (m_faceFilter->text().trimmed().isEmpty() && m_faceTabs->currentIndex() <= 0)
         m_faceCount->setText(QString::number(m_faces.size()));
     else
         applyFaceFilter();
@@ -329,13 +327,10 @@ void MainWindow::updateFaceTabs()
         if (kind == 4)
             ++counts[1];
     }
-    static const QStringList names{QStringLiteral("الكل"), QStringLiteral("معروفون"), QStringLiteral("محتملون"),
-                                   QStringLiteral("مجهولون"), QStringLiteral("مراقَبون")};
-    for (int i = 0; i < m_faceTabButtons.size(); ++i)
-        m_faceTabButtons.at(i)->setText(QStringLiteral("%1 %2").arg(names.at(i), QLocale().toString(counts[i])));
-    // تبويب المراقَبين يُبرز إن كان فيه أحد
-    m_faceTabButtons.at(4)->setStyleSheet(counts[4] > 0 ? QStringLiteral("QToolButton#tab { color: #f87171; border-color: #f87171; }")
-                                                        : QString());
+    static const QStringList names{QStringLiteral("الكل"), QStringLiteral("معروف"), QStringLiteral("محتمل"),
+                                   QStringLiteral("مجهول"), QStringLiteral("مراقَب")};
+    for (int i = 0; i < m_faceTabs->count(); ++i)
+        m_faceTabs->setItemText(i, counts[i] > 0 ? QStringLiteral("%1 %2").arg(names.at(i), QLocale().toString(counts[i])) : names.at(i));
 }
 
 void MainWindow::updateBulkBar()

@@ -34,7 +34,7 @@ QLabel *previewLabel(QWidget *parent)
     label->setAlignment(Qt::AlignCenter);
     label->setMinimumSize(200, 120);
     label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
-    label->setStyleSheet(QStringLiteral("background: #050d19; border-radius: 10px;"));
+    label->setStyleSheet(QStringLiteral("background: #0e0b09; border-radius: 10px;"));
     return label;
 }
 

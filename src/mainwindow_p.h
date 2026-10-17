@@ -18,6 +18,7 @@
 #include "cameras.h"
 #include "camerawatch.h"
 #include "carddelegates.h"
+#include "controls.h"
 #include "dailyreport.h"
 #include "enhancedialog.h"
 #include "archivedialog.h"

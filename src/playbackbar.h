@@ -8,10 +8,12 @@ class QLabel;
 class QLineEdit;
 class QSlider;
 class QTimeEdit;
+class SegmentedControl;
 class ToggleSwitch;
 
-// أدوات تشغيل الفيديو تحت العرض: التشغيل والقفز والإطار، الموضع والانتقال إلى وقت، السرعة والصوت،
-// الجزء المطلوب (من وإلى)، والتنقل بين الأحداث والعلامات والملفات. الشريط يرسل طلبات فقط، والنافذة تنفذها
+// أدوات تشغيل الفيديو تحت العرض في سطر واحد: التشغيل والقفز والإطار، الموضع (يُكتب فيه وقت للانتقال)، السرعة والصوت.
+// زر «المزيد» يُظهر سطراً ثانياً: الجزء المطلوب (من وإلى)، والتنقل بين الأحداث والعلامات، ومدة القفز.
+// الشريط يرسل طلبات فقط، والنافذة تنفذها
 class PlaybackBar : public QWidget
 {
     Q_OBJECT
@@ -46,6 +48,8 @@ public:
     void setFullscreen(bool fullscreen);
     void setPanelsHidden(bool hidden);
     void focusGoTo();
+    bool toolsVisible() const;
+    void setToolsVisible(bool visible);
 
     // «1:23» أو «01:02:03.5» أو «83» ثانية، بالأرقام العربية أو اللاتينية؛ سالب إن لم يُفهم
     static qint64 parseTime(const QString &text);
@@ -72,6 +76,9 @@ signals:
     void panelsRequested();
     void shortcutsRequested();
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     FancyButton *button(int icon, const QString &tip, int width = 34);
     void updateTime();
@@ -87,12 +94,14 @@ private:
     FancyButton *m_fullscreen = nullptr;
     FancyButton *m_panels = nullptr;
     FancyButton *m_analyzeRange = nullptr;
+    FancyButton *m_more = nullptr;
+    QWidget *m_tools = nullptr; // السطر الثاني المطوي
     QComboBox *m_jump = nullptr;
-    QComboBox *m_speed = nullptr;
+    SegmentedControl *m_speed = nullptr;
     QComboBox *m_event = nullptr;
     QSlider *m_volume = nullptr;
-    QLabel *m_time = nullptr;
-    QLineEdit *m_goTo = nullptr;
+    QLabel *m_length = nullptr; // «/ مدة الفيديو» بجانب الموضع
+    QLineEdit *m_goTo = nullptr; // الموضع الحالي، ويُكتب فيه وقت للانتقال إليه
     QTimeEdit *m_rangeStart = nullptr;
     QTimeEdit *m_rangeEnd = nullptr;
     ToggleSwitch *m_autoNext = nullptr;

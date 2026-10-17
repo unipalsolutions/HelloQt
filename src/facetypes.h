@@ -65,11 +65,11 @@ inline QColor matchColor(MatchStatus status)
 {
     switch (status) {
     case MatchStatus::Confirmed:
-        return QColor(0x22, 0xd3, 0xee);
+        return QColor(0x4f, 0xbf, 0x87);
     case MatchStatus::Possible:
-        return QColor(0x3b, 0x82, 0xf6);
+        return QColor(0xf5, 0xa5, 0x24);
     case MatchStatus::Unknown:
         break;
     }
-    return QColor(0x94, 0xa3, 0xb8);
+    return QColor(0xa8, 0xa2, 0x9e);
 }

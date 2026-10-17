@@ -31,7 +31,7 @@ QMainWindow, QDialog, QMessageBox, QProgressDialog, QInputDialog { background: @
 QWidget { color: @text; }
 QFrame#sidebar { background: @sidebar; border: none; border-left: 1px solid @border; }
 QFrame#card { background: @surface; border: 1px solid @border; border-radius: 16px; }
-QFrame#viewCard { background: #050d19; border: 1px solid @border; border-radius: 16px; }
+QFrame#viewCard { background: @viewport; border: 1px solid @border; border-radius: 16px; }
 QFrame#statCard { background: @surfaceHigh; border: 1px solid @border; border-radius: 14px; }
 QFrame#separator { background: @border; max-width: 1px; min-width: 1px; }
 QLabel { background: transparent; }
@@ -39,12 +39,21 @@ QLabel#title { font-size: 20pt; font-weight: 700; }
 QLabel#subtitle, QLabel#muted { color: @muted; }
 QLabel#sectionTitle { font-size: 12pt; font-weight: 600; }
 QLabel#statValue { font-size: 18pt; font-weight: 700; color: @text; }
-QLabel#badge { background: rgba(47, 124, 246, 46); color: @accent2; border-radius: 10px; padding: 2px 10px; font-weight: 600; }
-QLineEdit, QSpinBox, QPlainTextEdit, QComboBox {
-    background: @surfaceHigh; border: 1px solid @border; border-radius: 10px;
-    padding: 7px 10px; color: @text; selection-background-color: @accent;
+QLabel#badge { background: @accentSoft; color: @accent2; border-radius: 10px; padding: 2px 10px; font-weight: 600; }
+QLineEdit, QSpinBox, QPlainTextEdit, QComboBox, QAbstractSpinBox {
+    background: @surfaceHigh; border: 1px solid @border; border-radius: 12px;
+    padding: 7px 12px; color: @text; selection-background-color: @accent;
 }
-QLineEdit:focus, QSpinBox:focus, QPlainTextEdit:focus, QComboBox:focus { border: 1px solid @accent; }
+QLineEdit:hover, QAbstractSpinBox:hover, QPlainTextEdit:hover, QComboBox:hover { border-color: @borderHover; }
+QLineEdit:focus, QAbstractSpinBox:focus, QPlainTextEdit:focus, QComboBox:focus { border: 1px solid @accent2; }
+QAbstractSpinBox#timeRange { padding: 5px 10px; min-width: 74px; }
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { width: 0; border: none; }
+QLineEdit#timeField {
+    background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 4px 8px;
+    font-weight: 600; font-family: "DejaVu Sans Mono", "Consolas", monospace;
+}
+QLineEdit#timeField:hover { background: @surfaceHigh; border-color: @border; }
+QLineEdit#timeField:focus { background: @surfaceHigh; border-color: @accent2; }
 QSpinBox { padding: 5px 8px; min-width: 52px; }
 QSpinBox::up-button, QSpinBox::down-button { width: 16px; border: none; background: transparent; }
 QComboBox QAbstractItemView {
@@ -53,11 +62,11 @@ QComboBox QAbstractItemView {
 QListWidget, QListView { background: transparent; border: none; outline: 0; }
 QListWidget#photoGrid::item { border-radius: 12px; padding: 6px; color: @muted; }
 QListWidget#photoGrid::item:hover { background: @surfaceHigh; }
-QListWidget#photoGrid::item:selected { background: rgba(47, 124, 246, 70); color: @text; }
+QListWidget#photoGrid::item:selected { background: @accentSoft; color: @text; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
-QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: #1e3a66; border-radius: 3px; min-height: 30px; min-width: 30px; }
-QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #2c5390; }
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: @border; border-radius: 4px; min-height: 30px; min-width: 30px; }
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: @borderHover; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 QSlider::groove:horizontal { height: 6px; background: @border; border-radius: 3px; }
@@ -71,25 +80,32 @@ QStatusBar::item { border: none; }
 QToolTip { background: @surfaceHigh; color: @text; border: 1px solid @border; border-radius: 8px; padding: 6px 10px; }
 QSplitter::handle { background: transparent; }
 QPushButton {
-    background: @surfaceHigh; color: @text; border: 1px solid @border; border-radius: 10px;
+    background: @surfaceHigh; color: @text; border: 1px solid @border; border-radius: 18px;
     padding: 8px 18px; min-width: 70px;
 }
-QPushButton:hover { border-color: @accent; background: #17305a; }
+QPushButton:hover { border-color: @borderHover; background: @surfaceHover; }
 QPushButton:default { background: @accent; border-color: @accent; color: white; }
-QPushButton:default:hover { background: #4b90ff; }
+QPushButton:default:hover { background: @accentHover; }
 QCheckBox { spacing: 8px; }
 QToolButton#tab {
     background: transparent; color: @muted; border: 1px solid @border; border-radius: 13px; padding: 3px 10px;
 }
-QToolButton#tab:hover { color: @text; border-color: @accent; }
-QToolButton#tab:checked { background: rgba(47, 124, 246, 60); color: @text; border-color: @accent; font-weight: 600; }
+QToolButton#tab:hover { color: @text; border-color: @borderHover; }
+QToolButton#tab:checked { background: @accentSoft; color: @text; border-color: @accent2; font-weight: 600; }
 QToolButton#chip {
     background: @surfaceHigh; color: @text; border: 1px solid @border; border-radius: 9px; padding: 2px 8px;
 }
 QToolButton#chip:hover { border-color: @accent2; color: @accent2; }
-QToolButton#chip:checked { border-color: @accent; background: rgba(47, 124, 246, 60); }
+QToolButton#chip:checked { border-color: @highlight; background: @highlightSoft; }
 )");
     const QList<QPair<QString, QColor>> colors{
+        {QStringLiteral("@accentSoft"), withAlpha(Accent, 70)},
+        {QStringLiteral("@accentHover"), mix(Accent, Accent2, 0.35)},
+        {QStringLiteral("@highlightSoft"), withAlpha(Highlight, 45)},
+        {QStringLiteral("@highlight"), Highlight},
+        {QStringLiteral("@borderHover"), mix(Border, Muted, 0.45)},
+        {QStringLiteral("@surfaceHover"), mix(SurfaceHigh, Border, 0.6)},
+        {QStringLiteral("@viewport"), Viewport},
         {QStringLiteral("@surfaceHigh"), SurfaceHigh}, {QStringLiteral("@surface"), Surface},
         {QStringLiteral("@sidebar"), Sidebar},         {QStringLiteral("@border"), Border},
         {QStringLiteral("@accent2"), Accent2},         {QStringLiteral("@accent"), Accent},
@@ -97,7 +113,8 @@ QToolButton#chip:checked { border-color: @accent; background: rgba(47, 124, 246,
         {QStringLiteral("@bg"), Background},
     };
     for (const auto &[name, color] : colors)
-        css.replace(name, color.name());
+        css.replace(name, color.alpha() < 255 ? QStringLiteral("rgba(%1, %2, %3, %4)").arg(color.red()).arg(color.green()).arg(color.blue()).arg(color.alpha())
+                                                  : color.name());
     return css;
 }
 

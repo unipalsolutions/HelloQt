@@ -418,6 +418,10 @@ QPainterPath outline(Name name)
         line(6, 6, 18, 18);
         line(18, 6, 6, 18);
         break;
+    case Name::More:
+        for (double x : {6.0, 12.0, 18.0})
+            p.addEllipse(QPointF(x, 12), 1.6, 1.6);
+        break;
     }
     return p;
 }
@@ -432,7 +436,7 @@ void paint(QPainter &painter, Name name, const QRectF &rect, const QColor &color
     painter.scale(rect.width() / 24.0, rect.height() / 24.0);
     QPen pen(color, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     painter.setPen(pen);
-    painter.setBrush(name == Name::Stop || name == Name::Record ? QBrush(color) : QBrush(Qt::NoBrush));
+    painter.setBrush(name == Name::Stop || name == Name::Record || name == Name::More ? QBrush(color) : QBrush(Qt::NoBrush));
     painter.drawPath(outline(name));
     painter.restore();
 }

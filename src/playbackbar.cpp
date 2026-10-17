@@ -1,9 +1,12 @@
 #include "playbackbar.h"
 
+#include "controls.h"
+
 #include "icons.h"
 #include "widgets.h"
 
 #include <QComboBox>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -13,6 +16,7 @@
 #include <QStandardPaths>
 #include <QTime>
 #include <QTimeEdit>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -73,21 +77,21 @@ PlaybackBar::PlaybackBar(QWidget *parent)
     m_jump->setFocusPolicy(Qt::NoFocus);
     m_jump->setToolTip(QStringLiteral("مدة القفز لزري ⏪ ⏩\nالأسهم ←/→ تقفز 5 ثوانٍ، وJ/L عشراً، وShift مع الأسهم 30 ثانية"));
 
-    m_time = new QLabel(transport);
-    m_time->setObjectName(QStringLiteral("badge"));
-    m_time->setAlignment(Qt::AlignCenter);
-    m_time->setMinimumWidth(150);
+    // الموضع الحالي في حقل واحد: يُعرض فيه الوقت، ويُكتب فيه وقت آخر ثم Enter للانتقال
     m_goTo = new QLineEdit(transport);
-    m_goTo->setPlaceholderText(QStringLiteral("انتقال إلى…"));
-    m_goTo->setFixedWidth(104);
+    m_goTo->setObjectName(QStringLiteral("timeField"));
+    m_goTo->setFixedWidth(112);
     m_goTo->setAlignment(Qt::AlignCenter);
-    m_goTo->setToolTip(QStringLiteral("اكتب وقتاً ثم Enter: 1:23 أو 01:02:03 أو 83 (ثانية) — Ctrl+G"));
+    m_goTo->setToolTip(QStringLiteral("الموضع الحالي. انقر واكتب وقتاً ثم Enter للانتقال إليه: 1:23 أو 01:02:03 أو 83 (ثانية) — Ctrl+G"));
+    m_goTo->installEventFilter(this);
+    m_length = new QLabel(transport);
+    m_length->setObjectName(QStringLiteral("muted"));
 
-    m_speed = new QComboBox(transport);
+    QStringList rateNames;
     for (double rate : Rates)
-        m_speed->addItem(rate == 0.25 ? QStringLiteral("¼×") : rate == 0.5 ? QStringLiteral("½×") : QStringLiteral("%1×").arg(rate), rate);
+        rateNames << (rate == 0.25 ? QStringLiteral("¼×") : rate == 0.5 ? QStringLiteral("½×") : QStringLiteral("%1×").arg(rate));
+    m_speed = new SegmentedControl(rateNames, transport);
     m_speed->setCurrentIndex(2);
-    m_speed->setFocusPolicy(Qt::NoFocus);
     m_speed->setToolTip(QStringLiteral("سرعة التشغيل (Shift+< أبطأ، Shift+> أسرع). التحليل لا يتأثر بها"));
 
     m_mute = button(int(Icons::Name::Volume), QStringLiteral("كتم الصوت (M)"));
@@ -100,7 +104,8 @@ PlaybackBar::PlaybackBar(QWidget *parent)
 
     m_panels = button(int(Icons::Name::Panels), QStringLiteral("إخفاء اللوحات الجانبية (P)"));
     m_fullscreen = button(int(Icons::Name::Fullscreen), QStringLiteral("ملء الشاشة (F)"));
-    auto *keys = button(int(Icons::Name::Keyboard), QStringLiteral("كل الاختصارات (F1)"));
+    m_more = button(int(Icons::Name::More), QStringLiteral("المزيد: الجزء المطلوب، التنقل بين الأحداث والعلامات، مدة القفز"));
+    m_more->setCheckable(true);
 
     row->addWidget(m_previousFile);
     row->addSpacing(4);
@@ -109,23 +114,23 @@ PlaybackBar::PlaybackBar(QWidget *parent)
     row->addWidget(m_play);
     row->addWidget(frameForward);
     row->addWidget(m_forward);
-    row->addWidget(m_jump);
     row->addSpacing(4);
     row->addWidget(m_nextFile);
     row->addSpacing(10);
-    row->addWidget(m_time);
     row->addWidget(m_goTo);
+    row->addWidget(m_length);
     row->addStretch(1);
     row->addWidget(m_speed);
     row->addWidget(m_audioGroup);
     row->addSpacing(6);
+    row->addWidget(m_more);
     row->addWidget(m_panels);
     row->addWidget(m_fullscreen);
-    row->addWidget(keys);
     layout->addWidget(transport);
 
-    // ── السطر الثاني: الجزء المطلوب والتنقل بين الأحداث، يلتف في الشاشات الضيقة ──
+    // ── السطر الثاني (مطوي): الجزء المطلوب والتنقل بين الأحداث، يلتف في الشاشات الضيقة ──
     auto *tools = new QWidget(this);
+    m_tools = tools;
     auto *flow = new FlowLayout(tools, 16, 6);
     flow->setContentsMargins(0, 0, 0, 0);
     auto timeEdit = [tools](const QString &tip) {
@@ -133,6 +138,9 @@ PlaybackBar::PlaybackBar(QWidget *parent)
         setLtrDisplayFormat(edit, QStringLiteral("HH:mm:ss"));
         edit->setTime(QTime(0, 0));
         edit->setToolTip(tip);
+        edit->setObjectName(QStringLiteral("timeRange"));
+        edit->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        edit->setAlignment(Qt::AlignCenter);
         return edit;
     };
     m_rangeStart = timeEdit(QStringLiteral("بداية الجزء المطلوب تحليله أو تصديره"));
@@ -171,6 +179,10 @@ PlaybackBar::PlaybackBar(QWidget *parent)
     m_autoNext->setFocusPolicy(Qt::NoFocus);
     m_autoNext->setToolTip(QStringLiteral("بعد انتهاء الفيديو وتحليله يُفتح الفيديو التالي في المجلد ويُحلَّل"));
     flow->addWidget(m_autoNext);
+    m_jump->setParent(tools);
+    auto *keys = button(int(Icons::Name::Keyboard), QStringLiteral("كل الاختصارات (F1)"));
+    keys->setParent(tools);
+    flow->addWidget(group(tools, {new QLabel(QStringLiteral("القفز"), tools), m_jump, keys}));
     layout->addWidget(tools);
 
     // الإعدادات المحفوظة
@@ -181,6 +193,7 @@ PlaybackBar::PlaybackBar(QWidget *parent)
     m_jump->setCurrentIndex(std::max(0, m_jump->findData(jump)));
     m_autoNext->setChecked(settings.value(QStringLiteral("playback/autoNext"), false).toBool());
     setEventKind(Event(std::clamp(settings.value(QStringLiteral("playback/event"), 0).toInt(), 0, int(Event::Marker))));
+    setToolsVisible(settings.value(QStringLiteral("playback/tools"), false).toBool());
     updateVolumeButton();
     setAudioAvailable(false);
     setPlaying(false);
@@ -209,11 +222,10 @@ PlaybackBar::PlaybackBar(QWidget *parent)
             m_goTo->selectAll();
             return;
         }
-        m_goTo->clear();
         m_goTo->clearFocus();
         emit seekRequested(m_duration > 0 ? std::min(ms, m_duration - 1) : ms);
     });
-    connect(m_speed, &QComboBox::currentIndexChanged, this, [this] { emit rateChanged(rate()); });
+    connect(m_speed, &SegmentedControl::currentChanged, this, [this] { emit rateChanged(rate()); });
     connect(m_mute, &QAbstractButton::clicked, this, &PlaybackBar::toggleMute);
     connect(m_volume, &QSlider::valueChanged, this, [this] {
         if (m_muted && m_volume->value() > 0)
@@ -221,6 +233,10 @@ PlaybackBar::PlaybackBar(QWidget *parent)
         updateVolumeButton();
         save();
         emit volumeChanged(volume(), m_muted);
+    });
+    connect(m_more, &QAbstractButton::toggled, this, [this](bool on) {
+        setToolsVisible(on);
+        save();
     });
     connect(m_panels, &QAbstractButton::clicked, this, &PlaybackBar::panelsRequested);
     connect(m_fullscreen, &QAbstractButton::clicked, this, &PlaybackBar::fullscreenRequested);
@@ -258,6 +274,7 @@ void PlaybackBar::save() const
     settings.setValue(QStringLiteral("playback/jump"), m_jump->currentData().toInt());
     settings.setValue(QStringLiteral("playback/autoNext"), m_autoNext->isChecked());
     settings.setValue(QStringLiteral("playback/event"), m_event->currentData().toInt());
+    settings.setValue(QStringLiteral("playback/tools"), toolsVisible());
 }
 
 void PlaybackBar::setPlaying(bool playing)
@@ -286,20 +303,48 @@ void PlaybackBar::setFps(double fps)
 
 void PlaybackBar::updateTime()
 {
-    m_time->setText(QStringLiteral("%1 / %2").arg(formatPrecise(m_position), formatPrecise(m_duration).chopped(2)));
-    m_time->setToolTip(QStringLiteral("الموضع الحالي / مدة الفيديو · الإطار %1").arg(qint64(std::floor(double(m_position) * m_fps / 1000.0 + 1e-6))));
+    // لا يُستبدل ما يكتبه المستخدم أثناء الكتابة
+    if (!m_goTo->hasFocus())
+        m_goTo->setText(formatPrecise(m_position));
+    m_length->setText(QStringLiteral("/ %1").arg(formatPrecise(m_duration).chopped(2)));
+    m_length->setToolTip(QStringLiteral("مدة الفيديو · الإطار الحالي %1").arg(qint64(std::floor(double(m_position) * m_fps / 1000.0 + 1e-6))));
+}
+
+bool PlaybackBar::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_goTo) {
+        if (event->type() == QEvent::FocusIn)
+            QTimer::singleShot(0, m_goTo, &QLineEdit::selectAll);
+        else if (event->type() == QEvent::FocusOut)
+            QTimer::singleShot(0, this, &PlaybackBar::updateTime);
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+bool PlaybackBar::toolsVisible() const
+{
+    return m_more->isChecked();
+}
+
+void PlaybackBar::setToolsVisible(bool visible)
+{
+    m_tools->setVisible(visible);
+    if (m_more->isChecked() != visible) {
+        const QSignalBlocker blocker(m_more);
+        m_more->setChecked(visible);
+    }
 }
 
 double PlaybackBar::rate() const
 {
-    return m_speed->currentData().toDouble();
+    return Rates[std::clamp(m_speed->currentIndex(), 0, int(std::size(Rates)) - 1)];
 }
 
 void PlaybackBar::setRate(double rate)
 {
     int best = 0;
     for (int i = 0; i < m_speed->count(); ++i) {
-        if (std::abs(m_speed->itemData(i).toDouble() - rate) < std::abs(m_speed->itemData(best).toDouble() - rate))
+        if (std::abs(Rates[i] - rate) < std::abs(Rates[best] - rate))
             best = i;
     }
     m_speed->setCurrentIndex(best);
@@ -357,8 +402,11 @@ void PlaybackBar::updateVolumeButton()
 
 void PlaybackBar::setFileNavigation(bool previous, bool next)
 {
+    // زرا الملف السابق والتالي يظهران فقط إن كان في المجلد فيديوهات أخرى
     m_previousFile->setEnabled(previous);
     m_nextFile->setEnabled(next);
+    m_previousFile->setVisible(previous || next);
+    m_nextFile->setVisible(previous || next);
 }
 
 bool PlaybackBar::autoNext() const

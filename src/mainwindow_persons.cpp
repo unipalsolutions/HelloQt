@@ -405,7 +405,7 @@ void MainWindow::showPersonDetails()
     if (id.isEmpty()) {
         m_personAvatar->setPixmap(QPixmap());
         m_personDetails->setText(QStringLiteral("<div style='font-size:15pt; font-weight:600'>اختر شخصاً</div>"
-                                                "<div style='color:#8aa3c7'>اختر شخصاً من القائمة لعرض بياناته وصوره، "
+                                                "<div style='color:#a99a8a'>اختر شخصاً من القائمة لعرض بياناته وصوره، "
                                                 "أو اضغط \"شخص جديد\" لإضافة شخص.</div>"));
         m_photosTab->setText(QStringLiteral("صور الوجه"));
         m_sightingsTab->setText(QStringLiteral("سجل الظهور"));
@@ -423,14 +423,14 @@ void MainWindow::showPersonDetails()
                                   : circularPixmap(m_database.photo(person.coverPhoto, 192), 96));
 
     auto chip = [](const QString &key, const QString &value) {
-        return QStringLiteral("<span style='color:#8aa3c7'>%1</span> <span style='color:#e6f0ff'>%2</span>&nbsp;&nbsp;&nbsp; ")
+        return QStringLiteral("<span style='color:#a99a8a'>%1</span> <span style='color:#f4ede4'>%2</span>&nbsp;&nbsp;&nbsp; ")
             .arg(key, value.toHtmlEscaped());
     };
     QString html = QStringLiteral("<div style='font-size:18pt; font-weight:700'>%1</div>").arg(person.name.toHtmlEscaped());
     if (!person.tags.isEmpty()) {
         html += QStringLiteral("<div style='margin:2px 0 4px 0'>");
         for (const QString &tag : person.tags.split(QStringLiteral("، "), Qt::SkipEmptyParts))
-            html += QStringLiteral("<span style='background:#13284a; color:#38bdf8; font-weight:600'>&nbsp;%1&nbsp;</span>&nbsp; ")
+            html += QStringLiteral("<span style='background:#2b231d; color:#6cc193; font-weight:600'>&nbsp;%1&nbsp;</span>&nbsp; ")
                         .arg(tag.toHtmlEscaped());
         html += QStringLiteral("</div>");
     }
@@ -454,7 +454,7 @@ void MainWindow::showPersonDetails()
                                                        .arg(person.seenCount));
     html += QStringLiteral("</div>");
     if (!person.notes.isEmpty())
-        html += QStringLiteral("<div style='color:#8aa3c7; margin-top:6px'>%1</div>")
+        html += QStringLiteral("<div style='color:#a99a8a; margin-top:6px'>%1</div>")
                     .arg(person.notes.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")));
 
     // قوة الملف والصور المشكوك فيها
@@ -462,7 +462,7 @@ void MainWindow::showPersonDetails()
     const ProfileStrength strength = profileStrength(person, consistency);
     m_strengthMeter->setStrength(strength);
     if (!strength.tips.isEmpty())
-        html += QStringLiteral("<div style='color:#93c5fd; margin-top:6px'>💡 %1</div>").arg(strength.tips.first().toHtmlEscaped());
+        html += QStringLiteral("<div style='color:#f5a524; margin-top:6px'>💡 %1</div>").arg(strength.tips.first().toHtmlEscaped());
     m_personDetails->setText(html);
 
     for (const FacePhoto &photo : person.photos) {

@@ -84,7 +84,7 @@ void ImageView::setFaces(const QList<FaceItem> &faces)
         const bool watched = face.match.status == MatchStatus::Confirmed && m_watched.contains(face.match.personId);
         if (watched)
             label = QStringLiteral("⚠  ") + label;
-        Box box{face.id, face.box, face.box, label, watched ? Theme::Accent : matchColor(face.match.status), 0.0, watched};
+        Box box{face.id, face.box, face.box, label, watched ? Theme::Danger : matchColor(face.match.status), 0.0, watched};
         const auto existing = std::find_if(m_boxes.begin(), m_boxes.end(), [&](const Box &b) { return b.id == face.id; });
         if (existing != m_boxes.end()) {
             box.current = existing->current;
@@ -303,7 +303,7 @@ void ImageView::paintNavigation(QPainter &p)
         const QRectF r = navButton(step);
         const bool hovered = m_navHover == step;
         p.setPen(QPen(withAlpha(Accent, hovered ? 220 : 90), 1));
-        p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), hovered ? 240 : 170));
+        p.setBrush(withAlpha(Theme::Surface, hovered ? 240 : 170));
         p.drawEllipse(r);
         // سهم يشير إلى جهة الصورة
         const bool pointLeft = r.center().x() < width() / 2.0;
@@ -326,7 +326,7 @@ void ImageView::paintNavigation(QPainter &p)
         const QSizeF size(metrics.horizontalAdvance(text) + 28, 28);
         const QRectF pill(QPointF((width() - size.width()) / 2.0, height() - size.height() - 12), size);
         p.setPen(QPen(withAlpha(Accent, 90), 1));
-        p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 215));
+        p.setBrush(withAlpha(Theme::Surface, 215));
         p.drawRoundedRect(pill, 14, 14);
         p.setPen(Text);
         p.drawText(pill, Qt::AlignCenter, text);
@@ -348,7 +348,7 @@ void ImageView::paintZoomBadge(QPainter &p)
     const QSizeF size(QFontMetricsF(font).horizontalAdvance(text) + 28, 28);
     const QRectF pill(QPointF(isRightToLeft() ? 12 : width() - size.width() - 12, 12), size);
     p.setPen(QPen(withAlpha(Accent2, 140), 1));
-    p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 225));
+    p.setBrush(withAlpha(Theme::Surface, 225));
     p.drawRoundedRect(pill, 14, 14);
     p.setPen(Text);
     p.drawText(pill, Qt::AlignCenter, text);
@@ -368,7 +368,7 @@ void ImageView::paintStatusBadge(QPainter &p)
     // في الجهة المقابلة لشارة التكبير فلا تتغطيان
     const QRectF pill(QPointF(isRightToLeft() ? width() - size.width() - 12 : 12, 12), size);
     p.setPen(QPen(withAlpha(Warning, 170), 1));
-    p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 230));
+    p.setBrush(withAlpha(Theme::Surface, 230));
     p.drawRoundedRect(pill, 14, 14);
     // نقطة تنبض ببطء: التحليل يعمل ولم يصل بعد
     const double pulse = 0.55 + 0.45 * std::sin(m_clock.elapsed() / 1000.0 * 4.0);
@@ -615,7 +615,7 @@ void ImageView::paintBusy(QPainter &p, double t)
     const QSizeF size(QFontMetricsF(font).horizontalAdvance(text) + 90, 44);
     const QRectF pill(QPointF(r.center().x() - size.width() / 2, r.center().y() - size.height() / 2), size);
     p.setPen(QPen(withAlpha(Accent, 160), 1));
-    p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 235));
+    p.setBrush(withAlpha(Theme::Surface, 235));
     p.drawRoundedRect(pill, 22, 22);
     p.setPen(Text);
     const bool rtl = isRightToLeft();
@@ -671,7 +671,7 @@ void ImageView::paintRegion(QPainter &p)
             const QSizeF size(QFontMetricsF(font).horizontalAdvance(text) + 36, 36);
             const QRectF pill(QPointF(target.center().x() - size.width() / 2, target.top() + 14), size);
             p.setPen(QPen(withAlpha(Accent2, 200), 1));
-            p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 230));
+            p.setBrush(withAlpha(Theme::Surface, 230));
             p.drawRoundedRect(pill, 18, 18);
             p.setPen(Text);
             p.drawText(pill, Qt::AlignCenter, text);

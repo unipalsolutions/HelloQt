@@ -6,7 +6,9 @@
 #include "startscreen.h"
 #include "videoaudio.h"
 
+#include <QFileInfo>
 #include <QSplitter>
+#include <QTime>
 #include <QStackedWidget>
 
 using namespace MainWindowHelpers;
@@ -54,13 +56,42 @@ void MainWindow::updateWorkState()
 
     // الإعدادات السريعة حسب الحالة، والنادرة في «إعدادات التحليل»
     m_thoroughSwitch->setVisible(image);
-    m_regionGroup->setVisible(video || camera);
     m_reanalyzeButton->setVisible(video);
     m_recordGroup->setVisible(camera);
     m_frameStepGroup->setVisible(video || camera);
-    if (!m_videoFullscreen) {
-        m_settingsCard->setVisible(!empty && !m_panelsHidden);
+    // أدوات الفيديو في رأس الصفحة: المنطقة والمرشحات
+    m_regionButton->setVisible(video || camera);
+    m_clearRegionButton->setVisible((video || camera) && m_clearRegionButton->isEnabled());
+    m_filtersButton->setVisible(video || camera);
+    m_advancedButton->setVisible(!empty);
+    m_toolsSeparator->setVisible(!empty);
+    if (empty)
+        m_settingsDrawer->setOpen(false);
+    if (!m_videoFullscreen)
         m_sideCard->setVisible(!empty && !m_panelsHidden);
+
+    // العنوان: اسم الصفحة قبل فتح ملف، واسم الملف ومعلوماته بعده
+    QString fileName;
+    QString fileInfo;
+    if (image) {
+        fileName = QFileInfo(m_currentImagePath).fileName();
+        fileInfo = QStringLiteral("صورة");
+    } else if (camera) {
+        fileName = m_cameraName.isEmpty() ? QStringLiteral("الكاميرا") : m_cameraName;
+        fileInfo = QStringLiteral("بث مباشر");
+    } else if (video) {
+        fileName = QFileInfo(m_videoSource).fileName();
+        fileInfo = m_videoDurationMs > 0 ? QStringLiteral("\u2066%1\u2069").arg(QTime(0, 0).addMSecs(int(m_videoDurationMs)).toString(m_videoDurationMs >= 3600000 ? QStringLiteral("h:mm:ss") : QStringLiteral("m:ss"))) : QStringLiteral("فيديو");
+    }
+    m_pageTitle->setVisible(fileName.isEmpty());
+    m_fileTitle->setVisible(!fileName.isEmpty());
+    if (!fileName.isEmpty()) {
+        const QString shown = m_fileTitle->fontMetrics().elidedText(fileName, Qt::ElideMiddle, 220);
+        // علامة الاتجاه تبقي الاسم اللاتيني في يمين العنوان ومعلوماته بعده
+        m_fileTitle->setText(QStringLiteral("\u200F<span style='font-size:13pt; font-weight:700'>\u2068%1\u2069</span>"
+                                            "&nbsp;&nbsp;<span style='color:%2'>%3</span>")
+                                 .arg(shown.toHtmlEscaped(), Theme::Muted.name(), fileInfo));
+        m_fileTitle->setToolTip(image ? m_currentImagePath : m_videoSource);
     }
     m_viewStack->setCurrentIndex(empty ? 0 : 1);
     m_startScreen->setReady(m_ready);
@@ -76,12 +107,11 @@ void MainWindow::updateWorkState()
 
 void MainWindow::setAdvancedSettingsVisible(bool visible)
 {
-    m_advancedPanel->setVisible(visible);
+    m_settingsDrawer->setOpen(visible);
     if (m_advancedButton->isChecked() != visible) {
         const QSignalBlocker blocker(m_advancedButton);
         m_advancedButton->setChecked(visible);
     }
-    QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("layout/advanced"), visible);
 }
 
 // ───────────── شريط الحالة الدائم ─────────────
@@ -90,13 +120,14 @@ QWidget *MainWindow::createStatusStrip(QWidget *parent)
 {
     m_statusStrip = new QFrame(parent);
     m_statusStrip->setObjectName(QStringLiteral("statusStrip"));
-    m_statusStrip->setStyleSheet(QStringLiteral("#statusStrip { background: %1; border: 1px solid %2; border-radius: 12px; }")
+    // كبسولة الحالة: حلقة تقدم ثم العنوان والتفاصيل، والخطوة المقترحة في طرفها
+    m_statusStrip->setStyleSheet(QStringLiteral("#statusStrip { background: %1; border: 1px solid %2; border-radius: 19px; }")
                                      .arg(Theme::Surface.name(), Theme::Border.name()));
+    m_statusStrip->setMinimumHeight(38);
     auto *layout = new QHBoxLayout(m_statusStrip);
-    layout->setContentsMargins(12, 4, 8, 4);
-    layout->setSpacing(10);
-    m_statusIcon = new QLabel(m_statusStrip);
-    m_statusIcon->setFixedSize(20, 20);
+    layout->setContentsMargins(8, 3, 4, 3);
+    layout->setSpacing(8);
+    m_statusRing = new ProgressRing(m_statusStrip);
     m_statusTitle = new QLabel(m_statusStrip);
     m_statusTitle->setStyleSheet(QStringLiteral("font-weight: 600;"));
     m_statusDetail = label(QString(), QStringLiteral("muted"), m_statusStrip);
@@ -107,7 +138,7 @@ QWidget *MainWindow::createStatusStrip(QWidget *parent)
         if (m_statusActionSlot)
             m_statusActionSlot();
     });
-    layout->addWidget(m_statusIcon);
+    layout->addWidget(m_statusRing);
     layout->addWidget(m_statusTitle);
     layout->addWidget(m_statusDetail, 1);
     m_statusHint = label(QStringLiteral("الخطوة المقترحة:"), QStringLiteral("muted"), m_statusStrip);
@@ -159,8 +190,7 @@ void MainWindow::updateStatusStrip()
         return parts.join(QStringLiteral(" · "));
     };
     const auto showTab = [this](int tab) {
-        if (QAbstractButton *button = m_faceTabs->button(tab))
-            button->click();
+        m_faceTabs->setCurrentIndex(tab);
         if (m_panelsHidden)
             togglePanels();
     };
@@ -276,7 +306,12 @@ void MainWindow::updateStatusStrip()
         }
         break;
     }
-    m_statusIcon->setPixmap(Icons::icon(icon, color, 20).pixmap(20, 20));
+    if (workState() == WorkState::Video && m_videoRunning)
+        m_statusRing->setProgress(m_analysisProgress >= 0.0 ? m_analysisProgress : -1.0);
+    else if (m_analyzing)
+        m_statusRing->setProgress(-1.0);
+    else
+        m_statusRing->setIcon(icon, color);
     m_statusTitle->setText(title);
     m_statusDetail->setText(detail);
     m_statusDetail->setToolTip(detail);
@@ -359,7 +394,6 @@ void MainWindow::restoreLayout()
     const QList<int> media = sizes(QStringLiteral("layout/media"));
     if (media.size() == 2 && media.at(0) > 120 && media.at(1) > 60)
         m_mediaSplitter->setSizes(media);
-    setAdvancedSettingsVisible(settings.value(QStringLiteral("layout/advanced"), false).toBool());
     const int page = settings.value(QStringLiteral("layout/page"), 0).toInt();
     if (page > 0 && page < m_pages->count())
         m_navGroup->button(page)->click();

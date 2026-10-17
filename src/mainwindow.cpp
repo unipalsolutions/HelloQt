@@ -745,125 +745,50 @@ QWidget *MainWindow::createRecognitionPage()
     m_headerButtons = {m_openImageButton, m_openVideoButton, m_recentButton, m_cameraButton, m_folderScanButton, m_openMenuButton,
                        m_pauseButton, m_recordButton, m_stopButton, m_enhanceImageButton, m_saveFacesButton};
 
+    // ── الرأس سطر واحد: العنوان أو اسم الملف، كبسولة الحالة، الأزرار، ثم أدوات الإطار والإعدادات ──
     m_recognitionHeader = new QWidget(page);
     auto *header = new QHBoxLayout(m_recognitionHeader);
     header->setContentsMargins(0, 0, 0, 0);
-    auto *titles = new QVBoxLayout;
-    titles->setSpacing(2);
-    titles->addWidget(label(QStringLiteral("التعرف على الوجوه"), QStringLiteral("title"), page));
-    auto *subtitle = label(QStringLiteral("افتح صورة أو فيديو، أو شغّل الكاميرا، ليتم كشف الوجوه ومطابقتها مع قاعدة البيانات"),
-                           QStringLiteral("subtitle"), page);
-    subtitle->setWordWrap(true);
-    subtitle->setMinimumWidth(120);
-    m_subtitles << subtitle;
-    titles->addWidget(subtitle);
-    header->addLayout(titles, 1);
     header->setSpacing(8);
+    m_pageTitle = label(QStringLiteral("التعرف على الوجوه"), QStringLiteral("title"), page);
+    m_fileTitle = new QLabel(page);
+    m_fileTitle->setTextFormat(Qt::RichText);
+    m_fileTitle->setMinimumWidth(60);
+    m_fileTitle->setVisible(false);
+    header->addWidget(m_pageTitle);
+    header->addWidget(m_fileTitle);
+    header->addWidget(createStatusStrip(page), 3);
     for (FancyButton *button : std::as_const(m_headerButtons))
+        header->addWidget(button);
+
+    // أدوات الإطار: أيقونات صغيرة بجانب بعضها، والنص في التلميح
+    auto toolButton = [page](FancyButton *button) {
+        button->setParent(page);
+        button->setCompact(true);
+        button->setFixedSize(36, 34);
+        return button;
+    };
+    m_toolsSeparator = new QFrame(page);
+    m_toolsSeparator->setObjectName(QStringLiteral("separator"));
+    m_toolsSeparator->setFixedHeight(24);
+    header->addSpacing(2);
+    header->addWidget(m_toolsSeparator);
+    header->addSpacing(2);
+
+    m_regionButton = toolButton(new FancyButton(Icons::Name::Region, QStringLiteral("تحديد منطقة"), FancyButton::Kind::Secondary, page));
+    m_regionButton->setCheckable(true);
+    m_regionButton->setToolTip(QStringLiteral("تحديد منطقة: ارسم مستطيلاً على الإطار ليُبحث عن الوجوه داخله فقط (أسرع ويتجاهل ما حوله)"));
+    m_clearRegionButton = toolButton(new FancyButton(Icons::Name::Reject, QStringLiteral("الإطار كله"), FancyButton::Kind::Secondary, page));
+    m_clearRegionButton->setToolTip(QStringLiteral("إلغاء المنطقة والبحث في الإطار كله"));
+    m_filtersButton = toolButton(new FancyButton(Icons::Name::Sparkle, QStringLiteral("معالجات"), FancyButton::Kind::Secondary, page));
+    connect(m_filtersButton, &QAbstractButton::clicked, this, &MainWindow::openVideoFilters);
+    m_advancedButton = toolButton(new FancyButton(Icons::Name::Sliders, QStringLiteral("إعدادات التحليل"), FancyButton::Kind::Secondary, page));
+    m_advancedButton->setCheckable(true);
+    m_advancedButton->setToolTip(QStringLiteral("إعدادات التحليل: التحسين، حد التعرف، تحليل إطار من كل كم إطار، استهلاك المعالج، كرت الشاشة"));
+    for (FancyButton *button : {m_regionButton, m_clearRegionButton, m_filtersButton, m_advancedButton})
         header->addWidget(button);
     layout->addWidget(m_recognitionHeader);
 
-    // الإعدادات: مجموعات صغيرة تلتف إلى سطر جديد عندما تضيق النافذة
-    // السطر الأول إعدادات الحالة الحالية، و«إعدادات التحليل» النادرة في لوحة تُطوى تحته
-    auto *settingsCard = card(page);
-    m_settingsCard = settingsCard;
-    auto *settingsColumn = new QVBoxLayout(settingsCard);
-    settingsColumn->setContentsMargins(16, 6, 16, 6);
-    settingsColumn->setSpacing(6);
-    auto *settings = new QWidget(settingsCard);
-    auto *settingsLayout = new FlowLayout(settings, 18, 8);
-    settingsLayout->setContentsMargins(0, 0, 0, 0);
-    settingsColumn->addWidget(settings);
-    m_advancedPanel = new QWidget(settingsCard);
-    auto *advancedLayout = new FlowLayout(m_advancedPanel, 18, 8);
-    advancedLayout->setContentsMargins(0, 6, 0, 2);
-    m_advancedPanel->setObjectName(QStringLiteral("advancedPanel"));
-    m_advancedPanel->setStyleSheet(QStringLiteral("#advancedPanel { border-top: 1px solid %1; }").arg(Theme::Border.name()));
-    settingsColumn->addWidget(m_advancedPanel);
-    auto group = [settings](std::initializer_list<QWidget *> widgets) {
-        auto *box = new QWidget(settings);
-        auto *row = new QHBoxLayout(box);
-        row->setContentsMargins(0, 0, 0, 0);
-        row->setSpacing(8);
-        for (QWidget *w : widgets)
-            row->addWidget(w);
-        return box;
-    };
-
-    m_thresholdSlider = new QSlider(Qt::Horizontal, settings);
-    m_thresholdSlider->setRange(15, 80);
-    m_thresholdSlider->setValue(30);
-    m_thresholdSlider->setFixedWidth(150);
-    m_thresholdSlider->setCursor(Qt::PointingHandCursor);
-    m_thresholdSlider->setToolTip(QStringLiteral("أعلى = أخطاء أقل لكن قد لا يُتعرف على الصور الرديئة جداً.\nأقل = يتعرف أكثر مع احتمال خطأ أكبر."));
-    m_thresholdValue = label(QStringLiteral("30%"), QStringLiteral("badge"), settings);
-    m_thresholdWarning = new QLabel(settings);
-    m_thresholdWarning->setPixmap(Icons::icon(Icons::Name::Alert, Theme::Warning, 18).pixmap(18, 18));
-    m_thresholdWarning->setToolTip(QStringLiteral("الحد أقل من 30%: قد يُنسب وجه شخص غير مسجل إلى شخص معروف يشبهه.\n"
-                                                  "يُنصح بـ 30% إلى 40%، خاصة مع الفيديو منخفض الجودة."));
-    m_thresholdWarning->setVisible(false);
-    connect(m_thresholdSlider, &QSlider::valueChanged, this, [this](int value) {
-        m_thresholdValue->setText(QStringLiteral("%1%").arg(value));
-        m_thresholdWarning->setVisible(value < 30);
-        // التحذير يبقى ظاهراً على زر اللوحة وإن كانت مطوية
-        if (m_advancedButton)
-            m_advancedButton->setIconName(value < 30 ? Icons::Name::Alert : Icons::Name::Sliders);
-        m_videoWorker->setThreshold(threshold());
-        refreshMatches();
-        if (m_matchPage)
-            m_matchPage->refresh();
-    });
-
-    m_thoroughSwitch = new ToggleSwitch(QStringLiteral("تحليل معمّق للصور"), settings);
-    m_thoroughSwitch->setToolTip(QStringLiteral("كشف متعدد المقاييس للصور: أدق مع الوجوه الصغيرة، وأبطأ"));
-    m_thoroughSwitch->setChecked(true);
-
-    m_enhanceSwitch = new ToggleSwitch(QStringLiteral("تحسين الصورة وتوضيحها"), settings);
-    m_enhanceSwitch->setToolTip(QStringLiteral("للصور والفيديو الصغير أو المظلم أو المشوش (Ctrl+E):\n"
-                                               "تكبير، إزالة التشويش، موازنة الإضاءة والتباين، ثم زيادة الحدة.\n"
-                                               "يُطبَّق على الفيديو فوراً أثناء التحليل، ويجعله أبطأ."));
-    connect(m_enhanceSwitch, &QAbstractButton::toggled, this, [this](bool checked) {
-        m_videoWorker->setEnhance(checked);
-        if (!m_videoMode && !m_currentImagePath.isEmpty() && m_openImageButton->isEnabled())
-            analyzeImage(m_currentImagePath);
-    });
-
-    m_frameStepSpin = new QSpinBox(settings);
-    m_frameStepSpin->setRange(0, 60);
-    m_frameStepSpin->setValue(0);
-    m_frameStepSpin->setSpecialValueText(QStringLiteral("تلقائي"));
-    m_frameStepSpin->setToolTip(QStringLiteral("تحليل إطار من كل كم إطار في الفيديو.\n"
-                                               "تلقائي = نحو 10 إطارات لكل ثانية من الفيديو (سريع ودقيق).\n"
-                                               "1 = تحليل كل إطار (الأبطأ). قيمة أكبر = أسرع."));
-    connect(m_frameStepSpin, &QSpinBox::valueChanged, this, [this](int value) { m_videoWorker->setFrameStep(value); });
-
-    m_performanceCombo = new QComboBox(settings);
-    m_performanceCombo->addItems({QStringLiteral("خفيف"), QStringLiteral("متوازن"), QStringLiteral("أقصى سرعة")});
-    m_performanceCombo->setCurrentIndex(int(Performance::saved()));
-    auto describePerformance = [this] {
-        const auto level = Performance::Level(m_performanceCombo->currentIndex());
-        m_performanceCombo->setToolTip(QStringLiteral("استهلاك المعالج أثناء التحليل\n") + Performance::describe(level)
-                                       + QStringLiteral("\nإن كان الجهاز يعلق أثناء تحليل الفيديو اختر «خفيف»."));
-    };
-    describePerformance();
-    connect(m_performanceCombo, &QComboBox::currentIndexChanged, this, [this, describePerformance](int index) {
-        const auto level = Performance::Level(index);
-        Performance::save(level);
-        Performance::apply(level);
-        describePerformance();
-        // نماذج التعرف تأخذ عدد الأنوية عند تحميلها، أما الأولوية فتتغير فوراً
-        statusBar()->showMessage(Performance::describe(level)
-                                     + QStringLiteral(" · الأولوية تغيّرت الآن، وعدد الأنوية يُطبَّق كاملاً عند إعادة تشغيل البرنامج"),
-                                 8000);
-    });
-
-    m_regionButton = new FancyButton(Icons::Name::Region, QStringLiteral("تحديد منطقة"), FancyButton::Kind::Secondary, settings);
-    m_regionButton->setCheckable(true);
-    m_regionButton->setToolTip(QStringLiteral("ارسم مستطيلاً على الإطار ليُبحث عن الوجوه داخله فقط (أسرع ويتجاهل ما حوله)"));
-    m_clearRegionButton = new FancyButton(Icons::Name::Stop, QStringLiteral("الإطار كله"), FancyButton::Kind::Secondary, settings);
-    m_clearRegionButton->setToolTip(QStringLiteral("إلغاء المنطقة والبحث في الإطار كله"));
-    m_reanalyzeButton = new FancyButton(Icons::Name::Film, QStringLiteral("إعادة التحليل"), FancyButton::Kind::Secondary, settings);
-    m_reanalyzeButton->setToolTip(QStringLiteral("إعادة تحليل آخر فيديو بالإعدادات والجزء والمنطقة الحالية"));
     connect(m_regionButton, &QAbstractButton::toggled, this, [this](bool on) {
         m_view->setSelectingRegion(on);
         if (on)
@@ -875,27 +800,113 @@ QWidget *MainWindow::createRecognitionPage()
         m_regionButton->setChecked(false);
         updateVideoOptions();
     });
-    connect(m_reanalyzeButton, &QAbstractButton::clicked, this, &MainWindow::reanalyzeVideo);
-    m_filtersButton = new FancyButton(Icons::Name::Sliders, QStringLiteral("معالجات"), FancyButton::Kind::Secondary, settings);
-    connect(m_filtersButton, &QAbstractButton::clicked, this, &MainWindow::openVideoFilters);
-    updateFiltersButton();
 
-    settingsLayout->addWidget(m_thoroughSwitch);
-    settingsLayout->addWidget(m_enhanceSwitch);
-    QWidget *frameStepGroup = group({new QLabel(QStringLiteral("إطار من كل"), settings), m_frameStepSpin});
-    QWidget *regionGroup = group({m_filtersButton, m_regionButton, m_clearRegionButton, m_reanalyzeButton});
-    m_frameStepGroup = frameStepGroup;
-    m_regionGroup = regionGroup;
-    auto *recordFolderButton = new FancyButton(Icons::Name::Folder, QStringLiteral("التسجيلات"), FancyButton::Kind::Secondary, settings);
-    recordFolderButton->setToolTip(QStringLiteral("مجلد تسجيلات الكاميرا، والتسجيل عند الحركة فقط، ورسم الوجوه، وحذف القديم تلقائياً"));
-    connect(recordFolderButton, &QAbstractButton::clicked, this, &MainWindow::showRecordFolderMenu);
-    m_autoRecordSwitch = new ToggleSwitch(QStringLiteral("تسجيل تلقائي"), settings);
-    m_autoRecordSwitch->setToolTip(QStringLiteral("يبدأ تسجيل الكاميرا وحده كلما شُغّلت"));
-    m_autoRecordSwitch->setChecked(CameraRecorder::autoRecord());
-    connect(m_autoRecordSwitch, &QAbstractButton::toggled, this, [](bool on) { CameraRecorder::setAutoRecord(on); });
-    m_recordGroup = group({new QLabel(QStringLiteral("تسجيل الكاميرا"), settings), m_autoRecordSwitch, recordFolderButton});
-    m_videoSettings = {frameStepGroup, regionGroup};
-    m_gpuSwitch = new ToggleSwitch(QStringLiteral("كرت الشاشة"), settings);
+    // ── درج «إعدادات التحليل»: ينزلق فوق الصفحة، وأقسامه تُطوى وتُفتح ──
+    m_settingsDrawer = new SideDrawer(Icons::Name::Sliders, QStringLiteral("إعدادات التحليل"), page);
+    connect(m_advancedButton, &QAbstractButton::toggled, this, &MainWindow::setAdvancedSettingsVisible);
+    connect(m_settingsDrawer, &SideDrawer::openChanged, this, [this](bool open) {
+        const QSignalBlocker blocker(m_advancedButton);
+        m_advancedButton->setChecked(open);
+    });
+    auto *drawer = m_settingsDrawer->bodyLayout();
+    auto row = [](QWidget *parent, const QString &text, QWidget *control) {
+        auto *box = new QWidget(parent);
+        auto *line = new QHBoxLayout(box);
+        line->setContentsMargins(0, 0, 0, 0);
+        line->setSpacing(10);
+        line->addWidget(label(text, QStringLiteral("muted"), box), 1);
+        control->setParent(box);
+        line->addWidget(control);
+        return box;
+    };
+    auto hint = [](QWidget *parent, const QString &text) {
+        QLabel *l = label(text, QStringLiteral("muted"), parent);
+        l->setWordWrap(true);
+        l->setStyleSheet(QStringLiteral("font-size: 9pt;"));
+        return l;
+    };
+
+    // القسم الأول: ما يغيّر التحليل نفسه
+    auto *analysis = new CollapsibleSection(QStringLiteral("التحليل"), page, QStringLiteral("drawer/analysis"));
+    auto *analysisBody = analysis->content();
+    m_enhanceSwitch = new ToggleSwitch(QStringLiteral("تحسين الصورة وتوضيحها"), analysisBody);
+    m_enhanceSwitch->setToolTip(QStringLiteral("للصور والفيديو الصغير أو المظلم أو المشوش (Ctrl+E):\n"
+                                               "تكبير، إزالة التشويش، موازنة الإضاءة والتباين، ثم زيادة الحدة.\n"
+                                               "يُطبَّق على الفيديو فوراً أثناء التحليل، ويجعله أبطأ."));
+    connect(m_enhanceSwitch, &QAbstractButton::toggled, this, [this](bool checked) {
+        m_videoWorker->setEnhance(checked);
+        if (!m_videoMode && !m_currentImagePath.isEmpty() && m_openImageButton->isEnabled())
+            analyzeImage(m_currentImagePath);
+    });
+    m_thoroughSwitch = new ToggleSwitch(QStringLiteral("تحليل معمّق للصور"), analysisBody);
+    m_thoroughSwitch->setToolTip(QStringLiteral("كشف متعدد المقاييس للصور: أدق مع الوجوه الصغيرة، وأبطأ"));
+    m_thoroughSwitch->setChecked(true);
+    m_frameStepSpin = new Stepper(analysisBody);
+    m_frameStepSpin->setRange(0, 60);
+    m_frameStepSpin->setSpecialValueText(QStringLiteral("تلقائي"));
+    m_frameStepSpin->setToolTip(QStringLiteral("تحليل إطار من كل كم إطار في الفيديو.\n"
+                                               "تلقائي = نحو 10 إطارات لكل ثانية من الفيديو (سريع ودقيق).\n"
+                                               "1 = تحليل كل إطار (الأبطأ). قيمة أكبر = أسرع."));
+    connect(m_frameStepSpin, &Stepper::valueChanged, this, [this](int value) { m_videoWorker->setFrameStep(value); });
+    m_frameStepGroup = row(analysisBody, QStringLiteral("تحليل إطار من كل"), m_frameStepSpin);
+    analysis->contentLayout()->addWidget(m_enhanceSwitch);
+    analysis->contentLayout()->addWidget(m_thoroughSwitch);
+    analysis->contentLayout()->addWidget(m_frameStepGroup);
+    drawer->addWidget(analysis);
+
+    // القسم الثاني: حد التعرف
+    auto *matching = new CollapsibleSection(QStringLiteral("المطابقة"), page, QStringLiteral("drawer/matching"));
+    auto *matchingBody = matching->content();
+    auto *thresholdSlider = new ValueSlider(matchingBody);
+    m_thresholdSlider = thresholdSlider;
+    m_thresholdSlider->setRange(15, 80);
+    m_thresholdSlider->setValue(30);
+    m_thresholdSlider->setToolTip(QStringLiteral("أعلى = أخطاء أقل لكن قد لا يُتعرف على الصور الرديئة جداً.\nأقل = يتعرف أكثر مع احتمال خطأ أكبر."));
+    m_thresholdWarning = hint(matchingBody, QStringLiteral("أقل من 30%: قد يُنسب وجه شخص غير مسجل إلى شخص معروف يشبهه. "
+                                                           "يُنصح بـ 30% إلى 40%، خاصة مع الفيديو منخفض الجودة."));
+    m_thresholdWarning->setStyleSheet(QStringLiteral("font-size: 9pt; color: %1;").arg(Theme::Warning.name()));
+    m_thresholdWarning->setVisible(false);
+    connect(m_thresholdSlider, &QSlider::valueChanged, this, [this, thresholdSlider](int value) {
+        m_thresholdWarning->setVisible(value < 30);
+        thresholdSlider->setAccent(value < 30 ? Theme::Warning : Theme::Accent);
+        // التحذير يبقى ظاهراً على زر الإعدادات وإن كان الدرج مغلقاً
+        if (m_advancedButton)
+            m_advancedButton->setIconName(value < 30 ? Icons::Name::Alert : Icons::Name::Sliders);
+        m_videoWorker->setThreshold(threshold());
+        refreshMatches();
+        if (m_matchPage)
+            m_matchPage->refresh();
+    });
+    matching->contentLayout()->addWidget(label(QStringLiteral("حد التعرف"), QStringLiteral("muted"), matchingBody));
+    matching->contentLayout()->addWidget(m_thresholdSlider);
+    matching->contentLayout()->addWidget(m_thresholdWarning);
+    drawer->addWidget(matching);
+
+    // القسم الثالث: الموارد
+    auto *resources = new CollapsibleSection(QStringLiteral("الموارد وكرت الشاشة"), page, QStringLiteral("drawer/resources"));
+    auto *resourcesBody = resources->content();
+    m_performanceCombo = new SegmentedControl({QStringLiteral("خفيف"), QStringLiteral("متوازن"), QStringLiteral("أقصى سرعة")}, resourcesBody);
+    m_performanceCombo->setExpanding(true);
+    m_performanceCombo->setCurrentIndex(int(Performance::saved()));
+    for (int i = 0; i < 3; ++i)
+        m_performanceCombo->setItemToolTip(i, Performance::describe(Performance::Level(i)));
+    auto *performanceHint = hint(resourcesBody, QString());
+    auto describePerformance = [this, performanceHint] {
+        performanceHint->setText(Performance::describe(Performance::Level(m_performanceCombo->currentIndex()))
+                                 + QStringLiteral(" · إن كان الجهاز يعلق أثناء تحليل الفيديو اختر «خفيف»."));
+    };
+    describePerformance();
+    connect(m_performanceCombo, &SegmentedControl::currentChanged, this, [this, describePerformance](int index) {
+        const auto level = Performance::Level(index);
+        Performance::save(level);
+        Performance::apply(level);
+        describePerformance();
+        // نماذج التعرف تأخذ عدد الأنوية عند تحميلها، أما الأولوية فتتغير فوراً
+        statusBar()->showMessage(Performance::describe(level)
+                                     + QStringLiteral(" · الأولوية تغيّرت الآن، وعدد الأنوية يُطبَّق كاملاً عند إعادة تشغيل البرنامج"),
+                                 8000);
+    });
+    m_gpuSwitch = new ToggleSwitch(QStringLiteral("التحليل على كرت الشاشة"), resourcesBody);
     const QString gpu = FaceEngine::availableGpu();
     m_gpuSwitch->setChecked(Performance::gpuEnabled() && !gpu.isEmpty());
     m_gpuSwitch->setEnabled(!gpu.isEmpty());
@@ -910,29 +921,42 @@ QWidget *MainWindow::createRecognitionPage()
         else
             applyEngineDevice();
     });
-    m_gpuCheckButton = new FancyButton(Icons::Name::Scan, QStringLiteral("فحص"), FancyButton::Kind::Secondary, settings);
+    m_gpuCheckButton = new FancyButton(Icons::Name::Scan, QStringLiteral("فحص"), FancyButton::Kind::Secondary, resourcesBody);
     m_gpuCheckButton->setToolTip(QStringLiteral("قياس سرعة التحليل على كرت الشاشة مقابل المعالج، والتحقق أن نتائجه مطابقة للمعالج"));
     connect(m_gpuCheckButton, &QAbstractButton::clicked, this, [this] { verifyGpu(true); });
-    auto *gpuCheck = m_gpuCheckButton;
-    auto *gpuSwitch = m_gpuSwitch;
-    QWidget *resourcesGroup = group({new QLabel(QStringLiteral("استهلاك الموارد"), settings), m_performanceCombo, gpuSwitch, gpuCheck});
-    settingsLayout->addWidget(regionGroup);
-    settingsLayout->addWidget(m_recordGroup);
-    m_recordGroup->setVisible(false);
-    m_advancedButton = new FancyButton(Icons::Name::Sliders, QStringLiteral("إعدادات التحليل"), FancyButton::Kind::Secondary, settings);
-    m_advancedButton->setCheckable(true);
-    m_advancedButton->setToolTip(QStringLiteral("الإعدادات الأقل استخداماً: حد التعرف، تحليل إطار من كل كم إطار، استهلاك المعالج، وكرت الشاشة"));
-    connect(m_advancedButton, &QAbstractButton::toggled, this, &MainWindow::setAdvancedSettingsVisible);
-    settingsLayout->addWidget(m_advancedButton);
-    // المجموعات تنتقل إلى اللوحة المطوية؛ أُنشئت بأب settings فيُعاد تعيين أبيها
-    QWidget *thresholdGroup = group({new QLabel(QStringLiteral("حد التعرف"), settings), m_thresholdSlider, m_thresholdValue, m_thresholdWarning});
-    for (QWidget *advanced : {thresholdGroup, frameStepGroup, resourcesGroup}) {
-        advanced->setParent(m_advancedPanel);
-        advancedLayout->addWidget(advanced);
-    }
-    m_advancedPanel->setVisible(false);
-    layout->addWidget(settingsCard);
-    layout->addWidget(createStatusStrip(page));
+    auto *gpuRow = new QHBoxLayout;
+    gpuRow->addWidget(m_gpuSwitch, 1);
+    gpuRow->addWidget(m_gpuCheckButton);
+    resources->contentLayout()->addWidget(label(QStringLiteral("استهلاك المعالج"), QStringLiteral("muted"), resourcesBody));
+    resources->contentLayout()->addWidget(m_performanceCombo);
+    resources->contentLayout()->addWidget(performanceHint);
+    resources->contentLayout()->addLayout(gpuRow);
+    drawer->addWidget(resources);
+
+    // القسم الرابع: تسجيل الكاميرا، للكاميرا فقط
+    auto *recording = new CollapsibleSection(QStringLiteral("تسجيل الكاميرا"), page, QStringLiteral("drawer/recording"));
+    auto *recordingBody = recording->content();
+    m_autoRecordSwitch = new ToggleSwitch(QStringLiteral("تسجيل تلقائي عند تشغيل الكاميرا"), recordingBody);
+    m_autoRecordSwitch->setToolTip(QStringLiteral("يبدأ تسجيل الكاميرا وحده كلما شُغّلت"));
+    m_autoRecordSwitch->setChecked(CameraRecorder::autoRecord());
+    connect(m_autoRecordSwitch, &QAbstractButton::toggled, this, [](bool on) { CameraRecorder::setAutoRecord(on); });
+    auto *recordFolderButton = new FancyButton(Icons::Name::Folder, QStringLiteral("مجلد التسجيلات وخياراته"), FancyButton::Kind::Secondary, recordingBody);
+    recordFolderButton->setToolTip(QStringLiteral("مجلد تسجيلات الكاميرا، والتسجيل عند الحركة فقط، ورسم الوجوه، وحذف القديم تلقائياً"));
+    connect(recordFolderButton, &QAbstractButton::clicked, this, &MainWindow::showRecordFolderMenu);
+    recording->contentLayout()->addWidget(m_autoRecordSwitch);
+    recording->contentLayout()->addWidget(recordFolderButton);
+    m_recordGroup = recording;
+    drawer->addWidget(recording);
+    drawer->addStretch(1);
+
+    m_reanalyzeButton = new FancyButton(Icons::Name::Film, QStringLiteral("إعادة التحليل بهذه الإعدادات"), FancyButton::Kind::Primary, page);
+    m_reanalyzeButton->setToolTip(QStringLiteral("إعادة تحليل آخر فيديو بالإعدادات والجزء والمنطقة الحالية"));
+    connect(m_reanalyzeButton, &QAbstractButton::clicked, this, [this] {
+        m_settingsDrawer->setOpen(false);
+        reanalyzeVideo();
+    });
+    m_settingsDrawer->footerLayout()->addWidget(m_reanalyzeButton);
+    updateFiltersButton();
 
     m_progress = new QProgressBar(page);
     m_progress->setObjectName(QStringLiteral("thinProgress"));
@@ -949,8 +973,8 @@ QWidget *MainWindow::createRecognitionPage()
     // شريط تنبيه المراقبة: يظهر عندما يُتعرَّف على شخص من قائمة المراقبة
     m_alertBar = new QFrame(page);
     m_alertBar->setObjectName(QStringLiteral("alertBar"));
-    m_alertBar->setStyleSheet(QStringLiteral("#alertBar { background: #0f2a55; border: 2px solid %1; border-radius: 12px; }")
-                                  .arg(Theme::Accent.name()));
+    m_alertBar->setStyleSheet(QStringLiteral("#alertBar { background: %2; border: 2px solid %1; border-radius: 12px; }")
+                                  .arg(Theme::Danger.name(), Theme::mix(Theme::Surface, Theme::Danger, 0.18).name()));
     auto *alertLayout = new QHBoxLayout(m_alertBar);
     alertLayout->setContentsMargins(14, 8, 14, 8);
     alertLayout->setSpacing(12);
@@ -994,8 +1018,8 @@ QWidget *MainWindow::createRecognitionPage()
         m_alertPulse->setProperty("step", step);
         const bool bright = step % 2 == 1;
         m_alertBar->setStyleSheet(QStringLiteral("#alertBar { background: %1; border: 2px solid %2; border-radius: 12px; }")
-                                      .arg(bright ? QStringLiteral("#123a7a") : QStringLiteral("#0f2a55"),
-                                           bright ? Theme::Accent2.name() : Theme::Accent.name()));
+                                      .arg(Theme::mix(Theme::Surface, Theme::Danger, bright ? 0.32 : 0.18).name(),
+                                           bright ? Theme::Highlight.name() : Theme::Danger.name()));
         if (step >= 8)
             m_alertPulse->stop();
     });
@@ -1071,44 +1095,45 @@ QWidget *MainWindow::createRecognitionPage()
 
     setupFacePanel(side, sideLayout);
 
-    // الخط الزمني أسفل الفيديو بأسلوب برامج المونتاج
-    m_timelineCard = card(page);
-    auto *timelineLayout = new QVBoxLayout(m_timelineCard);
-    timelineLayout->setContentsMargins(10, 6, 10, 8);
-    timelineLayout->setSpacing(4);
-    auto *timelineHeader = new QHBoxLayout;
-    timelineHeader->setSpacing(6);
-    timelineHeader->addWidget(label(QStringLiteral("الخط الزمني"), QStringLiteral("sectionTitle"), m_timelineCard));
-    auto *timelineHint = label(QStringLiteral("انقر لعرض أي لحظة · انقر اسم شخص للانتقال إلى ظهوره التالي · اسحب المقبضين الأصفرين للاقتطاع · "
-                                              "الزر الأيمن للعمليات والعلامات · Ctrl+العجلة للتكبير"),
-                               QStringLiteral("muted"), m_timelineCard);
-    timelineHint->setMinimumWidth(10);
-    timelineHeader->addWidget(timelineHint, 1);
-    m_timeline = new TimelineView(m_timelineCard);
-    m_laneFilter = new QComboBox(m_timelineCard);
-    m_laneFilter->addItems({QStringLiteral("كل الأشخاص"), QStringLiteral("المعروفون"), QStringLiteral("المحتملون"),
-                            QStringLiteral("غير المعروفين"), QStringLiteral("المراقَبون")});
+    // الخط الزمني أسفل الفيديو بأسلوب برامج المونتاج، ويُطوى بنقرة على عنوانه
+    auto *timelineSection = new CollapsibleSection(QStringLiteral("الخط الزمني"), page, QStringLiteral("timeline/expanded"));
+    m_timelineCard = timelineSection;
+    timelineSection->setToolTip(QStringLiteral("انقر لعرض أي لحظة · انقر اسم شخص للانتقال إلى ظهوره التالي · اسحب المقبضين الأصفرين للاقتطاع · "
+                                               "الزر الأيمن للعمليات والعلامات · Ctrl+العجلة للتكبير"));
+    auto *timelineLayout = timelineSection->contentLayout();
+    timelineLayout->setContentsMargins(10, 2, 10, 8);
+    m_timeline = new TimelineView(timelineSection->content());
+    m_timeline->setMinimumHeight(120);
+    m_laneFilter = new SegmentedControl({QStringLiteral("الكل"), QStringLiteral("معروف"), QStringLiteral("محتمل"),
+                                         QStringLiteral("مجهول"), QStringLiteral("مراقَب")},
+                                        timelineSection);
     m_laneFilter->setToolTip(QStringLiteral("المسارات الظاهرة في الخط الزمني حسب نتيجة المطابقة"));
-    m_laneFilter->setFocusPolicy(Qt::NoFocus);
     m_laneFilter->setCurrentIndex(std::clamp(QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("timeline/lanes"), 0).toInt(),
                                              0, m_laneFilter->count() - 1));
-    connect(m_laneFilter, &QComboBox::currentIndexChanged, this, [this](int index) {
+    connect(m_laneFilter, &SegmentedControl::currentChanged, this, [this](int index) {
         QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("timeline/lanes"), index);
         rebuildTimelineLanes();
     });
-    timelineHeader->addWidget(m_laneFilter);
-    auto timelineButton = [this](Icons::Name icon, const QString &tip, auto slot) {
-        auto *button = new FancyButton(icon, tip, FancyButton::Kind::Secondary, m_timelineCard);
+    timelineSection->addHeaderWidget(m_laneFilter);
+    auto timelineButton = [this, timelineSection](Icons::Name icon, const QString &tip, auto slot) {
+        auto *button = new FancyButton(icon, tip, FancyButton::Kind::Secondary, timelineSection);
         button->setCompact(true);
         button->setToolTip(tip);
-        button->setFixedSize(34, 30);
+        button->setFixedSize(32, 28);
         connect(button, &QAbstractButton::clicked, m_timeline, slot);
         return button;
     };
-    timelineHeader->addWidget(timelineButton(Icons::Name::ZoomIn, QStringLiteral("تكبير (Ctrl+العجلة)"), &TimelineView::zoomIn));
-    timelineHeader->addWidget(timelineButton(Icons::Name::ZoomOut, QStringLiteral("تصغير"), &TimelineView::zoomOut));
-    timelineHeader->addWidget(timelineButton(Icons::Name::FitWidth, QStringLiteral("عرض الفيديو كله"), &TimelineView::fit));
-    timelineLayout->addLayout(timelineHeader);
+    auto *zoomTools = new QWidget(timelineSection);
+    auto *zoomLayout = new QHBoxLayout(zoomTools);
+    zoomLayout->setContentsMargins(0, 0, 0, 0);
+    zoomLayout->setSpacing(4);
+    zoomLayout->addWidget(timelineButton(Icons::Name::ZoomIn, QStringLiteral("تكبير (Ctrl+العجلة)"), &TimelineView::zoomIn));
+    zoomLayout->addWidget(timelineButton(Icons::Name::ZoomOut, QStringLiteral("تصغير"), &TimelineView::zoomOut));
+    zoomLayout->addWidget(timelineButton(Icons::Name::FitWidth, QStringLiteral("عرض الفيديو كله"), &TimelineView::fit));
+    timelineSection->addHeaderWidget(zoomTools);
+    // أدوات التكبير بلا معنى والخط مطوي
+    zoomTools->setVisible(timelineSection->isExpanded());
+    connect(timelineSection, &CollapsibleSection::expandedChanged, zoomTools, &QWidget::setVisible);
     timelineLayout->addWidget(m_timeline, 1);
     m_timelineCard->setVisible(false);
     connect(m_timeline, &TimelineView::seekRequested, this, &MainWindow::loadVideoFrame);
@@ -1189,6 +1214,8 @@ void MainWindow::updateVideoOptions()
     m_reanalyzeButton->setEnabled(idle && fileVideo);
     m_regionButton->setEnabled(m_ready && (m_view->hasImage() || m_regionButton->isChecked()));
     m_clearRegionButton->setEnabled(!m_view->region().isEmpty());
+    // زر الإلغاء يظهر فقط حين توجد منطقة
+    m_clearRegionButton->setVisible(!m_regionButton->isHidden() && m_clearRegionButton->isEnabled());
     m_enhanceImageButton->setEnabled(!m_analyzing && !m_videoRunning && (!m_videoMode || fileVideo));
 }
 

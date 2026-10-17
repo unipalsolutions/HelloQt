@@ -78,6 +78,8 @@ qt_add_executable(Malamih
     src/icons.cpp
     src/theme.h
     src/theme.cpp
+    src/controls.h
+    src/controls.cpp
     src/widgets.h
     src/widgets.cpp
     src/imageio.h

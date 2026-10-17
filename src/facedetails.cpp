@@ -131,7 +131,7 @@ void FaceDetailsPanel::showDetails(const Details &d)
     if (d.quality < 35) {
         auto *low = new QLabel(QStringLiteral("جودة الوجه منخفضة: النتيجة أقل موثوقية"), m_content);
         low->setWordWrap(true);
-        low->setStyleSheet(QStringLiteral("color: #93c5fd;"));
+        low->setStyleSheet(QStringLiteral("color: #f5a524;"));
         titles->addWidget(low);
     }
     titles->addStretch();

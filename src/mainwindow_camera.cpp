@@ -549,12 +549,12 @@ void MainWindow::showWatchAlert(const FaceItem &face, const QImage &crop)
         where = QStringLiteral(" عند \u2066%1\u2069").arg(ImageIO::formatTime(face.firstSeenMs));
     const QString time = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
     QString text = QStringLiteral("<span style='color:%1; font-weight:700; font-size:12pt'>تنبيه مراقبة: ظهر %2</span>"
-                                  "<br><span style='color:#cfe0ff'>التشابه %3%%4 · الساعة \u2066%5\u2069</span>")
+                                  "<br><span style='color:#e8dccd'>التشابه %3%%4 · الساعة \u2066%5\u2069</span>")
                        .arg(Theme::Accent2.name(), face.match.name.toHtmlEscaped())
                        .arg(qRound(face.match.score * 100))
                        .arg(where, time);
     if (m_alertCount > 1)
-        text += QStringLiteral("<span style='color:#8aa3c7'> · %1 تنبيهات في %2</span>")
+        text += QStringLiteral("<span style='color:#a99a8a'> · %1 تنبيهات في %2</span>")
                     .arg(m_alertCount)
                     .arg(camera ? QStringLiteral("هذه الجلسة") : QStringLiteral("هذا الملف"));
     m_alertText->setText(text);

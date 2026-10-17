@@ -60,6 +60,7 @@ enum class Name {
     Grid,     // عرض شبكي
     List,     // عرض قائمة
     Reject,   // علامة ×
+    More,     // ثلاث نقاط: أدوات إضافية
 };
 
 void paint(QPainter &painter, Name name, const QRectF &rect, const QColor &color);

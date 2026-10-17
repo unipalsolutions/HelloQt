@@ -362,7 +362,8 @@ void MainWindow::toggleVideoFullscreen()
         if (!fileVideoActive())
             return;
         m_fullscreenHidden.clear();
-        const QList<QWidget *> parts = {m_sidebar, m_recognitionHeader, m_settingsCard, m_statusStrip, m_sideCard, m_timelineCard,
+        m_settingsDrawer->setOpen(false);
+        const QList<QWidget *> parts = {m_sidebar, m_recognitionHeader, m_statusStrip, m_sideCard, m_timelineCard,
                                         m_progress->parentWidget(), statusBar()};
         for (QWidget *part : parts) {
             if (part && part->isVisible()) {
@@ -381,10 +382,8 @@ void MainWindow::toggleVideoFullscreen()
                 part->show();
         m_fullscreenHidden.clear();
         // اللوحات التي أخفاها المستخدم بـ P تبقى مخفية
-        if (m_panelsHidden) {
+        if (m_panelsHidden)
             m_sideCard->hide();
-            m_settingsCard->hide();
-        }
         if (m_wasMaximized)
             showMaximized();
         else
@@ -401,7 +400,6 @@ void MainWindow::togglePanels()
         return;
     m_panelsHidden = !m_panelsHidden;
     m_sideCard->setVisible(!m_panelsHidden);
-    m_settingsCard->setVisible(!m_panelsHidden);
     m_playbackBar->setPanelsHidden(m_panelsHidden);
 }
 

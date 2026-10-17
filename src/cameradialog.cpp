@@ -244,7 +244,7 @@ CameraDialog::CameraDialog(QWidget *parent, const QString &selectId)
     m_preview = new QLabel(this);
     m_preview->setAlignment(Qt::AlignCenter);
     m_preview->setFixedSize(400, 225);
-    m_preview->setStyleSheet(QStringLiteral("background: #050d19; border-radius: 10px; color: #8aa0bd;"));
+    m_preview->setStyleSheet(QStringLiteral("background: #0e0b09; border-radius: 10px; color: #a99a8a;"));
     m_preview->setText(QStringLiteral("اضغط «اختبار» لرؤية صورة من الكاميرا"));
     m_preview->setWordWrap(true);
     previewColumn->addWidget(m_preview);

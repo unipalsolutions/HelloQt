@@ -48,6 +48,11 @@ class MultiCameraWindow;
 class QProgressBar;
 class QSlider;
 class QSpinBox;
+class SegmentedControl;
+class SideDrawer;
+class Stepper;
+class ProgressRing;
+class CollapsibleSection;
 class QThread;
 class ToggleSwitch;
 class TimelineView;
@@ -407,11 +412,10 @@ private:
     FancyButton *m_saveFacesButton = nullptr;
     FancyButton *m_enrollFaceButton = nullptr;
     QSlider *m_thresholdSlider = nullptr;
-    QLabel *m_thresholdValue = nullptr;
     ToggleSwitch *m_thoroughSwitch = nullptr;
     ToggleSwitch *m_enhanceSwitch = nullptr;
-    QSpinBox *m_frameStepSpin = nullptr;
-    QComboBox *m_performanceCombo = nullptr;
+    Stepper *m_frameStepSpin = nullptr;
+    SegmentedControl *m_performanceCombo = nullptr;
     FancyButton *m_enhanceImageButton = nullptr;
     FancyButton *m_folderScanButton = nullptr;
     QPointer<ArchiveScanDialog> m_archiveDialog;
@@ -426,8 +430,7 @@ private:
     FancyButton *m_reanalyzeButton = nullptr;
     FancyButton *m_filtersButton = nullptr;
     QLineEdit *m_faceFilter = nullptr;
-    QButtonGroup *m_faceTabs = nullptr;        // الكل، معروفون، محتملون، مجهولون، مراقَبون
-    QList<QToolButton *> m_faceTabButtons;
+    SegmentedControl *m_faceTabs = nullptr;    // الكل، معروفون، محتملون، مجهولون، مراقَبون
     QTimer *m_faceTabsTimer = nullptr;         // تحديث عدادات التبويبات مرة كل ربع ثانية على الأكثر أثناء التحليل
     FancyButton *m_gridViewButton = nullptr;
     FancyButton *m_listViewButton = nullptr;
@@ -438,13 +441,15 @@ private:
     FancyButton *m_mergeSuggestButton = nullptr; // «غالباً الشخص نفسه»
     QComboBox *m_faceSort = nullptr;
     FancyButton *m_viewShotButton = nullptr;
-    QList<QWidget *> m_videoSettings;
     PlaybackBar *m_playbackBar = nullptr;
     VideoAudio *m_audio = nullptr;
     QWidget *m_recognitionHeader = nullptr;
-    QWidget *m_settingsCard = nullptr;
+    QLabel *m_pageTitle = nullptr;              // «التعرف على الوجوه» بلا ملف
+    QLabel *m_fileTitle = nullptr;              // اسم الملف المفتوح ومعلوماته بدل العنوان
+    QWidget *m_toolsSeparator = nullptr;
+    SideDrawer *m_settingsDrawer = nullptr;     // درج «إعدادات التحليل»
     QWidget *m_sideCard = nullptr;
-    QComboBox *m_laneFilter = nullptr;          // تصفية مسارات الخط الزمني حسب الحالة
+    SegmentedControl *m_laneFilter = nullptr;          // تصفية مسارات الخط الزمني حسب الحالة
     QMap<qint64, QString> m_markers;            // علامات الفيديو الحالي وملاحظاتها
     QList<qint64> m_shotChanges;                // مواضع تغيّر اللقطة التي وجدها التحليل
     QStringList m_videoSiblings;                // فيديوهات مجلد الفيديو الحالي بالترتيب الطبيعي
@@ -456,11 +461,9 @@ private:
     StartScreen *m_startScreen = nullptr;
     FancyButton *m_openMenuButton = nullptr;    // «فتح» يجمع أزرار الفتح بعد فتح ملف
     QWidget *m_frameStepGroup = nullptr;
-    QWidget *m_regionGroup = nullptr;
     FancyButton *m_advancedButton = nullptr;    // إظهار «إعدادات التحليل» النادرة أو طيّها
-    QWidget *m_advancedPanel = nullptr;
     QWidget *m_statusStrip = nullptr;           // ماذا يجري، كم بقي، والخطوة المقترحة
-    QLabel *m_statusIcon = nullptr;
+    ProgressRing *m_statusRing = nullptr;
     QLabel *m_statusTitle = nullptr;
     QLabel *m_statusDetail = nullptr;
     QLabel *m_statusHint = nullptr;
