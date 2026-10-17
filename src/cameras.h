@@ -10,8 +10,10 @@
 #include <opencv2/videoio.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -144,13 +146,53 @@ cv::Mat snapshot(const Camera &camera, QString *error, QString *info = nullptr);
 // يحوّل إطار الكاميرا إلى BGR بثماني بتات (رمادي، أربع قنوات، YUY2، 16 بت)، false إن تعذر
 bool normalizeFrame(cv::Mat &frame);
 
+// أحدث إطار من الكاميرا لمن يعرضه: يكتبه القارئ ويقرؤه العرض دون أن يأخذه من التحليل،
+// فيُعرض البث بسرعة الكاميرا مهما أبطأ التحليل. يبقى حياً عبر إعادة الاتصال
+class FrameSlot
+{
+public:
+    void publish(const cv::Mat &frame)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_frame = frame;
+        ++m_sequence;
+        m_ready.notify_all();
+    }
+    // ينتظر إطاراً أحدث من seen؛ false عند انتهاء المهلة
+    bool wait(quint64 &seen, cv::Mat &frame, int timeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        if (!m_ready.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] { return m_sequence > seen || m_closed; })
+            || m_sequence <= seen)
+            return false;
+        frame = m_frame;
+        seen = m_sequence;
+        return true;
+    }
+    void close()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_closed = true;
+        m_ready.notify_all();
+    }
+
+private:
+    std::mutex m_mutex;
+    std::condition_variable m_ready;
+    cv::Mat m_frame;
+    quint64 m_sequence = 0;
+    bool m_closed = false;
+};
+
 // يقرأ الكاميرا في خيط خاص ويحتفظ بأحدث إطار فقط، فلا يتأخر التحليل عن البث الحي
 // ولا تتراكم الإطارات عندما يكون التحليل أبطأ من الكاميرا
 class LiveReader
 {
 public:
     // recorder (اختياري) يتسلم كل إطار يصل من الكاميرا، لا ما يُحلَّل فقط
-    explicit LiveReader(const Camera &camera, CameraRecorder *recorder = nullptr);
+    // display (اختياري) يتسلم كل إطار للعرض
+    explicit LiveReader(const Camera &camera, CameraRecorder *recorder = nullptr,
+                        std::shared_ptr<FrameSlot> display = nullptr);
     ~LiveReader();
 
     bool open(QString *error);
@@ -166,6 +208,7 @@ private:
 
     Camera m_camera;
     CameraRecorder *m_recorder = nullptr;
+    std::shared_ptr<FrameSlot> m_display;
     cv::VideoCapture m_capture;
     std::thread m_thread;
     std::mutex m_mutex;

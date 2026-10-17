@@ -13,11 +13,15 @@
 #include <QRectF>
 
 #include <atomic>
+#include <memory>
 
 #include <opencv2/core.hpp>
 
 class CameraRecorder;
 class FaceEngine;
+namespace Cameras {
+class FrameSlot;
+}
 
 // يحلل الفيديو أو الكاميرا في خيط منفصل ويتتبع كل وجه عبر الإطارات
 class VideoWorker : public QObject
@@ -51,14 +55,24 @@ public:
     void setRecorder(CameraRecorder *recorder) { m_recorder = recorder; }
     // آخر إطار من الكاميرا كما وصل قبل المعالجات (لمعاينة المعالجات أثناء البث)
     cv::Mat lastCameraFrame();
+    // يتسلم كل إطار من الكاميرا للعرض بسرعتها (VideoPlayer)؛ يُضبط قبل التشغيل
+    void setLiveFrames(std::shared_ptr<Cameras::FrameSlot> slot);
+    // false: frameReady للملفات بلا صورة ولا انتظار للواجهة، لأن العرض من VideoPlayer
+    // (الكاميرا ترسل الصورة دائماً للقطات التنبيهات)
+    void setDeliverFrames(bool deliver) { m_deliverFrames = deliver; }
+    // الوضع التلقائي للملفات: يقل عدد الإطارات المحللة على الجهاز البطيء ليبقى التحليل قريباً من التشغيل
+    void setAdaptive(bool adaptive) { m_adaptive = adaptive; }
 
 public slots:
     void process(const QString &source); // مسار ملف، أو "camera:<رقم أو معرّف كاميرا محفوظة>"
 
 signals:
     void started(int frameStep, double fps, qint64 durationMs);
-    // progress من 0 إلى 1 ضمن الجزء المطلوب (سالب للكاميرا)
+    // progress من 0 إلى 1 ضمن الجزء المطلوب (سالب للكاميرا). مواضع الوجوه على الإطار بعد المعالجات
+    // مصغراً إلى 1920 بكسل على الأكثر (كما يعرضه VideoPlayer)، وframe فارغ إن لم يُطلب
     void frameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress);
+    // صورة مصغرة لشريط الزمن، كل ثانية تقريباً من الجزء المحلل (للملفات حين لا تُرسل الإطارات)
+    void thumbnailReady(qint64 positionMs, const QImage &thumbnail);
     void trackUpdated(const FaceItem &track);
     // تبيّن أن هويتين لشخص واحد فدُمجتا؛ removedId لم يعد موجوداً
     void identitiesMerged(int keepId, int removedId);
@@ -86,5 +100,8 @@ private:
     std::atomic<bool> m_stop{false};
     std::atomic<bool> m_paused{false};
     std::atomic<int> m_pendingFrames{0};
+    std::atomic<bool> m_deliverFrames{true};
+    std::atomic<bool> m_adaptive{false};
     cv::Mat m_lastCameraFrame; // يحميه m_mutex
+    std::shared_ptr<Cameras::FrameSlot> m_liveFrames; // يحميه m_mutex
 };

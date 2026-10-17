@@ -75,6 +75,8 @@ qt_add_executable(Malamih
     src/persondialog.cpp
     src/personmodel.h
     src/personmodel.cpp
+    src/videoplayer.h
+    src/videoplayer.cpp
     src/videoworker.h
     src/videoworker.cpp
     src/shotviewer.h

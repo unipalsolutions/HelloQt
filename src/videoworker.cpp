@@ -49,6 +49,8 @@ constexpr double IdleAnalysisRate = 2.0;  // عند خلو المشهد من ا�
 constexpr int IdleAfter = 20;             // إطارات محللة متتالية بلا وجوه قبل خفض المعدل
 constexpr double StillDifference = 1.6;   // متوسط تغيّر البكسل (من 255) الذي يُعد دونه الإطار ساكناً
 constexpr int MaxStillSkips = 50;
+constexpr double MinAnalysisRate = 4.0;   // أقل معدل يصل إليه التكيّف مع الجهاز البطيء (إطارات محللة لكل ثانية)
+constexpr int ThumbnailHeight = 120;
 // الكاميرا تعمل أياماً ويمر أمامها آلاف الأشخاص: أقدم من غاب طويلاً يُنسى (ظهوره سُجِّل في القاعدة)
 // فتبقى الذاكرة وسرعة البحث ثابتتين
 constexpr size_t MaxCameraIdentities = 300;
@@ -304,6 +306,12 @@ void VideoWorker::frameShown()
     --m_pendingFrames;
 }
 
+void VideoWorker::setLiveFrames(std::shared_ptr<Cameras::FrameSlot> slot)
+{
+    QMutexLocker locker(&m_mutex);
+    m_liveFrames = std::move(slot);
+}
+
 cv::Mat VideoWorker::lastCameraFrame()
 {
     QMutexLocker locker(&m_mutex);
@@ -339,12 +347,17 @@ void VideoWorker::run(const QString &source)
     // الكاميرا تُقرأ في خيط خاص يحتفظ بأحدث إطار، فلا يتأخر العرض عنها عندما يكون التحليل أبطأ منها
     Cameras::Camera cameraSpec;
     std::unique_ptr<Cameras::LiveReader> live;
+    std::shared_ptr<Cameras::FrameSlot> liveFrames;
+    {
+        QMutexLocker locker(&m_mutex);
+        liveFrames = m_liveFrames;
+    }
     if (camera) {
         if (!Cameras::resolve(source.mid(7), &cameraSpec)) {
             emit finished(QStringLiteral("هذه الكاميرا لم تعد في قائمة الكاميرات"));
             return;
         }
-        live = std::make_unique<Cameras::LiveReader>(cameraSpec, m_recorder);
+        live = std::make_unique<Cameras::LiveReader>(cameraSpec, m_recorder, liveFrames);
         QString error;
         if (!live->open(&error)) {
             emit finished(error.isEmpty() ? QStringLiteral("تعذر فتح الكاميرا") : error);
@@ -368,6 +381,13 @@ void VideoWorker::run(const QString &source)
     int currentStep = step;
     int skip = 0;
     int idleAnalyses = 0;
+    // التكيّف مع سرعة الجهاز: متوسط زمن تحليل الإطار، ومنه كم إطاراً يمر من الفيديو أثناء تحليل واحد
+    const bool adaptive = automatic && m_adaptive;
+    const int slowestStep = std::max(step, int(std::lround(rate / MinAnalysisRate)));
+    double analysisCostMs = 0.0;
+    QElapsedTimer analysisClock;
+    const bool deliverFrames = camera || m_deliverFrames;
+    qint64 lastThumbnailMs = LLONG_MIN / 2;
     QElapsedTimer cameraClock;
     cameraClock.start();
 
@@ -556,7 +576,7 @@ void VideoWorker::run(const QString &source)
                         QThread::msleep(100);
                     if (m_stop)
                         break;
-                    auto reader = std::make_unique<Cameras::LiveReader>(cameraSpec, m_recorder);
+                    auto reader = std::make_unique<Cameras::LiveReader>(cameraSpec, m_recorder, liveFrames);
                     if (reader->open(nullptr)) {
                         live = std::move(reader);
                         break;
@@ -582,6 +602,7 @@ void VideoWorker::run(const QString &source)
         if (frame.empty())
             continue;
         ++processed;
+        analysisClock.start();
         const qint64 positionMs = camera ? cameraClock.elapsed()
             : validFps ? qint64(double(frameIndex - 1) * 1000.0 / fps)
                        : qint64(capture.get(cv::CAP_PROP_POS_MSEC));
@@ -645,9 +666,9 @@ void VideoWorker::run(const QString &source)
         // يتغير عن آخر إطار فُحص ما دام لا يوجد وجه متتبَّع؛ أي حركة تعيد الفحص فوراً
         bool still = false;
         if (filters.skipStill) {
-            cv::Mat small, gray;
-            cv::resize(frame, small, cv::Size(96, std::max(1, 96 * frame.rows / std::max(1, frame.cols))), 0, 0, cv::INTER_AREA);
-            cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
+            cv::Mat reduced, gray;
+            cv::resize(frame, reduced, cv::Size(96, std::max(1, 96 * frame.rows / std::max(1, frame.cols))), 0, 0, cv::INTER_AREA);
+            cv::cvtColor(reduced, gray, cv::COLOR_BGR2GRAY);
             const bool tracking = std::any_of(tracks.begin(), tracks.end(), [&](const Track &t) {
                 return !t.closed && processed - t.lastSeen <= MaxTrackGap;
             });
@@ -681,7 +702,11 @@ void VideoWorker::run(const QString &source)
         // في الوضع التلقائي: مشهد بلا وجوه لفترة يُفحص بمعدل أقل حتى يظهر وجه
         idleAnalyses = detections.empty() ? idleAnalyses + 1 : 0;
         if (automatic) {
-            const int wanted = idleAnalyses >= IdleAfter ? idleStep : step;
+            int wanted = idleAnalyses >= IdleAfter ? idleStep : step;
+            if (adaptive && analysisCostMs > 0.0) {
+                const int needed = int(std::ceil(analysisCostMs * rate / 1000.0));
+                wanted = std::max(wanted, std::clamp(needed, step, slowestStep));
+            }
             if (wanted != currentStep) {
                 currentStep = wanted;
                 skip = std::min(skip, currentStep - 1);
@@ -724,7 +749,8 @@ void VideoWorker::run(const QString &source)
             if (detection.needsEmbedding)
                 toEmbed.push_back(detection.aligned);
         }
-        const std::vector<std::vector<float>> embeddings = m_engine->embedMany(toEmbed);
+        // دون الصورة المعكوسة: الوجه يظهر في إطارات كثيرة بزوايا مختلفة فلا تضيف دقة تُذكر، وتضاعف الزمن
+        const std::vector<std::vector<float>> embeddings = m_engine->embedMany(toEmbed, false);
         for (size_t d = 0, e = 0; d < detections.size() && e < embeddings.size(); ++d) {
             if (detections[d].needsEmbedding)
                 detections[d].embedding = embeddings[e++];
@@ -785,7 +811,8 @@ void VideoWorker::run(const QString &source)
 
         // 5) تحديث الهويات: تجميع البصمات مرجّحة بالجودة، فكلما طال ظهور الوجه زادت دقة التعرف
         QList<FaceItem> current;
-        const double displayScale = std::min(1.0, double(MaxDisplaySide) / std::max(work.cols, work.rows));
+        // المواضع على الإطار بعد المعالجات ودون التحسين، مصغراً كما يعرضه VideoPlayer
+        const double displayScale = std::min(1.0, double(MaxDisplaySide) / std::max(frame.cols, frame.rows)) / scale;
         for (Detection &detection : detections) {
             if (detection.track < 0)
                 continue;
@@ -896,17 +923,31 @@ void VideoWorker::run(const QString &source)
             }
         }
 
-        // لا تُرسل إطارات جديدة إذا كانت الواجهة متأخرة في عرض السابقة
-        if (m_pendingFrames < MaxPendingFrames) {
+        double progress = -1.0;
+        if (!camera && endFrame > startFrame)
+            progress = std::clamp(double(frameIndex - startFrame) / double(endFrame - startFrame), 0.0, 1.0);
+        if (!deliverFrames) {
+            // العرض من VideoPlayer: النتيجة وحدها بلا صورة، فلا ينتظر التحليل الواجهة
+            emit frameReady(QImage(), current, positionMs, progress);
+            const qint64 spacing = std::max<qint64>(1000, durationMs / 600);
+            if (positionMs - lastThumbnailMs >= spacing) {
+                lastThumbnailMs = positionMs;
+                cv::Mat thumbnail;
+                const double thumbnailScale = std::min(1.0, double(ThumbnailHeight) / std::max(1, frame.rows));
+                cv::resize(frame, thumbnail, cv::Size(), thumbnailScale, thumbnailScale, cv::INTER_AREA);
+                emit thumbnailReady(positionMs, ImageIO::toQImage(thumbnail));
+            }
+        } else if (m_pendingFrames < MaxPendingFrames) {
+            // لا تُرسل إطارات جديدة إذا كانت الواجهة متأخرة في عرض السابقة
             ++m_pendingFrames;
-            cv::Mat display = work;
-            if (displayScale < 1.0)
-                cv::resize(work, display, cv::Size(), displayScale, displayScale, cv::INTER_AREA);
-            double progress = -1.0;
-            if (!camera && endFrame > startFrame)
-                progress = std::clamp(double(frameIndex - startFrame) / double(endFrame - startFrame), 0.0, 1.0);
+            const double frameScale = std::min(1.0, double(MaxDisplaySide) / std::max(frame.cols, frame.rows));
+            cv::Mat display = frame;
+            if (frameScale < 1.0)
+                cv::resize(frame, display, cv::Size(), frameScale, frameScale, cv::INTER_AREA);
             emit frameReady(ImageIO::toQImage(display), current, positionMs, progress);
         }
+        const double cost = double(analysisClock.nsecsElapsed()) / 1e6;
+        analysisCostMs = analysisCostMs > 0.0 ? analysisCostMs * 0.8 + cost * 0.2 : cost;
     }
 
     // دمج أخير ثم التحديث الأخير لكل وجه بعدد إطاراته ونتيجته النهائية

@@ -73,7 +73,7 @@ int Settings::activeCount() const
 {
     return int(quarterTurns % 4 != 0) + int(mirror) + int(flip) + int(deinterlace) + int(autoLevels) + int(grayscale)
         + int(brightness != 0) + int(contrast != 0) + int(denoise != 0) + int(sharpen != 0) + int(minFaceSize > 0)
-        + int(skipStill);
+        + int(!skipStill); // تخطي الساكن مفعّل افتراضياً، فإيقافه هو الذي يُعد
 }
 
 QString Settings::summary(bool withAnalysis) const
@@ -101,8 +101,8 @@ QString Settings::summary(bool withAnalysis) const
         parts << QStringLiteral("حدة %1").arg(sharpen);
     if (withAnalysis && minFaceSize > 0)
         parts << QStringLiteral("وجوه من %1 بكسل").arg(minFaceSize);
-    if (withAnalysis && skipStill)
-        parts << QStringLiteral("تخطي الساكن");
+    if (withAnalysis && !skipStill)
+        parts << QStringLiteral("فحص كل الإطارات");
     return parts.join(QStringLiteral(" · "));
 }
 
@@ -133,7 +133,7 @@ Settings read(const QSettings &store)
     s.denoise = std::clamp(store.value(QStringLiteral("denoise"), 0).toInt(), 0, 100);
     s.sharpen = std::clamp(store.value(QStringLiteral("sharpen"), 0).toInt(), 0, 100);
     s.minFaceSize = std::clamp(store.value(QStringLiteral("minFaceSize"), 0).toInt(), 0, 400);
-    s.skipStill = store.value(QStringLiteral("skipStill"), false).toBool();
+    s.skipStill = store.value(QStringLiteral("skipStill"), true).toBool();
     return s;
 }
 

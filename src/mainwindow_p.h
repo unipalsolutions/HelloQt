@@ -40,6 +40,7 @@
 #include "videoexport.h"
 #include "videofilters.h"
 #include "videofiltersdialog.h"
+#include "videoplayer.h"
 #include "videoworker.h"
 #include "visitorsdialog.h"
 #include "widgets.h"

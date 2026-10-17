@@ -10,6 +10,7 @@
 #include <QFutureWatcher>
 #include <QList>
 #include <QMainWindow>
+#include <QMap>
 #include <QPointer>
 #include <QRectF>
 #include <QSet>
@@ -39,6 +40,7 @@ class QSpinBox;
 class QThread;
 class ToggleSwitch;
 class TimelineView;
+class VideoPlayer;
 class VideoWorker;
 class MatchPage;
 class QFrame;
@@ -128,6 +130,12 @@ private:
     void onFrameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress);
     void onTrackUpdated(const FaceItem &track);
     void onVideoFinished(const QString &error);
+    void onPlayerFrame(const QImage &frame, qint64 positionMs);
+    // وجوه الموضع المعروض من نتائج التحليل المحفوظة، بين أقرب إطارين محللين
+    QList<FaceItem> analyzedFacesAt(qint64 positionMs) const;
+    bool hasAnalysisNear(qint64 positionMs) const;
+    bool filePlayerOpen() const;
+    void updatePauseButton();
     void saveFaces();
     void updateFolderNavigation();
     void navigateImage(int step);
@@ -261,6 +269,10 @@ private:
     VideoFilters::Settings m_fileFilters; // معالجات الملفات، تعود بعد إيقاف كاميرا بمعالجاتها الخاصة
     qint64 m_restartFromMs = -1; // إعادة التحليل من موضع بعد توقف التحليل الجاري
     QSet<int> m_hiddenFaces;     // وجوه حذفها المستخدم أثناء التحليل فلا تعود للظهور
+    // العرض بسرعة الفيديو الأصلية منفصلاً عن التحليل، ونتائج التحليل لكل موضع محلل لتُعرض عليه
+    VideoPlayer *m_player = nullptr;
+    QMap<qint64, QList<FaceItem>> m_analyzedFaces;
+    QHash<int, int> m_mergedInto; // هوية دُمجت ← الهوية الباقية
     double m_videoFps = 25.0;
     // قراءة إطار من الفيديو عند النقر على الخط الزمني بعد انتهاء التحليل
     std::shared_ptr<cv::VideoCapture> m_frameCapture;

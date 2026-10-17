@@ -1,0 +1,257 @@
+#include "videoplayer.h"
+
+#include "cameras.h"
+#include "imageio.h"
+#include "videofilters.h"
+
+#include <QElapsedTimer>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <utility>
+
+#include <opencv2/imgproc.hpp>
+#include <opencv2/videoio.hpp>
+
+namespace {
+
+constexpr int MaxDisplaySide = 1920; // القاعدة نفسها في VideoWorker، فتنطبق مواضع الوجوه
+constexpr int MaxPendingFrames = 2;
+constexpr int MaxLateGrabs = 4;      // إطارات متأخرة تُتخطى دون تحويلها قبل عرض واحد منها
+constexpr double MaxLagMs = 1000.0;  // تأخر أكبر من هذا (جهاز لا يلحق بفك الترميز) يُبطئ التشغيل بدل القفز
+
+} // namespace
+
+VideoPlayer::VideoPlayer(QObject *parent)
+    : QObject(parent)
+{
+}
+
+VideoPlayer::~VideoPlayer()
+{
+    close();
+}
+
+QImage VideoPlayer::displayImage(const cv::Mat &frame)
+{
+    if (frame.empty())
+        return {};
+    const VideoFilters::Settings filters = VideoFilters::current();
+    cv::Mat filtered = filters.isIdentity() ? frame : VideoFilters::apply(frame, filters);
+    const double scale = std::min(1.0, double(MaxDisplaySide) / std::max(filtered.cols, filtered.rows));
+    if (scale < 1.0)
+        cv::resize(filtered, filtered, cv::Size(), scale, scale, cv::INTER_AREA);
+    // BGRA بترتيب ذاكرة RGB32 نفسه، فتعرضه الواجهة دون تحويل أو نسخ آخر
+    auto *holder = new cv::Mat;
+    cv::cvtColor(filtered, *holder, cv::COLOR_BGR2BGRA);
+    return QImage(holder->data, holder->cols, holder->rows, int(holder->step), QImage::Format_RGB32,
+                  [](void *data) { delete static_cast<cv::Mat *>(data); }, holder);
+}
+
+bool VideoPlayer::openFile(const QString &path, qint64 startMs)
+{
+    close();
+    auto capture = std::make_shared<cv::VideoCapture>();
+    if (!ImageIO::openVideo(*capture, path))
+        return false;
+    const double fps = capture->get(cv::CAP_PROP_FPS);
+    m_fps = fps > 1.0 && fps < 1000.0 ? fps : 25.0;
+    const double frames = capture->get(cv::CAP_PROP_FRAME_COUNT);
+    m_durationMs = frames > 0 ? qint64(frames * 1000.0 / m_fps) : 0;
+    m_path = path;
+    m_live = false;
+    m_stop = false;
+    m_playing = false;
+    m_pending = 0;
+    m_position = std::max<qint64>(0, startMs);
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_seekMs = std::max<qint64>(0, startMs);
+        m_stopAtMs = 0;
+        m_restartClock = true;
+    }
+    m_thread = std::thread([this, capture] { runFile(*capture); });
+    return true;
+}
+
+void VideoPlayer::openLive(std::shared_ptr<Cameras::FrameSlot> slot)
+{
+    close();
+    if (!slot)
+        return;
+    m_slot = std::move(slot);
+    m_live = true;
+    m_stop = false;
+    m_playing = true;
+    m_pending = 0;
+    m_position = 0;
+    m_durationMs = 0;
+    m_thread = std::thread([this] { runLive(); });
+}
+
+void VideoPlayer::close()
+{
+    m_stop = true;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_wake.notify_all();
+    }
+    if (m_slot)
+        m_slot->close();
+    if (m_thread.joinable())
+        m_thread.join();
+    m_slot.reset();
+    m_playing = false;
+    m_live = false;
+    m_path.clear();
+}
+
+void VideoPlayer::play()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_playing = true;
+    m_restartClock = true;
+    m_wake.notify_all();
+}
+
+void VideoPlayer::pause()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_playing = false;
+    m_wake.notify_all();
+}
+
+void VideoPlayer::seek(qint64 positionMs)
+{
+    if (m_live)
+        return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_seekMs = std::max<qint64>(0, positionMs);
+    m_position = m_seekMs;
+    m_wake.notify_all();
+}
+
+void VideoPlayer::setStopAt(qint64 positionMs)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_stopAtMs = std::max<qint64>(0, positionMs);
+}
+
+void VideoPlayer::frameShown()
+{
+    // إطارات أُرسلت قبل إغلاق سابق قد تصل بعده، فلا ينزل العدد تحت الصفر
+    int pending = m_pending.load();
+    while (pending > 0 && !m_pending.compare_exchange_weak(pending, pending - 1)) {
+    }
+}
+
+void VideoPlayer::deliver(const cv::Mat &frame, qint64 positionMs, bool force)
+{
+    if (frame.empty() || (!force && m_pending >= MaxPendingFrames))
+        return;
+    ++m_pending;
+    m_position = positionMs;
+    emit frameReady(displayImage(frame), positionMs);
+}
+
+void VideoPlayer::runFile(cv::VideoCapture &capture)
+{
+    using Clock = std::chrono::steady_clock;
+    const double interval = 1000.0 / m_fps;
+    // موضع الإطار = رقمه × مدة الإطار، بالحساب نفسه في التحليل فتتطابق المواضع
+    qint64 next = 0; // رقم الإطار التالي
+    Clock::time_point anchor = Clock::now();
+    double anchorMs = 0.0; // موضع الإطار التالي لحظة anchor
+    int lateGrabs = 0;
+    cv::Mat frame;
+    auto elapsedMs = [&] { return std::chrono::duration<double, std::milli>(Clock::now() - anchor).count(); };
+
+    while (!m_stop) {
+        qint64 seekMs = -1;
+        qint64 stopAt = 0;
+        bool restart = false;
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_wake.wait(lock, [&] { return m_stop || m_seekMs >= 0 || m_playing; });
+            if (m_stop)
+                break;
+            seekMs = std::exchange(m_seekMs, -1);
+            stopAt = m_stopAtMs;
+            restart = std::exchange(m_restartClock, false);
+        }
+        if (seekMs >= 0) {
+            if (seekMs > 0)
+                capture.set(cv::CAP_PROP_POS_MSEC, double(seekMs));
+            else
+                capture.set(cv::CAP_PROP_POS_FRAMES, 0.0);
+            next = std::max<qint64>(0, std::llround(capture.get(cv::CAP_PROP_POS_FRAMES)));
+            if (next == 0 && seekMs > 0)
+                next = qint64(double(seekMs) / interval);
+            if (capture.read(frame)) {
+                deliver(frame, qint64(double(next) * interval), true);
+                ++next;
+            }
+            restart = true;
+        }
+        if (restart) {
+            anchor = Clock::now();
+            anchorMs = double(next) * interval;
+            lateGrabs = 0;
+        }
+        if (seekMs >= 0 || !m_playing)
+            continue;
+
+        const double nextMs = double(next) * interval;
+        if (stopAt > 0 && nextMs >= double(stopAt)) {
+            m_playing = false;
+            emit reachedEnd();
+            continue;
+        }
+        const double target = anchorMs + elapsedMs();
+        if (nextMs > target) {
+            // لم يحن موعده: انتظار يقطعه الإيقاف أو القفز
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_wake.wait_for(lock, std::chrono::microseconds(qint64(std::min(nextMs - target, 50.0) * 1000.0)),
+                            [&] { return m_stop || m_seekMs >= 0 || !m_playing || m_restartClock; });
+            continue;
+        }
+        if (target - nextMs > MaxLagMs) {
+            anchor = Clock::now();
+            anchorMs = nextMs;
+        }
+        if (target - nextMs > interval * 2.0 && lateGrabs < MaxLateGrabs) {
+            // متأخر: الإطار يُقرأ دون تحويله إلى صورة
+            ++lateGrabs;
+            if (!capture.grab()) {
+                m_playing = false;
+                emit reachedEnd();
+                continue;
+            }
+            ++next;
+            continue;
+        }
+        lateGrabs = 0;
+        if (!capture.read(frame)) {
+            m_playing = false;
+            emit reachedEnd();
+            continue;
+        }
+        deliver(frame, qint64(nextMs), false);
+        ++next;
+    }
+}
+
+void VideoPlayer::runLive()
+{
+    QElapsedTimer clock;
+    clock.start();
+    quint64 seen = 0;
+    cv::Mat frame;
+    while (!m_stop) {
+        if (!m_slot->wait(seen, frame, 100))
+            continue;
+        if (m_playing)
+            deliver(frame, clock.elapsed(), false);
+    }
+}

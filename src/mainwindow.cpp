@@ -171,6 +171,13 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(&m_frameWatcher, &QFutureWatcher<ShotFrame>::finished, this, &MainWindow::onVideoFrameLoaded);
     connect(m_videoWorker, &VideoWorker::frameReady, this, &MainWindow::onFrameReady);
+    connect(m_videoWorker, &VideoWorker::thumbnailReady, this, [this](qint64 ms, const QImage &thumbnail) {
+        if (m_videoRunning && m_timeline->wantsThumbnail(ms))
+            m_timeline->addThumbnail(ms, thumbnail);
+    });
+    m_player = new VideoPlayer(this);
+    connect(m_player, &VideoPlayer::frameReady, this, &MainWindow::onPlayerFrame);
+    connect(m_player, &VideoPlayer::reachedEnd, this, &MainWindow::updatePauseButton);
     connect(m_videoWorker, &VideoWorker::trackUpdated, this, &MainWindow::onTrackUpdated);
     connect(m_videoWorker, &VideoWorker::finished, this, &MainWindow::onVideoFinished);
     connect(m_videoWorker, &VideoWorker::identitiesMerged, this, &MainWindow::onIdentitiesMerged);
@@ -318,7 +325,7 @@ void MainWindow::setupShortcuts()
             stopVideo();
     });
     add(QKeySequence(Qt::Key_Space), [this] {
-        if (m_videoRunning)
+        if (m_videoRunning || filePlayerOpen())
             togglePause();
     });
     add(QKeySequence(Qt::CTRL | Qt::Key_R), [this] {
@@ -891,7 +898,7 @@ QWidget *MainWindow::createRecognitionPage()
         selectFace(m_alertFaceId);
         if (!m_videoMode)
             m_view->zoomToFace(m_alertFaceId);
-        else if (!m_videoRunning && m_faces.at(row).bestMs >= 0)
+        else if (m_faces.at(row).bestMs >= 0)
             loadVideoFrame(m_faces.at(row).bestMs);
     });
     auto *alertLog = new FancyButton(Icons::Name::History, QStringLiteral("السجل"), FancyButton::Kind::Secondary, m_alertBar);
@@ -1144,8 +1151,8 @@ void MainWindow::setBusy(bool busy)
     m_folderScanButton->setEnabled(m_ready);
     m_importButton->setEnabled(m_ready);
     m_stopButton->setEnabled(m_videoRunning);
-    m_pauseButton->setEnabled(m_videoRunning);
-    m_pauseButton->setVisible(m_videoRunning);
+    m_pauseButton->setEnabled(m_videoRunning || filePlayerOpen());
+    m_pauseButton->setVisible(m_videoRunning || filePlayerOpen());
     updateRecordButton();
     m_saveFacesButton->setEnabled(!m_faces.isEmpty());
     m_enrollFaceButton->setEnabled(m_ready && m_faceList->currentRow() >= 0);
@@ -1187,6 +1194,7 @@ void MainWindow::openImage()
 
 void MainWindow::analyzeImage(const QString &path)
 {
+    m_player->close();
     m_videoMode = false;
     m_timelineCard->setVisible(false);
     setVideoSettingsVisible(false);
@@ -1319,6 +1327,8 @@ void MainWindow::startVideo(const QString &source)
         addRecentFile(source);
     m_faces.clear();
     m_hiddenFaces.clear();
+    m_analyzedFaces.clear();
+    m_mergedInto.clear();
     refreshFaceList();
     const QRectF region = m_view->region();
     m_view->clear();
@@ -1353,6 +1363,21 @@ void MainWindow::startVideo(const QString &source)
     m_cameraOfflineAlerted = false;
     if (camera)
         AppLog::write(QStringLiteral("تشغيل الكاميرا «%1»").arg(m_cameraName));
+    // العرض بسرعة المصدر من VideoPlayer، والتحليل في خيطه على ما يستطيع من الإطارات
+    m_videoWorker->setDeliverFrames(false);
+    m_videoWorker->setAdaptive(true);
+    if (camera) {
+        auto slot = std::make_shared<Cameras::FrameSlot>();
+        m_videoWorker->setLiveFrames(slot);
+        m_player->openLive(slot);
+    } else {
+        m_videoWorker->setLiveFrames(nullptr);
+        if (m_player->openFile(source, m_videoStartMs)) {
+            m_player->setStopAt(m_videoEndMs);
+            m_player->play();
+        }
+    }
+    updatePauseButton();
     m_videoWorker->prepareStart();
     QMetaObject::invokeMethod(m_videoWorker, "process", Qt::QueuedConnection, Q_ARG(QString, source));
 }
@@ -1364,12 +1389,28 @@ void MainWindow::stopVideo()
 
 void MainWindow::togglePause()
 {
+    if (filePlayerOpen()) {
+        // الملف: الإيقاف للعرض وحده، والتحليل يكمل في الخلفية
+        if (m_player->isPlaying()) {
+            m_player->pause();
+        } else {
+            const qint64 endMs = m_videoEndMs > 0 ? m_videoEndMs : m_player->durationMs();
+            if (endMs > 0 && m_player->position() + 2 * qint64(1000.0 / m_player->fps()) >= endMs)
+                m_player->seek(m_videoStartMs); // انتهى: يعيد التشغيل من البداية
+            m_player->play();
+        }
+        updatePauseButton();
+        return;
+    }
     if (!m_videoRunning)
         return;
     m_videoPaused = !m_videoPaused;
     m_videoWorker->setPaused(m_videoPaused);
-    m_pauseButton->setIconName(m_videoPaused ? Icons::Name::Play : Icons::Name::Pause);
-    m_pauseButton->setText(m_videoPaused ? QStringLiteral("استئناف") : QStringLiteral("إيقاف مؤقت"));
+    if (m_videoPaused)
+        m_player->pause();
+    else
+        m_player->play();
+    updatePauseButton();
     if (m_videoPaused) {
         m_pauseClock.start();
         statusBar()->showMessage(QStringLiteral("متوقف مؤقتاً — اضغط «استئناف» أو مفتاح المسافة للمتابعة من حيث توقف"));
@@ -1383,22 +1424,25 @@ void MainWindow::togglePause()
 
 void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress)
 {
-    m_videoWorker->frameShown();
+    if (!frame.isNull())
+        m_videoWorker->frameShown();
     ++m_analyzedFrames;
     if (!m_videoRunning)
         return;
-    m_view->setBusy(false);
-    m_view->setImage(frame);
-    m_view->setFaces(faces);
-    m_videoPositionMs = positionMs;
-    if (m_videoSource.startsWith(QStringLiteral("camera:")))
+    const bool camera = m_videoSource.startsWith(QStringLiteral("camera:"));
+    if (camera) {
+        // البث يعرضه VideoPlayer بسرعة الكاميرا، والمربعات تنتقل بنعومة إلى آخر نتيجة
+        if (!m_player->isOpen()) {
+            m_view->setBusy(false);
+            m_view->setImage(frame);
+        }
+        m_view->setFaces(faces);
         noteCameraFaces(frame, faces);
-    if (!m_timelineCard->isHidden()) {
-        m_timeline->setPosition(positionMs);
-        m_timeline->setAnalyzedUntil(positionMs);
-        if (m_timeline->wantsThumbnail(positionMs))
-            m_timeline->addThumbnail(positionMs, frame);
+    } else {
+        m_analyzedFaces.insert(positionMs, faces);
     }
+    if (!m_timelineCard->isHidden())
+        m_timeline->setAnalyzedUntil(positionMs);
     if (progress >= 0.0) {
         m_progress->setRange(0, 1000);
         m_progress->setValue(int(progress * 1000.0));
@@ -1419,7 +1463,91 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     status += QStringLiteral(" · وجوه في الإطار: %1 · أشخاص مختلفون: %2").arg(faces.size()).arg(m_faces.size());
     if (m_videoPaused)
         status.prepend(QStringLiteral("متوقف مؤقتاً · "));
+    else if (filePlayerOpen() && !m_player->isPlaying())
+        status.prepend(QStringLiteral("العرض متوقف والتحليل مستمر · "));
+    else if (!camera)
+        status.prepend(QStringLiteral("التحليل: "));
     statusBar()->showMessage(status);
+}
+
+namespace {
+
+// أبعد فجوة بين إطار معروض وأقرب إطار محلل قبله تُعرض فيها نتيجته
+constexpr qint64 AnalysisToleranceMs = 600;
+
+} // namespace
+
+bool MainWindow::filePlayerOpen() const
+{
+    return m_player && m_player->isOpen() && !m_player->isLive();
+}
+
+void MainWindow::updatePauseButton()
+{
+    const bool playing = filePlayerOpen() ? m_player->isPlaying() : !m_videoPaused;
+    m_pauseButton->setIconName(playing ? Icons::Name::Pause : Icons::Name::Play);
+    m_pauseButton->setText(playing ? QStringLiteral("إيقاف مؤقت") : QStringLiteral("تشغيل"));
+    m_pauseButton->setEnabled(m_videoRunning || filePlayerOpen());
+    m_pauseButton->setVisible(m_videoRunning || filePlayerOpen());
+}
+
+bool MainWindow::hasAnalysisNear(qint64 positionMs) const
+{
+    auto it = m_analyzedFaces.upperBound(positionMs);
+    return it != m_analyzedFaces.begin() && positionMs - std::prev(it).key() <= AnalysisToleranceMs;
+}
+
+QList<FaceItem> MainWindow::analyzedFacesAt(qint64 positionMs) const
+{
+    auto next = m_analyzedFaces.upperBound(positionMs);
+    if (next == m_analyzedFaces.begin())
+        return {};
+    const auto previous = std::prev(next);
+    if (positionMs - previous.key() > AnalysisToleranceMs)
+        return {};
+    QList<FaceItem> faces = previous.value();
+    // بين إطارين محللين: المربع ينتقل خطياً من موضعه في الأول إلى موضعه في الثاني
+    const bool between = next != m_analyzedFaces.end() && next.key() - previous.key() <= AnalysisToleranceMs;
+    const double t = between ? double(positionMs - previous.key()) / double(next.key() - previous.key()) : 0.0;
+    QList<FaceItem> result;
+    result.reserve(faces.size());
+    for (FaceItem &face : faces) {
+        if (between) {
+            for (const FaceItem &later : next.value()) {
+                if (later.id != face.id)
+                    continue;
+                const QRectF a = face.box, b = later.box;
+                face.box = QRectF(a.x() + (b.x() - a.x()) * t, a.y() + (b.y() - a.y()) * t,
+                                  a.width() + (b.width() - a.width()) * t, a.height() + (b.height() - a.height()) * t);
+                break;
+            }
+        }
+        // الهوية الحالية بعد أي دمج، ونتيجة تعرفها الأحدث (قد تكون سُمّيت أو صُححت بعد تحليل الإطار)
+        for (int guard = 0; guard < 64 && m_mergedInto.contains(face.id); ++guard)
+            face.id = m_mergedInto.value(face.id);
+        if (m_hiddenFaces.contains(face.id))
+            continue;
+        const int row = m_faceRows.value(face.id, -1);
+        if (row >= 0 && row < m_faces.size() && m_faces.at(row).id == face.id)
+            face.match = m_faces.at(row).match;
+        result.append(face);
+    }
+    return result;
+}
+
+void MainWindow::onPlayerFrame(const QImage &frame, qint64 positionMs)
+{
+    m_player->frameShown();
+    if (!m_videoMode || !m_player->isOpen())
+        return;
+    m_view->setBusy(false);
+    m_view->setImage(frame);
+    if (m_player->isLive())
+        return;
+    m_videoPositionMs = positionMs;
+    m_view->setFaces(analyzedFacesAt(positionMs));
+    if (!m_timelineCard->isHidden())
+        m_timeline->setPosition(positionMs);
 }
 
 void MainWindow::onTrackUpdated(const FaceItem &track)
@@ -1471,6 +1599,9 @@ void MainWindow::onVideoFinished(const QString &error)
     }
     m_videoRunning = false;
     m_videoPaused = false;
+    if (m_player->isLive())
+        m_player->close();
+    updatePauseButton();
     // قبل إعادة معالجات الملفات، فلا تُطبَّق على آخر إطارات التسجيل
     const QString recorded = stopRecording();
     if (!m_cameraId.isEmpty()) {
@@ -1664,6 +1795,8 @@ void MainWindow::mergeFaces(const QList<int> &ids)
 
 void MainWindow::onIdentitiesMerged(int keepId, int removedId)
 {
+    if (keepId != removedId)
+        m_mergedInto.insert(removedId, keepId);
     const int keepRow = m_faceRows.value(keepId, -1);
     const int removedRow = m_faceRows.value(removedId, -1);
     if (removedRow < 0 || removedRow >= m_faces.size())
@@ -1778,11 +1911,21 @@ void MainWindow::rebuildTimelineLanes()
 
 void MainWindow::loadVideoFrame(qint64 positionMs)
 {
-    // أثناء التحليل يبقى المؤشر على موضع التحليل
-    if (m_videoRunning || m_videoSource.isEmpty() || m_videoSource.startsWith(QStringLiteral("camera:"))) {
-        if (m_videoRunning)
-            m_timeline->setPosition(m_videoPositionMs);
+    if (m_videoSource.isEmpty() || m_videoSource.startsWith(QStringLiteral("camera:")))
         return;
+    // المشغّل يعرض الإطار فوراً بنتائج التحليل المحفوظة؛ أثناء التحليل حتى الجزء الذي لم يُحلَّل بعد
+    if (filePlayerOpen() && (m_videoRunning || hasAnalysisNear(positionMs))) {
+        m_player->seek(positionMs);
+        m_timeline->setPosition(positionMs);
+        return;
+    }
+    if (m_videoRunning)
+        return;
+    // لا نتيجة محفوظة لهذا الموضع: يُحلَّل الإطار وحده
+    if (filePlayerOpen()) {
+        m_player->pause();
+        m_player->seek(positionMs); // فيتابع التشغيل من هنا
+        updatePauseButton();
     }
     if (!m_frameCapture || m_frameCapturePath != m_videoSource) {
         m_frameWatcher.waitForFinished();
@@ -2491,8 +2634,12 @@ void MainWindow::openVideoFilters()
         Toast::show(this, QStringLiteral("حُفظت المعالجات مع الكاميرا «%1»").arg(m_cameraName), Toast::Kind::Info);
         return;
     }
+    if (filePlayerOpen() && !m_player->isPlaying()) {
+        m_player->seek(m_player->position()); // يُعاد عرض الإطار المتوقف بالمعالجات الجديدة
+    }
     if (fileVideo && !m_videoRunning) {
-        loadVideoFrame(std::max<qint64>(0, m_timeline->position()));
+        if (!filePlayerOpen())
+            loadVideoFrame(std::max<qint64>(0, m_timeline->position()));
         Toast::show(this, QStringLiteral("تغيّرت معالجات الفيديو · «إعادة التحليل» يطبقها على الفيديو كله"), Toast::Kind::Info);
     } else if (m_videoRunning) {
         Toast::show(this, QStringLiteral("تُطبَّق المعالجات الجديدة على بقية الفيديو"), Toast::Kind::Info);

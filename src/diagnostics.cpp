@@ -18,12 +18,14 @@
 #include "report.h"
 #include "videoexport.h"
 #include "videofilters.h"
+#include "videoplayer.h"
 #include "videoworker.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QPainter>
@@ -36,6 +38,7 @@
 #include <QTextStream>
 #include <QThread>
 #include <QThreadPool>
+#include <QTimer>
 #include <QtConcurrent>
 
 #include <opencv2/imgcodecs.hpp>
@@ -191,6 +194,8 @@ int videoTest(const QString &path, int step, QTextStream &out)
 
     VideoWorker worker(&engine);
     worker.setFrameStep(step);
+    // MALAMIH_ADAPTIVE=1: التكيّف مع سرعة الجهاز كما في الواجهة
+    worker.setAdaptive(qEnvironmentVariableIntValue("MALAMIH_ADAPTIVE") != 0);
     int frames = 0;
     double fps = 25.0;
     int shown = 0;
@@ -242,8 +247,83 @@ int videoTest(const QString &path, int step, QTextStream &out)
     out << "track_updates=" << updates << "\n";
     out << "elapsed_s=" << seconds << "\n";
     out << "frames_per_second=" << frames / seconds << "\n";
+    // سرعة التحليل بالنسبة للتشغيل العادي: 1 فأكثر يعني أنه يلحق بالعرض
+    out << "realtime_ratio=" << frames / std::max(1.0, fps) / seconds << "\n";
     out << "peak_memory_mb=" << peakMemoryMb() << "\n";
     return error.isEmpty() && frames > 0 ? 0 : 1;
+}
+
+// يشغّل الفيديو كما تفعل الواجهة: العرض من VideoPlayer والتحليل في خيطه معاً، ويقيس سلاسة العرض
+int playerTest(const QString &path, int seconds, QTextStream &out)
+{
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    QThread thread;
+    auto *worker = new VideoWorker(&engine);
+    worker->moveToThread(&thread);
+    QObject::connect(&thread, &QThread::finished, worker, &QObject::deleteLater);
+    worker->setDeliverFrames(false);
+    worker->setAdaptive(true);
+    int analyzed = 0;
+    int boxes = 0;
+    qint64 analyzedMs = 0;
+    QObject::connect(worker, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &faces, qint64 ms, double) {
+        ++analyzed;
+        boxes += int(faces.size());
+        analyzedMs = ms;
+    });
+    bool finished = false;
+    QObject::connect(worker, &VideoWorker::finished, [&](const QString &) { finished = true; });
+
+    VideoPlayer player;
+    int shown = 0;
+    qint64 playedMs = 0;
+    double worstGapMs = 0.0;
+    QElapsedTimer gap;
+    QObject::connect(&player, &VideoPlayer::frameReady, [&](const QImage &frame, qint64 ms) {
+        if (!frame.isNull())
+            ++shown;
+        // الفجوة بين إطارين معروضين بعد أول ثانية (فتح الملف وتحميل التحليل)
+        if (gap.isValid() && playedMs > 1000)
+            worstGapMs = std::max(worstGapMs, gap.nsecsElapsed() / 1e6);
+        gap.start();
+        playedMs = ms;
+        player.frameShown();
+    });
+    if (!player.openFile(path, 0)) {
+        out << "error=cannot open video\n";
+        return 1;
+    }
+    thread.start();
+    worker->prepareStart();
+    QMetaObject::invokeMethod(worker, "process", Qt::QueuedConnection, Q_ARG(QString, path));
+    QElapsedTimer clock;
+    clock.start();
+    player.play();
+    QEventLoop loop;
+    QTimer::singleShot(seconds * 1000, &loop, &QEventLoop::quit);
+    loop.exec();
+    const double elapsed = clock.elapsed() / 1000.0;
+    player.close();
+    worker->requestStop();
+    thread.quit();
+    thread.wait();
+
+    const double expected = std::min(elapsed, double(player.durationMs()) / 1000.0) * player.fps();
+    out << "native_fps=" << player.fps() << "\n";
+    out << "shown_frames=" << shown << "\n";
+    out << "display_fps=" << shown / elapsed << "\n";
+    out << "display_ratio=" << (expected > 0 ? shown / expected : 0.0) << "\n";
+    out << "worst_gap_ms=" << worstGapMs << "\n";
+    out << "played_ms=" << playedMs << "\n";
+    out << "analyzed_frames=" << analyzed << "\n";
+    out << "analyzed_ms=" << analyzedMs << "\n";
+    out << "analysis_lag_ms=" << playedMs - analyzedMs << "\n";
+    out << "boxes=" << boxes << "\n";
+    out << "analysis_finished=" << int(finished) << "\n";
+    out << "peak_memory_mb=" << peakMemoryMb() << "\n";
+    return shown > 0 && analyzed > 0 ? 0 : 1;
 }
 
 // يستخرج بصمة كل وجه في إطارات الفيديو كما هي، لدراسة توزيع التشابه في الفيديو الرديء
@@ -1072,11 +1152,16 @@ int filtersTest(const QString &imagePath, const QString &directory, QTextStream 
     };
     // بعد تصحيح الاتجاه يُكشف الوجه في الإطارات كلها تقريباً وبصمته بصمة الصورة الأصلية
     int rawFaces = 0, fixedFaces = 0, stillFaces = 0;
-    const int raw = analyze(VideoFilters::Settings(), &rawFaces);
+    // الإطارات هنا متطابقة، فتخطي الساكن (المفعّل افتراضياً) يُطفأ لقياس الكشف في كل إطار
+    VideoFilters::Settings plain;
+    plain.skipStill = false;
+    const int raw = analyze(plain, &rawFaces);
     bestSimilarity = 0.0f;
-    const int fixed = analyze(rotate, &fixedFaces);
+    VideoFilters::Settings every = rotate;
+    every.skipStill = false;
+    const int fixed = analyze(every, &fixedFaces);
     const float fixedSimilarity = bestSimilarity;
-    VideoFilters::Settings tooSmall = rotate;
+    VideoFilters::Settings tooSmall = every;
     tooSmall.minFaceSize = 400;
     const int ignored = analyze(tooSmall, nullptr);
     VideoFilters::Settings still = rotate;
@@ -1957,7 +2042,7 @@ int run(const QStringList &args)
         && command != QLatin1String("--camera-test") && command != QLatin1String("--record-test")
         && command != QLatin1String("--watch-test") && command != QLatin1String("--daily-report-test")
         && command != QLatin1String("--gpu-test") && command != QLatin1String("--rules-test")
-        && command != QLatin1String("--bench"))
+        && command != QLatin1String("--bench") && command != QLatin1String("--player-test"))
         return -1;
 
     QFile output(args.last());
@@ -1971,6 +2056,9 @@ int run(const QStringList &args)
     // Malamih --video-test <فيديو> [تحليل إطار من كل] <ملف النتائج>
     if (command == QLatin1String("--video-test") && (args.size() == 4 || args.size() == 5))
         return videoTest(args.at(2), args.size() == 5 ? args.at(3).toInt() : 1, out);
+    // Malamih --player-test <فيديو> <ثوانٍ> <ملف النتائج>
+    if (command == QLatin1String("--player-test") && args.size() == 5)
+        return playerTest(args.at(2), args.at(3).toInt(), out);
     // Malamih --embed-dump <فيديو> <تحليل إطار من كل> <ملف النتائج>
     if (command == QLatin1String("--embed-dump") && args.size() == 5)
         return embedDump(args.at(2), args.at(3).toInt(), out);

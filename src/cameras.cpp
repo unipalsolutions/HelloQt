@@ -1124,9 +1124,10 @@ bool normalizeFrame(cv::Mat &frame)
     return true;
 }
 
-LiveReader::LiveReader(const Camera &camera, CameraRecorder *recorder)
+LiveReader::LiveReader(const Camera &camera, CameraRecorder *recorder, std::shared_ptr<FrameSlot> display)
     : m_camera(camera)
     , m_recorder(recorder)
+    , m_display(std::move(display))
 {
 }
 
@@ -1187,6 +1188,8 @@ void LiveReader::loop()
         failures = 0;
         if (m_recorder)
             m_recorder->push(frame);
+        if (m_display)
+            m_display->publish(frame);
         std::lock_guard<std::mutex> lock(m_mutex);
         m_frame = frame;
         ++m_sequence;
