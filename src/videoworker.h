@@ -65,6 +65,8 @@ public:
     // موضع الإطار المعروض الآن في VideoPlayer (أو -1): في الوضع التلقائي يلحق التحليل العرض إن سبقه إلى
     // جزء لم يُحلَّل، ثم يعود إلى ما تخطاه
     void setDisplayPosition(qint64 positionMs, bool playing);
+    // التحليل الجاري يقفز إلى موضع العرض إن سبقه (خطوة الإطارات تلقائية والملف معروف الطول)
+    bool followsDisplay() const { return m_following; }
     // فحص الأرشيف السريع للملفات: 4 إطارات محللة في الثانية، وبصمة واحدة لكل وجه، وتخطّي الساكن دائماً،
     // وصورة معاينة كل ثانية من الوقت الفعلي بدل كل ثانية من الفيديو
     void setQuickScan(bool quick) { m_quick = quick; }
@@ -115,6 +117,7 @@ private:
     std::atomic<bool> m_quick{false};
     std::atomic<qint64> m_displayMs{-1};
     std::atomic<bool> m_displayPlaying{false};
+    std::atomic<bool> m_following{false};
     cv::Mat m_lastCameraFrame; // يحميه m_mutex
     std::shared_ptr<Cameras::FrameSlot> m_liveFrames; // يحميه m_mutex
 };

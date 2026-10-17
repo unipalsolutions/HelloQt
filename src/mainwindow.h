@@ -163,6 +163,8 @@ private:
     // وجوه الموضع المعروض من نتائج التحليل المحفوظة، بين أقرب إطارين محللين
     QList<FaceItem> analyzedFacesAt(qint64 positionMs) const;
     bool hasAnalysisNear(qint64 positionMs) const;
+    // شارة على الإطار حين يُعرض موضع لم يصله التحليل، فلا يُظن أن البرنامج لم يجد وجوهاً
+    void updateAnalysisBadge(qint64 positionMs);
     bool filePlayerOpen() const;
     void updatePauseButton();
     void saveFaces();
@@ -351,6 +353,8 @@ private:
     // العرض بسرعة الفيديو الأصلية منفصلاً عن التحليل، ونتائج التحليل لكل موضع محلل لتُعرض عليه
     VideoPlayer *m_player = nullptr;
     QMap<qint64, QList<FaceItem>> m_analyzedFaces;
+    // منذ متى والموضع المعروض بلا نتيجة تحليل، فلا تومض الشارة في الفجوات القصيرة
+    QElapsedTimer m_uncoveredClock;
     QHash<int, int> m_mergedInto; // هوية دُمجت ← الهوية الباقية
     double m_videoFps = 25.0;
     // قراءة إطار من الفيديو عند النقر على الخط الزمني بعد انتهاء التحليل

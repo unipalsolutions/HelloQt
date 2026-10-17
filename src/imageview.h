@@ -48,6 +48,9 @@ public:
     // التنقل بين صور المجلد: سهمان على جانبي الصورة وعنوان صغير بالموضع
     void setNavigation(bool canPrevious, bool canNext, const QString &caption);
 
+    // شارة حالة فوق الإطار (مثل تأخر التحليل عن العرض)؛ نص فارغ يخفيها
+    void setStatusBadge(const QString &text);
+
     // الصورة كما تظهر مع مربعات الوجوه وأسمائها، لحفظها أو نسخها
     QImage annotatedImage() const;
 
@@ -91,6 +94,7 @@ private:
     QRectF navButton(int step) const;
     void paintNavigation(QPainter &p);
     void paintZoomBadge(QPainter &p);
+    void paintStatusBadge(QPainter &p);
     QRectF mapToView(const QRectF &rect) const;
     void paintEmpty(QPainter &p, double t);
     void paintBusy(QPainter &p, double t);
@@ -125,6 +129,7 @@ private:
     bool m_canPrevious = false;
     bool m_canNext = false;
     QString m_caption;
+    QString m_statusBadge;
     int m_navHover = 0;
     QTimer m_timer;
     QElapsedTimer m_clock;

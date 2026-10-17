@@ -302,14 +302,19 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     qint64 playedMs = 0;
     double worstGapMs = 0.0;
     int uncovered = 0;
+    // كل إطار بلا نتيجة يجد نصاً لشارته
+    bool badgeOk = true;
     QElapsedTimer gap;
     QObject::connect(&player, &VideoPlayer::frameReady, &receiver, [&](const QImage &frame, qint64 ms) {
         if (!frame.isNull())
             ++shown;
         // إطار معروض دون إطار محلل قريب قبله: تختفي عنه المربعات كما في الواجهة
         const auto it = std::upper_bound(analyzedPositions.cbegin(), analyzedPositions.cend(), ms);
-        if (it == analyzedPositions.cbegin() || ms - *std::prev(it) > VideoPlayer::AnalysisToleranceMs)
+        if (it == analyzedPositions.cbegin() || ms - *std::prev(it) > VideoPlayer::AnalysisToleranceMs) {
             ++uncovered;
+            const qint64 lagMs = it == analyzedPositions.cbegin() ? -1 : ms - *std::prev(it);
+            badgeOk = badgeOk && !VideoPlayer::analysisLagText(lagMs, worker->followsDisplay(), player.isPlaying()).isEmpty();
+        }
         // الفجوة بين إطارين معروضين بعد أول ثانية (فتح الملف وتحميل التحليل)
         if (gap.isValid() && playedMs > 1000)
             worstGapMs = std::max(worstGapMs, gap.nsecsElapsed() / 1e6);
@@ -392,6 +397,13 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     out << "boxes=" << boxes << "\n";
     out << "ranges_ok=" << int(rangesOk) << "\n";
     out << "most_ranges=" << mostRanges << "\n";
+    // نص الشارة في حالاتها: تأخر قصير، جزء بعيد لم يُحلَّل، والعرض متوقف
+    const bool badgeTexts = VideoPlayer::analysisLagText(2400, true, true).contains(QStringLiteral("يلحق"))
+        && VideoPlayer::analysisLagText(-1, false, true).contains(QStringLiteral("لم يُحلَّل"))
+        && VideoPlayer::analysisLagText(120000, true, true).contains(QStringLiteral("لم يُحلَّل"))
+        && VideoPlayer::analysisLagText(300, false, false).contains(QStringLiteral("متوقف"));
+    badgeOk = badgeOk && badgeTexts;
+    out << "badge_ok=" << int(badgeOk) << "\n";
     out << "analysis_finished=" << int(finished) << "\n";
     out << "step_forward_ms=" << stepForwardMs << "\n";
     out << "step_back_ms=" << stepBackMs << "\n";
@@ -400,7 +412,7 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     out << "markers_ok=" << int(markersOk && markersCleared) << "\n";
     out << "peak_memory_mb=" << peakMemoryMb() << "\n";
     const qint64 frameMs = qint64(1000.0 / std::max(1.0, player.fps()));
-    const bool controlsOk = rangesOk && parseOk && markersOk && markersCleared && std::llabs(stepForwardMs - frameMs) <= 2 && std::llabs(stepBackMs) <= 2
+    const bool controlsOk = rangesOk && badgeOk && parseOk && markersOk && markersCleared && std::llabs(stepForwardMs - frameMs) <= 2 && std::llabs(stepBackMs) <= 2
         && measuredRate > 1.6;
     return shown > 0 && analyzed > 0 && controlsOk ? 0 : 1;
 }

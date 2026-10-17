@@ -454,6 +454,7 @@ void VideoWorker::run(const QString &source)
     // اللحاق بالعرض: الأجزاء المحللة [بداية، نهاية) بأرقام الإطارات، والجزء الجاري من runStart حتى frameIndex
     // وينتهي عند runLimit (بداية أول جزء محلل بعده، أو نهاية المطلوب)
     const bool follow = adaptive && validFps && endFrame > startFrame;
+    m_following = follow;
     std::map<int, int> covered;
     int runStart = frameIndex;
     int runLimit = endFrame;

@@ -5,6 +5,7 @@
 #include "videofilters.h"
 
 #include <QElapsedTimer>
+#include <QLocale>
 
 #include <algorithm>
 #include <chrono>
@@ -31,6 +32,21 @@ VideoPlayer::VideoPlayer(QObject *parent)
 VideoPlayer::~VideoPlayer()
 {
     close();
+}
+
+QString VideoPlayer::analysisLagText(qint64 lagMs, bool following, bool playing)
+{
+    // أبعد من دقيقة: الأرجح أن المستخدم انتقل إلى جزء لم يصله التحليل، لا أن التحليل يتأخر
+    QString text = lagMs >= 0 && lagMs <= 60000
+        ? QStringLiteral("التحليل متأخر %1 ث عن العرض").arg(QLocale().toString(std::max<qint64>(1, (lagMs + 500) / 1000)))
+        : QStringLiteral("هذا الجزء لم يُحلَّل بعد");
+    if (!playing)
+        text += QStringLiteral(" · التحليل يتابع والعرض متوقف");
+    else if (following)
+        text += QStringLiteral(" · يلحق بالعرض");
+    else
+        text += QStringLiteral(" · المربعات تظهر حين يصله");
+    return text;
 }
 
 QImage VideoPlayer::displayImage(const cv::Mat &frame)

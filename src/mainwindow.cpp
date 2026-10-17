@@ -1371,6 +1371,8 @@ void MainWindow::startVideo(const QString &source)
     m_mergeSuggestions.clear();
     m_mergeSuggestButton->setVisible(false);
     m_analyzedFaces.clear();
+    m_uncoveredClock.invalidate();
+    m_view->setStatusBadge(QString());
     m_mergedInto.clear();
     refreshFaceList();
     const QRectF region = m_view->region();
@@ -1494,6 +1496,9 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
         noteCameraFaces(frame, faces);
     } else {
         m_analyzedFaces.insert(positionMs, faces);
+        // العرض متوقف لا يرسل إطارات: وصول التحليل إلى موضعه يخفي الشارة من هنا
+        if (filePlayerOpen())
+            updateAnalysisBadge(m_videoPositionMs);
     }
     if (progress >= 0.0) {
         m_progress->setRange(0, 1000);
@@ -1555,6 +1560,22 @@ bool MainWindow::hasAnalysisNear(qint64 positionMs) const
     return it != m_analyzedFaces.begin() && positionMs - std::prev(it).key() <= VideoPlayer::AnalysisToleranceMs;
 }
 
+void MainWindow::updateAnalysisBadge(qint64 positionMs)
+{
+    if (!m_videoRunning || !filePlayerOpen() || hasAnalysisNear(positionMs)) {
+        m_uncoveredClock.invalidate();
+        m_view->setStatusBadge(QString());
+        return;
+    }
+    if (!m_uncoveredClock.isValid())
+        m_uncoveredClock.start();
+    if (m_uncoveredClock.elapsed() < 500)
+        return;
+    const auto next = m_analyzedFaces.upperBound(positionMs);
+    const qint64 lagMs = next == m_analyzedFaces.begin() ? -1 : positionMs - std::prev(next).key();
+    m_view->setStatusBadge(VideoPlayer::analysisLagText(lagMs, m_videoWorker->followsDisplay(), m_player->isPlaying()));
+}
+
 QList<FaceItem> MainWindow::analyzedFacesAt(qint64 positionMs) const
 {
     auto next = m_analyzedFaces.upperBound(positionMs);
@@ -1607,6 +1628,7 @@ void MainWindow::onPlayerFrame(const QImage &frame, qint64 positionMs)
     if (m_videoRunning)
         m_videoWorker->setDisplayPosition(positionMs, m_player->isPlaying());
     m_view->setFaces(analyzedFacesAt(positionMs));
+    updateAnalysisBadge(positionMs);
     if (!m_timelineCard->isHidden())
         m_timeline->setPosition(positionMs);
     m_playbackBar->setPosition(positionMs);
@@ -1695,6 +1717,7 @@ void MainWindow::onVideoFinished(const QString &error)
     rebuildTimelineLanes();
     m_view->setBusy(false);
     m_progress->setVisible(false);
+    m_view->setStatusBadge(QString());
     const bool cameraSource = m_videoSource.startsWith(QStringLiteral("camera:"));
     if (cameraSource)
         AppLog::write(error.isEmpty() ? QStringLiteral("إيقاف الكاميرا «%1»").arg(m_cameraName)

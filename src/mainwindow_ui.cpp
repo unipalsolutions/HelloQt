@@ -326,6 +326,7 @@ void MainWindow::closeCurrentFile()
     m_mergeSuggestions.clear();
     m_mergeSuggestButton->setVisible(false);
     m_analyzedFaces.clear();
+    m_view->setStatusBadge(QString());
     m_markers.clear();
     m_shotChanges.clear();
     refreshFaceList();

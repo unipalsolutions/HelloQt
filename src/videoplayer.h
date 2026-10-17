@@ -58,6 +58,10 @@ public:
     // يُستدعى بعد عرض كل إطار، فلا تتراكم الإطارات إن انشغلت الواجهة
     void frameShown();
 
+    // نص شارة الإطار المعروض حين لا نتيجة تحليل له: lagMs بعده عن آخر إطار محلل قبله (سالب = لا شيء قبله)،
+    // و following أن التحليل يقفز إليه، و playing أن العرض يتقدم
+    static QString analysisLagText(qint64 lagMs, bool following, bool playing);
+
     // تحويل إطار للعرض: المعالجات ثم التصغير، بصورة تشير إلى بيانات الإطار دون نسخها
     static QImage displayImage(const cv::Mat &frame);
 

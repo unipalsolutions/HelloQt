@@ -264,6 +264,14 @@ void ImageView::setLabelsVisible(bool visible)
     update();
 }
 
+void ImageView::setStatusBadge(const QString &text)
+{
+    if (text == m_statusBadge)
+        return;
+    m_statusBadge = text;
+    update();
+}
+
 void ImageView::setNavigation(bool canPrevious, bool canNext, const QString &caption)
 {
     m_canPrevious = canPrevious;
@@ -344,6 +352,32 @@ void ImageView::paintZoomBadge(QPainter &p)
     p.drawRoundedRect(pill, 14, 14);
     p.setPen(Text);
     p.drawText(pill, Qt::AlignCenter, text);
+    p.restore();
+}
+
+void ImageView::paintStatusBadge(QPainter &p)
+{
+    using namespace Theme;
+    if (m_statusBadge.isEmpty() || m_image.isNull())
+        return;
+    p.save();
+    QFont font = this->font();
+    font.setPointSizeF(9.5);
+    p.setFont(font);
+    const QSizeF size(QFontMetricsF(font).horizontalAdvance(m_statusBadge) + 44, 28);
+    // في الجهة المقابلة لشارة التكبير فلا تتغطيان
+    const QRectF pill(QPointF(isRightToLeft() ? width() - size.width() - 12 : 12, 12), size);
+    p.setPen(QPen(withAlpha(Warning, 170), 1));
+    p.setBrush(withAlpha(QColor(0x0e, 0x1d, 0x33), 230));
+    p.drawRoundedRect(pill, 14, 14);
+    // نقطة تنبض ببطء: التحليل يعمل ولم يصل بعد
+    const double pulse = 0.55 + 0.45 * std::sin(m_clock.elapsed() / 1000.0 * 4.0);
+    const QPointF dot(isRightToLeft() ? pill.right() - 16 : pill.left() + 16, pill.center().y());
+    p.setPen(Qt::NoPen);
+    p.setBrush(withAlpha(Warning, int(255 * pulse)));
+    p.drawEllipse(dot, 4, 4);
+    p.setPen(Text);
+    p.drawText(pill.adjusted(isRightToLeft() ? 8 : 26, 0, isRightToLeft() ? -26 : -8, 0), Qt::AlignCenter, m_statusBadge);
     p.restore();
 }
 
@@ -445,6 +479,7 @@ void ImageView::paintEvent(QPaintEvent *)
     if (m_busy)
         paintBusy(p, t);
     paintZoomBadge(p);
+    paintStatusBadge(p);
     paintNavigation(p);
 }
 
