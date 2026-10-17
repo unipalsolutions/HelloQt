@@ -68,6 +68,10 @@ qt_add_executable(Malamih
     src/facedetails.cpp
     src/startscreen.h
     src/startscreen.cpp
+    src/archivescan.h
+    src/archivescan.cpp
+    src/archivedialog.h
+    src/archivedialog.cpp
     src/diagnostics.h
     src/diagnostics.cpp
     src/icons.h

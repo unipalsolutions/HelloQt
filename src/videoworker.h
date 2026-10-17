@@ -62,6 +62,9 @@ public:
     void setDeliverFrames(bool deliver) { m_deliverFrames = deliver; }
     // الوضع التلقائي للملفات: يقل عدد الإطارات المحللة على الجهاز البطيء ليبقى التحليل قريباً من التشغيل
     void setAdaptive(bool adaptive) { m_adaptive = adaptive; }
+    // فحص الأرشيف السريع للملفات: 4 إطارات محللة في الثانية، وبصمة واحدة لكل وجه، وتخطّي الساكن دائماً،
+    // وصورة معاينة كل ثانية من الوقت الفعلي بدل كل ثانية من الفيديو
+    void setQuickScan(bool quick) { m_quick = quick; }
 
 public slots:
     void process(const QString &source); // مسار ملف، أو "camera:<رقم أو معرّف كاميرا محفوظة>"
@@ -104,6 +107,7 @@ private:
     std::atomic<int> m_pendingFrames{0};
     std::atomic<bool> m_deliverFrames{true};
     std::atomic<bool> m_adaptive{false};
+    std::atomic<bool> m_quick{false};
     cv::Mat m_lastCameraFrame; // يحميه m_mutex
     std::shared_ptr<Cameras::FrameSlot> m_liveFrames; // يحميه m_mutex
 };

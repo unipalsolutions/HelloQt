@@ -32,6 +32,7 @@ class QTimeEdit;
 class QMenu;
 class QSystemTrayIcon;
 class FancyButton;
+class ArchiveScanDialog;
 class Maintenance;
 class ImageView;
 class QLabel;
@@ -221,6 +222,7 @@ private:
     void reanalyzeVideo();
     void openEnhancer();
     void openFolderScan();
+    void openArchiveScan();
     void enhanceVideoFrame(qint64 positionMs);
     void showTimelineMenu(const QPoint &globalPos, qint64 positionMs, int laneId);
     void exportClip(const QList<QPair<qint64, qint64>> &segments, const QString &suggestedName);
@@ -408,6 +410,7 @@ private:
     QComboBox *m_performanceCombo = nullptr;
     FancyButton *m_enhanceImageButton = nullptr;
     FancyButton *m_folderScanButton = nullptr;
+    QPointer<ArchiveScanDialog> m_archiveDialog;
     FancyButton *m_importButton = nullptr;
     class EnhanceDialog *m_studio = nullptr; // صفحة تحسين الصور
     QProgressBar *m_progress = nullptr;

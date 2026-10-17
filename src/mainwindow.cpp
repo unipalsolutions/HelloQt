@@ -338,6 +338,7 @@ void MainWindow::setupShortcuts()
         if (m_folderScanButton->isEnabled())
             openFolderScan();
     });
+    add(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A), [this] { openArchiveScan(); });
     add(QKeySequence::Save, [this] {
         if (m_saveFacesButton->isEnabled())
             saveFaces();
@@ -1007,6 +1008,7 @@ QWidget *MainWindow::createRecognitionPage()
     connect(m_startScreen, &StartScreen::openVideoRequested, this, &MainWindow::openVideo);
     connect(m_startScreen, &StartScreen::openCameraRequested, this, &MainWindow::openCamera);
     connect(m_startScreen, &StartScreen::openFolderRequested, this, &MainWindow::openFolderScan);
+    connect(m_startScreen, &StartScreen::openArchiveRequested, this, &MainWindow::openArchiveScan);
     connect(m_startScreen, &StartScreen::shortcutsRequested, this, &MainWindow::showShortcuts);
     connect(m_startScreen, &StartScreen::fileRequested, this, [this](const QString &file) {
         m_lastDirectory = QFileInfo(file).absolutePath();
@@ -2341,6 +2343,32 @@ void MainWindow::openFolderScan()
     });
     dialog->show();
     QTimer::singleShot(0, dialog, &FolderScanDialog::chooseFolder);
+}
+
+void MainWindow::openArchiveScan()
+{
+    if (!m_ready)
+        return;
+    // نافذة واحدة: المسح الجاري يبقى فيها
+    if (m_archiveDialog) {
+        m_archiveDialog->show();
+        m_archiveDialog->raise();
+        m_archiveDialog->activateWindow();
+        return;
+    }
+    auto *dialog = new ArchiveScanDialog(&m_engine, &m_database, threshold(), m_lastDirectory, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    m_archiveDialog = dialog;
+    connect(dialog, &ArchiveScanDialog::openRequested, this, [this](const QString &path) {
+        m_navGroup->button(0)->click();
+        if (m_openVideoButton->isEnabled())
+            openFile(path);
+    });
+    connect(dialog, &QDialog::finished, this, [this, dialog] {
+        if (!dialog->lastDirectory().isEmpty())
+            m_lastDirectory = dialog->lastDirectory();
+    });
+    dialog->show();
 }
 
 void MainWindow::saveFaces()

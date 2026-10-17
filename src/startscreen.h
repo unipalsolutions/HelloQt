@@ -29,6 +29,7 @@ signals:
     void openVideoRequested();
     void openCameraRequested();
     void openFolderRequested();
+    void openArchiveRequested();
     void fileRequested(const QString &path);
     void cameraRequested(const QString &source);
     void shortcutsRequested();

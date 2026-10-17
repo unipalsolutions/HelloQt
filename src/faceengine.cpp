@@ -651,7 +651,7 @@ std::vector<float> FaceEngine::embed(const cv::Mat &aligned) const
     return result.empty() ? std::vector<float>() : std::move(result.front());
 }
 
-std::vector<std::vector<float>> FaceEngine::embedMany(const std::vector<cv::Mat> &aligned, bool mirrored) const
+std::vector<std::vector<float>> FaceEngine::embedMany(const std::vector<cv::Mat> &aligned, bool mirrored, bool lit) const
 {
     if (!isLoaded() || aligned.empty())
         return {};
@@ -671,7 +671,7 @@ std::vector<std::vector<float>> FaceEngine::embedMany(const std::vector<cv::Mat>
             inputs.push_back(flipped);
             owner.push_back(i);
         }
-        if (isPoorlyLit(aligned[i])) {
+        if (lit && isPoorlyLit(aligned[i])) {
             inputs.push_back(enhance(aligned[i]));
             owner.push_back(i);
         }

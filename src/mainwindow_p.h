@@ -20,6 +20,7 @@
 #include "carddelegates.h"
 #include "dailyreport.h"
 #include "enhancedialog.h"
+#include "archivedialog.h"
 #include "folderscan.h"
 #include "gpucheck.h"
 #include "report.h"

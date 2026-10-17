@@ -294,6 +294,8 @@ void MainWindow::showOpenMenu()
     menu.addAction(icon(Icons::Name::Camera), QStringLiteral("كاميرا…"), this, &MainWindow::openCamera)->setEnabled(idle);
     menu.addAction(icon(Icons::Name::Folder), QStringLiteral("مجلد صور…\tCtrl+Shift+F"), this, &MainWindow::openFolderScan)
         ->setEnabled(m_ready);
+    menu.addAction(icon(Icons::Name::Film), QStringLiteral("أرشيف تسجيلات…\tCtrl+Shift+A"), this, &MainWindow::openArchiveScan)
+        ->setEnabled(m_ready);
     QMenu *recent = menu.addMenu(icon(Icons::Name::Clock), QStringLiteral("الأخيرة"));
     fillRecentMenu(recent);
     recent->setEnabled(idle);

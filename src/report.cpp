@@ -4,6 +4,7 @@
 
 #include <QBuffer>
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -251,6 +252,133 @@ bool writeHtml(const QString &path, const QList<FaceItem> &faces, const Source &
     }
     out << "</div>\n</main><footer>" << escape(QStringLiteral("أُنشئ بواسطة ملامح · كل المعالجة تمت على الجهاز نفسه"))
         << "</footer></body></html>\n";
+    out.flush();
+    if (out.status() != QTextStream::Ok) {
+        if (error)
+            *error = QStringLiteral("تعذر الكتابة في الملف");
+        return false;
+    }
+    return true;
+}
+
+
+bool writeArchiveHtml(const QString &path, const QList<ArchivePerson> &persons, const QStringList &files, qint64 scannedMs,
+                      QString *error)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    QTextStream out(&file);
+    out.setEncoding(QStringConverter::Utf8);
+
+    int known = 0, unknown = 0;
+    for (const ArchivePerson &person : persons) {
+        known += person.face.match.status == MatchStatus::Confirmed ? 1 : 0;
+        unknown += person.face.match.status == MatchStatus::Confirmed ? 0 : 1;
+    }
+    out << "<!doctype html>\n<html lang=\"ar\" dir=\"rtl\"><head><meta charset=\"utf-8\">"
+        << "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        << "<title>" << escape(QStringLiteral("تقرير ملامح — مسح الأرشيف")) << "</title><style>" << Style
+        << ".files { color: #5b6b85; font-size: 13px; line-height: 1.8; }\n"
+        << "td.times { font-size: 13px; color: #3a4b66; line-height: 1.7; }\n"
+        << "</style></head><body>\n";
+    out << "<header><h1>" << escape(QStringLiteral("تقرير مسح الأرشيف")) << "</h1><div class=\"meta\">"
+        << escape(QStringLiteral("%1 ملف · %2 من التسجيلات · %3")
+                      .arg(files.size())
+                      .arg(formatDuration(scannedMs), QDateTime::currentDateTime().toString(QStringLiteral("yyyy/MM/dd hh:mm"))))
+        << "</div></header>\n<main>\n";
+
+    out << "<div class=\"stats\">";
+    const auto stat = [&out](const QString &value, const QString &label) {
+        out << "<div class=\"stat\"><b>" << escape(value) << "</b><span>" << escape(label) << "</span></div>";
+    };
+    stat(QString::number(persons.size()), QStringLiteral("شخص مختلف"));
+    stat(QString::number(known), QStringLiteral("شخص معروف"));
+    stat(QString::number(unknown), QStringLiteral("غير معروف أو محتمل"));
+    stat(QString::number(files.size()), QStringLiteral("ملف"));
+    stat(formatDuration(scannedMs), QStringLiteral("مدة التسجيلات"));
+    out << "</div>\n";
+
+    // جدول واحد: لكل شخص صفه، وفيه كل ملف ظهر فيه بفتراته
+    out << "<h2>" << escape(QStringLiteral("من ظهر وأين ومتى")) << "</h2><table><tr><th></th><th>" << escape(QStringLiteral("الشخص"))
+        << "</th><th>" << escape(QStringLiteral("مدة الظهور")) << "</th><th>" << escape(QStringLiteral("الملفات والأوقات")) << "</th></tr>\n";
+    for (int i = 0; i < persons.size(); ++i) {
+        const ArchivePerson &person = persons.at(i);
+        QList<QPair<qint64, qint64>> all;
+        for (const ArchiveSighting &sighting : person.sightings)
+            all << sighting.appearances;
+        qint64 total = 0;
+        for (const ArchiveSighting &sighting : person.sightings)
+            total += screenTime(sighting.appearances);
+        const QString css = statusClass(person.face.match.status);
+        out << "<tr><td><img src=\"" << imageData(ImageIO::faceCrop(person.face)) << "\" alt=\"\"></td><td><b>"
+            << escape(person.face.match.status == MatchStatus::Unknown ? QStringLiteral("مجهول %1").arg(i + 1) : matchLabel(person.face.match))
+            << "</b><br><span class=\"pill " << css << "\">" << escape(statusText(person.face.match.status)) << "</span>";
+        if (person.face.match.status != MatchStatus::Unknown)
+            out << " " << escape(QStringLiteral("تشابه %1%").arg(qRound(person.face.match.score * 100)));
+        out << "</td><td>" << escape(formatDuration(total)) << "<br><span class=\"files\">"
+            << escape(QStringLiteral("في %1 ملف").arg(person.sightings.size())) << "</span></td><td class=\"times\">";
+        for (const ArchiveSighting &sighting : person.sightings) {
+            QStringList ranges;
+            for (int r = 0; r < sighting.appearances.size() && r < 12; ++r) {
+                const auto &range = sighting.appearances.at(r);
+                ranges << (range.second - range.first < 1000 ? ImageIO::formatTime(range.first)
+                                                              : QStringLiteral("%1–%2").arg(ImageIO::formatTime(range.first), ImageIO::formatTime(range.second)));
+            }
+            if (sighting.appearances.size() > 12)
+                ranges << QStringLiteral("و%1 مرة أخرى").arg(sighting.appearances.size() - 12);
+            out << "<b>" << escape(QFileInfo(sighting.path).fileName()) << "</b>: " << escape(ranges.join(QStringLiteral("، ")))
+                << timelineBar(sighting.appearances, sighting.durationMs);
+        }
+        out << "</td></tr>\n";
+    }
+    out << "</table>\n";
+
+    out << "<h2>" << escape(QStringLiteral("الملفات")) << "</h2><div class=\"files\">";
+    for (const QString &path : files)
+        out << escape(QDir::toNativeSeparators(path)) << "<br>";
+    out << "</div>\n</main><footer>" << escape(QStringLiteral("أُنشئ بواسطة ملامح · كل المعالجة تمت على الجهاز نفسه"))
+        << "</footer></body></html>\n";
+    out.flush();
+    if (out.status() != QTextStream::Ok) {
+        if (error)
+            *error = QStringLiteral("تعذر الكتابة في الملف");
+        return false;
+    }
+    return true;
+}
+
+bool writeArchiveCsv(const QString &path, const QList<ArchivePerson> &persons, QString *error)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    QTextStream out(&file);
+    out.setEncoding(QStringConverter::Utf8);
+    out << "\xEF\xBB\xBF"; // ليقرأ Excel العربية صحيحة
+    const auto field = [](QString text) {
+        text.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+        return QStringLiteral("\"%1\"").arg(text);
+    };
+    out << QStringLiteral("الشخص,الحالة,التشابه,الملف,من,إلى,المدة بالثواني\n");
+    for (int i = 0; i < persons.size(); ++i) {
+        const ArchivePerson &person = persons.at(i);
+        const QString name = person.face.match.status == MatchStatus::Unknown ? QStringLiteral("مجهول %1").arg(i + 1) : person.face.match.name;
+        for (const ArchiveSighting &sighting : person.sightings) {
+            for (const auto &range : sighting.appearances) {
+                out << field(name) << ',' << field(statusText(person.face.match.status)) << ','
+                    << qRound(person.face.match.score * 100) << ',' << field(QDir::toNativeSeparators(sighting.path)) << ','
+                    << ImageIO::formatTime(range.first) << ',' << ImageIO::formatTime(range.second) << ','
+                    << QString::number((range.second - range.first) / 1000.0, 'f', 1) << '\n';
+            }
+        }
+    }
     out.flush();
     if (out.status() != QTextStream::Ok) {
         if (error)

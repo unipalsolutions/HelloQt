@@ -1,4 +1,5 @@
 #include "diagnostics.h"
+#include "archivescan.h"
 
 #include "alertsound.h"
 #include "camerarules.h"
@@ -1999,6 +2000,89 @@ int rulesTest(const QString &directory, QTextStream &out)
 
 // قياس سرعة ثابت الصيغة للمقارنة بين النسخ: الكشف والبصمة لإطار، ثم أول ثوانٍ من فيديو، ثم نقل المحرك
 // بين جهازين والتحليل جارٍ في خيط آخر (يجب ألا ينهار ولا يتوقف التحليل)
+// مسح الأرشيف: الفيديو يُقسَّم إلى أجزاء تُحلل بالفحص السريع في عدة خيوط، ويُوقف المسح عند 40% ثم يُتابع
+// من ملف الحالة بكائن جديد كأن البرنامج أُغلق وفُتح، ويُقاس زمن الكل ومنه تقدير 30 ساعة من التسجيلات
+int archiveTest(const QString &video, int threads, int chunkSeconds, const QString &resultPath, QTextStream &out)
+{
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    const QString state = resultPath + QStringLiteral(".state.json");
+    QFile::remove(state);
+    QElapsedTimer timer;
+    timer.start();
+    qint64 total = 0;
+    qint64 stoppedAt = 0;
+    int initialChunks = 0;
+    {
+        ArchiveScan scan(&engine);
+        scan.setStatePath(state);
+        scan.setChunkMs(qint64(chunkSeconds) * 1000);
+        if (scan.addFiles({video}) != 1) {
+            out << "error=cannot open video\n";
+            return 1;
+        }
+        total = scan.totalMs();
+        initialChunks = int(scan.chunks().size());
+        QEventLoop loop;
+        QTimer poll;
+        poll.setInterval(100);
+        QObject::connect(&poll, &QTimer::timeout, [&] {
+            if (!scan.isStopping() && scan.doneMs() >= total * 4 / 10)
+                scan.stop();
+        });
+        QObject::connect(&scan, &ArchiveScan::finished, &loop, &QEventLoop::quit);
+        scan.start(threads);
+        poll.start();
+        loop.exec();
+        stoppedAt = scan.doneMs();
+    }
+    const qint64 firstPartMs = timer.elapsed();
+
+    ArchiveScan scan(&engine);
+    scan.setStatePath(state);
+    const bool loaded = scan.load();
+    const qint64 resumedFrom = scan.doneMs();
+    QEventLoop loop;
+    QObject::connect(&scan, &ArchiveScan::finished, &loop, &QEventLoop::quit);
+    scan.start(threads);
+    if (scan.isRunning())
+        loop.exec();
+    const double seconds = std::max(0.001, timer.elapsed() / 1000.0);
+
+    const QList<Archive::Person> persons = Archive::people(scan.chunks(), int(scan.files().size()), GalleryPtr(), 0.30f);
+    QStringList paths;
+    for (const Archive::File &file : scan.files())
+        paths << file.path;
+    const bool report = Report::writeArchiveHtml(resultPath + QStringLiteral(".html"), Archive::toReport(persons, scan.files()), paths, total)
+        && Report::writeArchiveCsv(resultPath + QStringLiteral(".csv"), Archive::toReport(persons, scan.files()));
+    int faces = 0;
+    for (const Archive::Chunk &chunk : scan.chunks())
+        faces += int(chunk.faces.size());
+    const double speed = total / 1000.0 / seconds;
+
+    out << "threads=" << threads << "\n";
+    out << "duration_s=" << total / 1000.0 << "\n";
+    out << "chunks_initial=" << initialChunks << "\n";
+    out << "chunks_final=" << scan.chunks().size() << "\n";
+    out << "stopped_at_s=" << stoppedAt / 1000.0 << "\n";
+    out << "first_part_s=" << firstPartMs / 1000.0 << "\n";
+    out << "resumed=" << (loaded && resumedFrom == stoppedAt) << "\n";
+    out << "resumed_from_s=" << resumedFrom / 1000.0 << "\n";
+    out << "done_s=" << scan.doneMs() / 1000.0 << "\n";
+    out << "pending=" << scan.hasPending() << "\n";
+    out << "chunk_faces=" << faces << "\n";
+    out << "people=" << persons.size() << "\n";
+    out << "report=" << report << "\n";
+    out << "elapsed_s=" << seconds << "\n";
+    // ثوانٍ من الفيديو تُحلل في كل ثانية فعلية، ومنها زمن 30 ساعة من التسجيلات
+    out << "speed_x=" << speed << "\n";
+    out << "estimate_30h_hours=" << 30.0 / speed << "\n";
+    out << "peak_memory_mb=" << peakMemoryMb() << "\n";
+    QFile::remove(state);
+    return loaded && resumedFrom == stoppedAt && !scan.hasPending() && scan.doneMs() >= total - 1000 && report && !persons.isEmpty() ? 0 : 1;
+}
+
 int bench(const QString &videoPath, int seconds, QTextStream &out)
 {
     FaceEngine engine;
@@ -2092,7 +2176,8 @@ int run(const QStringList &args)
         && command != QLatin1String("--camera-test") && command != QLatin1String("--record-test")
         && command != QLatin1String("--watch-test") && command != QLatin1String("--daily-report-test")
         && command != QLatin1String("--gpu-test") && command != QLatin1String("--rules-test")
-        && command != QLatin1String("--bench") && command != QLatin1String("--player-test"))
+        && command != QLatin1String("--bench") && command != QLatin1String("--player-test")
+        && command != QLatin1String("--archive-test"))
         return -1;
 
     QFile output(args.last());
@@ -2106,6 +2191,9 @@ int run(const QStringList &args)
     // Malamih --video-test <فيديو> [تحليل إطار من كل] <ملف النتائج>
     if (command == QLatin1String("--video-test") && (args.size() == 4 || args.size() == 5))
         return videoTest(args.at(2), args.size() == 5 ? args.at(3).toInt() : 1, out);
+    // Malamih --archive-test <فيديو> <خيوط> <ثواني الجزء> <ملف النتائج>
+    if (command == QLatin1String("--archive-test") && args.size() == 6)
+        return archiveTest(args.at(2), std::max(1, args.at(3).toInt()), std::max(10, args.at(4).toInt()), args.last(), out);
     // Malamih --player-test <فيديو> <ثوانٍ> <ملف النتائج>
     if (command == QLatin1String("--player-test") && args.size() == 5)
         return playerTest(args.at(2), args.at(3).toInt(), out);

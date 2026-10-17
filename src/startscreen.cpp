@@ -70,10 +70,12 @@ StartScreen::StartScreen(QWidget *parent)
     QToolButton *video = tile(Icons::Name::Video, QStringLiteral("فيديو"), QStringLiteral("Ctrl+Shift+O"));
     QToolButton *camera = tile(Icons::Name::Camera, QStringLiteral("كاميرا"), QStringLiteral("Ctrl+Shift+C آخر كاميرا"));
     QToolButton *folder = tile(Icons::Name::Folder, QStringLiteral("مجلد صور"), QStringLiteral("Ctrl+Shift+F"));
+    QToolButton *archive = tile(Icons::Name::Film, QStringLiteral("أرشيف تسجيلات"), QStringLiteral("Ctrl+Shift+A"));
     connect(image, &QToolButton::clicked, this, &StartScreen::openImageRequested);
     connect(video, &QToolButton::clicked, this, &StartScreen::openVideoRequested);
     connect(camera, &QToolButton::clicked, this, &StartScreen::openCameraRequested);
     connect(folder, &QToolButton::clicked, this, &StartScreen::openFolderRequested);
+    connect(archive, &QToolButton::clicked, this, &StartScreen::openArchiveRequested);
     tiles->addStretch();
     for (QToolButton *button : std::as_const(m_tiles))
         tiles->addWidget(button);

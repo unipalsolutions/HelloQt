@@ -25,6 +25,7 @@ constexpr int MaxTrackGap = 15;           // إطارات يبقى فيها ال
 constexpr int UnconfirmedLifetime = 150;  // كشف لم يُعتمد يُنسى بعد هذا الغياب
 constexpr int MinTrackHits = 3;           // لا يُعتمد الوجه قبل ظهوره في عدة إطارات متقاربة
 constexpr int EmbedInterval = 5;          // إعادة حساب بصمة الوجه المتتبَّع كل عدة إطارات فقط
+constexpr int QuickEmbedInterval = 20;    // في الفحص السريع: بصمة الوجه المتتبَّع نحو كل 5 ثوانٍ فقط
 constexpr float BetterShotMargin = 0.08f; // لقطة أوضح من أفضل لقطة سابقة تُحلَّل فوراً
 // وجه في موضع وجه سابق لكن بصمته بعيدة عنه: شخص آخر (تبدّل اللقطة في حوار مثلاً) فلا يُلحق بمساره
 constexpr float TrackBreakSimilarity = 0.22f;
@@ -45,6 +46,8 @@ constexpr int MaxPendingFrames = 2;
 constexpr int MaxDisplaySide = 1920;      // الإطارات الأكبر تُصغَّر للعرض فقط
 constexpr int TrackPhotoSize = 192;
 constexpr double AutoAnalysisRate = 10.0; // إطارات محللة لكل ثانية من الفيديو في الوضع التلقائي
+constexpr double QuickAnalysisRate = 4.0; // في الفحص السريع للأرشيف
+constexpr qint64 QuickPreviewMs = 1000;   // صورة معاينة كل ثانية من الوقت الفعلي في الفحص السريع
 constexpr double IdleAnalysisRate = 2.0;  // عند خلو المشهد من الوجوه يُفحص أقل، ويعود للمعدل الكامل فور ظهور وجه
 constexpr int IdleAfter = 20;             // إطارات محللة متتالية بلا وجوه قبل خفض المعدل
 constexpr double StillDifference = 1.6;   // متوسط تغيّر البكسل (من 255) الذي يُعد دونه الإطار ساكناً
@@ -374,20 +377,24 @@ void VideoWorker::run(const QString &source)
     const bool validFps = fps > 1.0 && fps < 1000.0;
     const double rate = validFps ? fps : 25.0;
     const bool automatic = !camera && m_frameStep.load() <= 0;
+    const bool quick = !camera && m_quick;
     int step = camera ? 1 : m_frameStep.load();
     if (step <= 0)
-        step = std::max(1, int(std::lround(rate / AutoAnalysisRate)));
+        step = std::max(1, int(std::lround(rate / (quick ? QuickAnalysisRate : AutoAnalysisRate))));
     const int idleStep = std::max(step, int(std::lround(rate / IdleAnalysisRate)));
     int currentStep = step;
     int skip = 0;
     int idleAnalyses = 0;
     // التكيّف مع سرعة الجهاز: متوسط زمن تحليل الإطار، ومنه كم إطاراً يمر من الفيديو أثناء تحليل واحد
-    const bool adaptive = automatic && m_adaptive;
+    const bool adaptive = automatic && m_adaptive && !quick;
     const int slowestStep = std::max(step, int(std::lround(rate / MinAnalysisRate)));
     double analysisCostMs = 0.0;
     QElapsedTimer analysisClock;
     const bool deliverFrames = camera || m_deliverFrames;
     qint64 lastThumbnailMs = LLONG_MIN / 2;
+    QElapsedTimer previewClock;
+    previewClock.start();
+    qint64 lastPreview = -QuickPreviewMs;
     QElapsedTimer cameraClock;
     cameraClock.start();
 
@@ -668,7 +675,7 @@ void VideoWorker::run(const QString &source)
         // تخطي الساكن: كاميرات المراقبة تصوّر مكاناً فارغاً أغلب الوقت، فلا يُبحث عن وجوه في إطار لم
         // يتغير عن آخر إطار فُحص ما دام لا يوجد وجه متتبَّع؛ أي حركة تعيد الفحص فوراً
         bool still = false;
-        if (filters.skipStill) {
+        if (filters.skipStill || quick) {
             cv::Mat reduced, gray;
             cv::resize(frame, reduced, cv::Size(96, std::max(1, 96 * frame.rows / std::max(1, frame.cols))), 0, 0, cv::INTER_AREA);
             cv::cvtColor(reduced, gray, cv::COLOR_BGR2GRAY);
@@ -746,14 +753,14 @@ void VideoWorker::run(const QString &source)
                 const Identity &identity = identities[track.identity];
                 detection.needsEmbedding = track.embedding.empty() || track.hits < MinTrackHits
                     || detection.iou < 0.5f || processed - track.lastSeen > 1
-                    || processed - track.lastEmbedded >= EmbedInterval
+                    || processed - track.lastEmbedded >= (quick ? QuickEmbedInterval : EmbedInterval)
                     || detection.quality > identity.best.quality + BetterShotMargin;
             }
             if (detection.needsEmbedding)
                 toEmbed.push_back(detection.aligned);
         }
         // دون الصورة المعكوسة: الوجه يظهر في إطارات كثيرة بزوايا مختلفة فلا تضيف دقة تُذكر، وتضاعف الزمن
-        const std::vector<std::vector<float>> embeddings = m_engine->embedMany(toEmbed, false);
+        const std::vector<std::vector<float>> embeddings = m_engine->embedMany(toEmbed, false, !quick);
         for (size_t d = 0, e = 0; d < detections.size() && e < embeddings.size(); ++d) {
             if (detections[d].needsEmbedding)
                 detections[d].embedding = embeddings[e++];
@@ -933,8 +940,10 @@ void VideoWorker::run(const QString &source)
             // العرض من VideoPlayer: النتيجة وحدها بلا صورة، فلا ينتظر التحليل الواجهة
             emit frameReady(QImage(), current, positionMs, progress);
             const qint64 spacing = std::max<qint64>(1000, durationMs / 600);
-            if (positionMs - lastThumbnailMs >= spacing) {
+            const bool due = quick ? previewClock.elapsed() - lastPreview >= QuickPreviewMs : positionMs - lastThumbnailMs >= spacing;
+            if (due) {
                 lastThumbnailMs = positionMs;
+                lastPreview = previewClock.elapsed();
                 cv::Mat thumbnail;
                 const double thumbnailScale = std::min(1.0, double(ThumbnailHeight) / std::max(1, frame.rows));
                 cv::resize(frame, thumbnail, cv::Size(), thumbnailScale, thumbnailScale, cv::INTER_AREA);
