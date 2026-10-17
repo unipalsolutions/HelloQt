@@ -535,7 +535,7 @@ void MultiCameraWindow::render(Feed &feed, const cv::Mat &frame)
         for (const Face &face : std::as_const(feed.faces)) {
             const QRectF box(face.box.x() * sx, face.box.y() * sy, face.box.width() * sx, face.box.height() * sy);
             const bool watched = face.match.status == MatchStatus::Confirmed && m_watched.contains(face.match.personId);
-            const QColor color = watched ? QColor(0xff, 0x5c, 0x5c) : matchColor(face.match.status);
+            const QColor color = watched ? Theme::Watched : matchColor(face.match.status);
             painter.setPen(QPen(color, 2));
             painter.setBrush(Qt::NoBrush);
             painter.drawRoundedRect(box, 4, 4);

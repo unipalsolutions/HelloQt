@@ -76,7 +76,7 @@ void ZoneCanvas::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.fillRect(rect(), QColor(0x0e, 0x0b, 0x09));
+    painter.fillRect(rect(), Theme::Viewport);
     const QRectF area = imageRect();
     if (!m_image.isNull())
         painter.drawImage(area, m_image);
@@ -92,7 +92,7 @@ void ZoneCanvas::paintEvent(QPaintEvent *)
                       zone.height() * area.height());
     };
     // وضع «داخل المناطق فقط»: ما خارجها يُعتّم ليظهر ما سيُتجاهل
-    const QColor zoneColor = m_exclude ? QColor(0xff, 0x5c, 0x5c) : QColor(0x4f, 0xbf, 0x87);
+    const QColor zoneColor = m_exclude ? Theme::Watched : Theme::Success;
     if (!m_exclude && !m_zones.isEmpty()) {
         QPainterPath outside;
         outside.addRect(area);
@@ -104,7 +104,7 @@ void ZoneCanvas::paintEvent(QPaintEvent *)
     for (int i = 0; i < m_zones.size(); ++i) {
         const QRectF box = toWidget(m_zones.at(i));
         if (m_exclude)
-            painter.fillRect(box, QColor(0xff, 0x5c, 0x5c, 70));
+            painter.fillRect(box, Theme::withAlpha(Theme::Watched, 70));
         painter.setPen(QPen(zoneColor, 2));
         painter.setBrush(Qt::NoBrush);
         painter.drawRect(box);
@@ -244,7 +244,7 @@ CameraRulesDialog::CameraRulesDialog(const QString &source, const QString &camer
 
     auto *buttons = new QHBoxLayout;
     auto *save = new FancyButton(Icons::Name::Check, QStringLiteral("حفظ"), FancyButton::Kind::Primary, this);
-    auto *cancel = new FancyButton(Icons::Name::Stop, QStringLiteral("إلغاء"), FancyButton::Kind::Secondary, this);
+    auto *cancel = new FancyButton(Icons::Name::Reject, QStringLiteral("إلغاء"), FancyButton::Kind::Secondary, this);
     buttons->addStretch();
     buttons->addWidget(cancel);
     buttons->addWidget(save);

@@ -65,6 +65,18 @@ QListWidget, QListView { background: transparent; border: none; outline: 0; }
 QListWidget#photoGrid::item { border-radius: 12px; padding: 6px; color: @muted; }
 QListWidget#photoGrid::item:hover { background: @surfaceHigh; }
 QListWidget#photoGrid::item:selected { background: @accentSoft; color: @text; }
+QListWidget#plainList::item { border-radius: 10px; padding: 8px 10px; margin: 1px 0; }
+QListWidget#plainList::item:hover { background: @surfaceHigh; }
+QListWidget#plainList::item:selected { background: @accentSoft; color: @text; }
+QTabWidget::pane { border: 1px solid @border; border-radius: 14px; background: @surface; top: 8px; }
+QTabWidget::tab-bar { alignment: right; }
+QTabBar { qproperty-drawBase: 0; }
+QTabBar::tab {
+    background: transparent; color: @muted; border: 1px solid transparent; border-radius: 15px;
+    padding: 6px 16px; margin: 0 2px;
+}
+QTabBar::tab:hover { background: @surfaceHigh; color: @text; }
+QTabBar::tab:selected { background: @surfaceHigh; border-color: @border; color: @text; font-weight: 600; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
 QScrollBar::handle:vertical, QScrollBar::handle:horizontal { background: @border; border-radius: 4px; min-height: 30px; min-width: 30px; }
@@ -94,12 +106,14 @@ QCheckBox::indicator:hover { border-color: @accent2; }
 QCheckBox::indicator:checked { background: @accent; border-color: @accent; image: url(:/resources/check.png); }
 QCheckBox::indicator:disabled { background: @surface; border-color: @border; }
 QRadioButton::indicator { width: 16px; height: 16px; border-radius: 9px; border: 1px solid @borderHover; background: @surfaceHigh; }
-QRadioButton::indicator:checked { border: 5px solid @accent; background: white; }
-/* السهم في الطرف الأيسر كقوائم SelectBox؛ القائمة المنسدلة تنعكس مع الاتجاه العربي وحقل التاريخ لا ينعكس */
+QRadioButton::indicator:checked { width: 8px; height: 8px; border: 5px solid @accent; background: white; }
+/* السهم في الطرف الأيسر كقوائم SelectBox؛ القائمة المنسدلة وحقل التاريخ ينعكسان مع الاتجاه العربي */
 QComboBox::drop-down, QDateTimeEdit::drop-down { subcontrol-origin: padding; width: 28px; border: none; background: transparent; }
-QComboBox::drop-down { subcontrol-position: center right; }
-QDateTimeEdit::drop-down { subcontrol-position: center left; }
-QComboBox::down-arrow, QDateTimeEdit::down-arrow { image: url(:/resources/chevron-down.png); width: 14px; height: 14px; }
+QComboBox::drop-down, QDateTimeEdit::drop-down { subcontrol-position: center right; }
+QDateTimeEdit[calendarPopup="true"] { min-width: 96px; }
+/* حقول الوقت تُعدَّل بالكتابة والعجلة؛ أسهم Fusion الصغيرة تظهر كخدش في الزاوية */
+QDateTimeEdit::up-arrow, QDateTimeEdit::down-arrow { image: none; width: 0; height: 0; }
+QComboBox::down-arrow, QDateTimeEdit[calendarPopup="true"]::down-arrow { image: url(:/resources/chevron-down.png); width: 14px; height: 14px; }
 QHeaderView { background: transparent; border: none; }
 QHeaderView::section {
     background: @surfaceHigh; color: @muted; border: none; border-bottom: 1px solid @border;

@@ -2,6 +2,7 @@
 
 #include "faceengine.h"
 #include "facedatabase.h"
+#include "theme.h"
 
 #include <QDateTime>
 #include <QMutex>
@@ -110,7 +111,7 @@ QList<CameraRecorder::OverlayBox> CameraWatch::overlay(const QSize &frameSize, c
     const double w = frameSize.width(), h = frameSize.height();
     for (const Face &face : faces) {
         const QRectF box(face.box.x() / w, face.box.y() / h, face.box.width() / w, face.box.height() / h);
-        boxes.append({box, matchLabel(face.match), isWatchedMatch(face.match) ? QColor(0xff, 0x5c, 0x5c) : matchColor(face.match.status)});
+        boxes.append({box, matchLabel(face.match), isWatchedMatch(face.match) ? Theme::Watched : matchColor(face.match.status)});
     }
     return boxes;
 }

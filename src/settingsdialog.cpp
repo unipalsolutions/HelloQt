@@ -106,7 +106,7 @@ SettingsDialog::SettingsDialog(FaceDatabase *database, QWidget *parent)
 
     auto *buttons = new QHBoxLayout;
     auto *save = new FancyButton(Icons::Name::Check, QStringLiteral("حفظ"), FancyButton::Kind::Primary, this);
-    auto *cancel = new FancyButton(Icons::Name::Stop, QStringLiteral("إلغاء"), FancyButton::Kind::Secondary, this);
+    auto *cancel = new FancyButton(Icons::Name::Reject, QStringLiteral("إلغاء"), FancyButton::Kind::Secondary, this);
     buttons->addStretch();
     buttons->addWidget(cancel);
     buttons->addWidget(save);

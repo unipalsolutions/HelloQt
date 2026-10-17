@@ -36,8 +36,8 @@ constexpr int LaneHeight = 30;
 constexpr int LaneGap = 6;
 constexpr int WeekDays = 7;
 
-const QColor WatchedColor(0xff, 0x5c, 0x5c);
-const QColor VisitorColor(0x9c, 0xa3, 0xaf);
+const QColor WatchedColor = Theme::Danger;
+const QColor VisitorColor = Theme::Muted;
 
 QString timeText(const QDateTime &time)
 {
@@ -257,8 +257,8 @@ RecordingsDialog::RecordingsDialog(const FaceDatabase *database, const QSet<QStr
     auto *title = new QLabel(QStringLiteral("تسجيلات الكاميرات"), this);
     title->setObjectName(QStringLiteral("sectionTitle"));
     layout->addWidget(title);
-    auto *hint = new QLabel(QStringLiteral("لكل كاميرا صف فيه فترات تسجيلها (أزرق) ومن ظهر أمامها: المراقَبون بالأحمر، "
-                                           "المعروفون بالسماوي، والزوار المجهولون بالرمادي. انقر نقراً مزدوجاً على فترة تسجيل لفتحها "
+    auto *hint = new QLabel(QStringLiteral("لكل كاميرا صف فيه فترات تسجيلها (أخضر داكن) ومن ظهر أمامها: المراقَبون بالأحمر، "
+                                           "المعروفون بالأخضر الفاتح، والزوار المجهولون بالرمادي. انقر نقراً مزدوجاً على فترة تسجيل لفتحها "
                                            "عند تلك اللحظة، أو على ظهور في القائمة لفتح التسجيل عند لحظته."),
                             this);
     hint->setObjectName(QStringLiteral("muted"));

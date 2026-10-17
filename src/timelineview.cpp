@@ -78,7 +78,7 @@ protected:
         p.drawText(QRectF(4, y, PreviewWidth, 22), Qt::AlignCenter, m_time);
         y += 22;
         if (!m_note.isEmpty()) {
-            p.setPen(QColor(0xfa, 0xcc, 0x15));
+            p.setPen(Theme::Highlight);
             p.drawText(QRectF(6, y, PreviewWidth - 4, 18), Qt::AlignCenter,
                        p.fontMetrics().elidedText(m_note, Qt::ElideRight, PreviewWidth - 8));
         }
@@ -451,7 +451,7 @@ void TimelineView::paintEvent(QPaintEvent *)
         p.fillRect(QRectF(xOf(m_rangeEnd), RulerHeight, right - xOf(m_rangeEnd), height() - RulerHeight), dim);
     // مقبضا الاقتطاع
     if (m_duration > 0) {
-        const QColor trim(0xfa, 0xcc, 0x15);
+        const QColor trim = Theme::Highlight;
         const qint64 endMs = m_rangeEnd > 0 ? m_rangeEnd : m_duration;
         const double sx = xOf(m_rangeStart), ex = xOf(endMs);
         if (m_rangeStart > 0 || m_rangeEnd > 0) {
@@ -494,7 +494,7 @@ void TimelineView::paintEvent(QPaintEvent *)
             p.drawLine(QPointF(x, RulerHeight + FilmHeight - 9), QPointF(x, RulerHeight + FilmHeight));
     }
     // العلامات: راية صفراء على المسطرة وخط خفيف عبر الشريط
-    const QColor flag(0xfa, 0xcc, 0x15);
+    const QColor flag = Theme::Highlight;
     for (auto it = m_markers.cbegin(); it != m_markers.cend(); ++it) {
         const double x = xOf(it.key());
         if (x < left - 6 || x > right + 6)

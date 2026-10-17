@@ -106,7 +106,7 @@ void FaceDetailsPanel::showDetails(const Details &d)
                                                 : QStringLiteral("انقر لتكبير الوجه"));
     shot->setStyleSheet(QStringLiteral("QToolButton { border: 2px solid %1; border-radius: 16px; padding: 1px; }"
                                        "QToolButton:hover { border-color: %2; }")
-                            .arg((d.watched ? QColor(0xf8, 0x71, 0x71) : d.color).name(), Theme::Accent2.name()));
+                            .arg((d.watched ? Theme::Watched : d.color).name(), Theme::Accent2.name()));
     connect(shot, &QToolButton::clicked, this, [this, faceId] { emit shotRequested(faceId); });
     header->addWidget(shot, 0, Qt::AlignTop);
     auto *titles = new QVBoxLayout;
@@ -121,12 +121,13 @@ void FaceDetailsPanel::showDetails(const Details &d)
     titles->addWidget(status);
     if (d.watched) {
         auto *watched = new QLabel(QStringLiteral("⚠ في قائمة المراقبة"), m_content);
-        watched->setStyleSheet(QStringLiteral("color: #e8774f; font-weight: 600;"));
+        watched->setStyleSheet(QStringLiteral("color: %1; font-weight: 600;").arg(Theme::Watched.name()));
         titles->addWidget(watched);
     }
-    auto *scores = new QLabel(QStringLiteral("التشابه %1% · جودة الوجه %2%").arg(d.score).arg(d.quality), m_content);
+    // صياغة قصيرة كي لا تُقص النسبة في اللوحة الضيقة، والكاملة في التلميح
+    auto *scores = new QLabel(QStringLiteral("تشابه %1% · جودة %2%").arg(d.score).arg(d.quality), m_content);
     scores->setObjectName(QStringLiteral("muted"));
-    scores->setWordWrap(true);
+    scores->setToolTip(QStringLiteral("التشابه %1% · جودة الوجه %2%").arg(d.score).arg(d.quality));
     titles->addWidget(scores);
     if (d.quality < 35) {
         auto *low = new QLabel(QStringLiteral("جودة الوجه منخفضة: النتيجة أقل موثوقية"), m_content);

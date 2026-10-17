@@ -512,7 +512,7 @@ void MainWindow::showPersonDetails()
         item->setIcon(QIcon(decoratedPhoto(m_database.photo(photo.id, m_photoList->iconSize().width()), m_photoList->iconSize().width(), cover, suspect)));
         item->setText(suspect ? QStringLiteral("مشكوك فيها") : QStringLiteral("جودة %1%").arg(qRound(photo.quality * 100)));
         if (suspect)
-            item->setForeground(QColor(0xfb, 0x71, 0x85));
+            item->setForeground(Theme::Watched);
         QString tip = QStringLiteral("جودة الوجه: %1%").arg(qRound(photo.quality * 100));
         if (consistency.contains(photo.id))
             tip += QStringLiteral("\nالتشابه مع بقية صوره: %1%").arg(qRound(consistency.value(photo.id) * 100));

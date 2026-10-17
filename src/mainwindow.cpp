@@ -2037,7 +2037,7 @@ void MainWindow::rebuildTimelineLanes()
         lane.name = matchLabel(face.match);
         // المعروفون بلون حالتهم، وغيرهم بألوان مميزة ثابتة لكل شخص
         lane.color = face.match.status == MatchStatus::Unknown
-            ? QColor::fromHsv((face.id * 47 + 190) % 360, 120, 235)
+            ? QColor::fromHsv((face.id * 47 + 190) % 360, 85, 210)
             : matchColor(face.match.status);
         auto cached = m_laneAvatars.constFind(face.id);
         if (cached == m_laneAvatars.constEnd() || cached->first != face.quality) {

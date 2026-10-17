@@ -79,6 +79,7 @@ CameraDialog::CameraDialog(QWidget *parent, const QString &selectId)
     auto *listColumn = new QVBoxLayout;
     listColumn->addWidget(sectionTitle(QStringLiteral("الكاميرات المحفوظة"), this));
     m_list = new QListWidget(this);
+    m_list->setObjectName(QStringLiteral("plainList"));
     m_list->setMinimumWidth(240);
     m_list->setIconSize(QSize(22, 22));
     listColumn->addWidget(m_list, 1);

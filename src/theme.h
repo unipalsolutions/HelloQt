@@ -19,6 +19,8 @@ inline const QColor Accent2(0x6c, 0xc1, 0x93);
 inline const QColor Success(0x4f, 0xbf, 0x87);
 inline const QColor Warning(0xf5, 0xa5, 0x24);
 inline const QColor Danger(0xd9, 0x54, 0x2b);
+// أحمر المراقَبين: أفتح من Danger ليقرأ فوق الصور والفيديو
+inline const QColor Watched(0xe8, 0x77, 0x4f);
 // برتقالي التحديد (حدود العنصر المختار)
 inline const QColor Highlight(0xf5, 0xa5, 0x24);
 // خلفية مساحة الفيديو والصورة

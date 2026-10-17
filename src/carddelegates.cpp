@@ -191,7 +191,7 @@ void FaceCardDelegate::paintActions(QPainter *p, const QStyleOptionViewItem &opt
     for (const auto &[action, rect] : actionRects(option, index)) {
         const bool hot = rect.contains(m_mouse);
         const QColor tint = action == FaceAction::Confirm ? matchColor(MatchStatus::Confirmed)
-                          : action == FaceAction::Reject  ? QColor(0xf8, 0x71, 0x71)
+                          : action == FaceAction::Reject  ? Theme::Watched
                           : action == FaceAction::Watch   ? Accent2
                                                           : Text;
         p->setPen(QPen(hot ? withAlpha(tint, 220) : withAlpha(Border, 255), 1.0));
@@ -214,7 +214,7 @@ static void paintStatusBadge(QPainter *p, const QRectF &avatar, MatchStatus stat
     using namespace Theme;
     const double size = std::clamp(avatar.width() * 0.36, 16.0, 24.0);
     const QRectF badge(rtl ? avatar.left() - 2 : avatar.right() - size + 2, avatar.bottom() - size + 2, size, size);
-    const QColor color = watched ? QColor(0xf8, 0x71, 0x71) : matchColor(status);
+    const QColor color = watched ? Theme::Watched : matchColor(status);
     p->setPen(QPen(Surface, 2.0));
     p->setBrush(watched ? color : mix(Surface, color, 0.85));
     p->drawEllipse(badge);
@@ -255,7 +255,7 @@ void FaceCardDelegate::paintList(QPainter *p, const QStyleOptionViewItem &option
     const auto status = MatchStatus(index.data(CardRole::Status).toInt());
     const bool watched = index.data(CardRole::Watched).toBool();
     const QColor color = matchColor(status);
-    paintAvatar(p, l.avatar, index.data(CardRole::Avatar).value<QPixmap>(), watched ? QColor(0xf8, 0x71, 0x71) : color);
+    paintAvatar(p, l.avatar, index.data(CardRole::Avatar).value<QPixmap>(), watched ? Theme::Watched : color);
     const bool actions = index.data(CardRole::Actions).isValid();
     if (actions)
         paintStatusBadge(p, l.avatar, status, watched, l.rtl);
@@ -273,7 +273,7 @@ void FaceCardDelegate::paintList(QPainter *p, const QStyleOptionViewItem &option
                              : status == MatchStatus::Confirmed ? QStringLiteral("مؤكد")
                              : status == MatchStatus::Possible  ? QStringLiteral("محتمل")
                                                                 : QStringLiteral("غير مسجل");
-    const QColor pillColor = watched && customStatus.isEmpty() ? QColor(0xf8, 0x71, 0x71) : color;
+    const QColor pillColor = watched && customStatus.isEmpty() ? Theme::Watched : color;
     const QFontMetricsF smallMetrics(smallFont);
     const double pillWidth = smallMetrics.horizontalAdvance(statusText) + 16;
     const QRectF pill(l.rtl ? l.text.left() : l.text.right() - pillWidth, l.text.top() + 1, pillWidth, 20);
@@ -333,7 +333,7 @@ void FaceCardDelegate::paintGrid(QPainter *p, const QStyleOptionViewItem &option
     const QColor color = matchColor(status);
     const double size = 72 * m_scale;
     const QRectF avatar(card.center().x() - size / 2.0, card.top() + 8, size, size);
-    paintAvatar(p, avatar, index.data(CardRole::Avatar).value<QPixmap>(), watched ? QColor(0xf8, 0x71, 0x71) : color);
+    paintAvatar(p, avatar, index.data(CardRole::Avatar).value<QPixmap>(), watched ? Theme::Watched : color);
     if (index.data(CardRole::Actions).isValid() && !(option.state & QStyle::State_MouseOver))
         paintStatusBadge(p, avatar, status, watched, rtl);
 

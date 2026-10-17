@@ -89,7 +89,7 @@ void StrengthMeter::paintEvent(QPaintEvent *)
     if (!m_valid)
         return;
     const double v = std::clamp(m_strength.score, 0.0, 1.0);
-    const QColor color = v >= 0.6 ? Success : (v >= 0.35 ? Accent2 : QColor(0xfb, 0x71, 0x85));
+    const QColor color = v >= 0.6 ? Success : (v >= 0.35 ? Accent2 : Theme::Watched);
     QConicalGradient gradient(ring.center(), 90);
     gradient.setColorAt(0.0, color);
     gradient.setColorAt(1.0, mix(color, Accent, 0.7));

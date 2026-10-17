@@ -1,5 +1,6 @@
 #include "recorder.h"
 
+#include "theme.h"
 #include "videofilters.h"
 
 #include <QDir>
@@ -735,7 +736,7 @@ QString CameraRecorder::saveSnapshot(const QImage &frame, const QRectF &box, con
     {
         QPainter painter(&image);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(QColor(0xff, 0x5c, 0x5c), std::max(2.0, image.height() / 300.0)));
+        painter.setPen(QPen(Theme::Watched, std::max(2.0, image.height() / 300.0)));
         painter.drawRect(box);
     }
     (void)QtConcurrent::run([image, path] { image.save(path, "JPG", 88); });
