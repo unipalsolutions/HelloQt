@@ -8,8 +8,10 @@
 
 #include <functional>
 
+class QHBoxLayout;
 class QLabel;
 class QScrollArea;
+class QToolButton;
 class QVBoxLayout;
 class QVariantAnimation;
 
@@ -254,4 +256,47 @@ private:
     Icons::Name m_icon = Icons::Name::Info;
     QColor m_color;
     QVariantAnimation *m_spinAnimation;
+};
+
+// شريط عائم مستدير فوق عنصر آخر (مثل أدوات التكبير فوق الصورة)، يلتصق بزاوية سفلية ويتبع تغير حجمه
+class FloatingBar : public QWidget
+{
+    Q_OBJECT
+
+public:
+    // atEnd: عند نهاية السطر (اليسار في العربية)، وإلا في الوسط
+    FloatingBar(QWidget *host, bool atEnd = true);
+
+    QHBoxLayout *barLayout() const { return m_layout; }
+    // زر أيقونة مستدير صغير داخل الشريط
+    QToolButton *addButton(Icons::Name icon, const QString &tip);
+    void reposition();
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
+private:
+    QHBoxLayout *m_layout;
+    bool m_atEnd;
+};
+
+// شارة «مباشر» بنقطة حمراء تنبض، للبث الحي من الكاميرا
+class LiveBadge : public QWidget
+{
+    Q_OBJECT
+
+public:
+    explicit LiveBadge(QWidget *parent = nullptr);
+
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+
+private:
+    double m_pulse = 0.0;
+    QVariantAnimation *m_animation;
 };

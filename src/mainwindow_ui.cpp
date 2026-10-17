@@ -32,10 +32,10 @@ void MainWindow::updateWorkState()
     const bool video = state == WorkState::Video;
     const bool camera = state == WorkState::Camera;
 
-    // بلا ملف: أزرار الفتح كلها؛ بعده تجتمع في «فتح» وتظهر أدوات الحالة
+    // أزرار الفتح المفصلة في بطاقات شاشة البداية، وفي الترويسة زر «فتح» واحد بقائمته في كل الحالات
     for (FancyButton *button : {m_openImageButton, m_openVideoButton, m_recentButton, m_cameraButton, m_folderScanButton})
-        button->setVisible(empty);
-    m_openMenuButton->setVisible(!empty);
+        button->setVisible(false);
+    m_openMenuButton->setVisible(true);
     m_openMenuButton->setEnabled(m_ready);
     m_enhanceImageButton->setVisible(image || (video && !m_videoRunning));
     m_saveFacesButton->setVisible(!empty);
@@ -44,7 +44,7 @@ void MainWindow::updateWorkState()
     // زر أساسي واحد بارز في كل حالة: ما يُتوقع أن يفعله المستخدم الآن
     FancyButton *primary = nullptr;
     if (empty)
-        primary = m_openImageButton;
+        primary = m_openMenuButton;
     else if (image && !m_analyzing)
         primary = m_faces.isEmpty() ? m_enhanceImageButton : m_saveFacesButton;
     else if (video && !m_videoRunning)
@@ -69,6 +69,23 @@ void MainWindow::updateWorkState()
         m_settingsDrawer->setOpen(false);
     if (!m_videoFullscreen)
         m_sideCard->setVisible(!empty && !m_panelsHidden);
+    m_zoomBar->setVisible(image || video);
+    // أثناء البث الحي تنتقل أزرار التحكم إلى الشريط العائم فوق الصورة فيتسع الرأس لاسم الكاميرا،
+    // وتعود إلى مكانها في الرأس للفيديو؛ الأزرار نفسها تنتقل فتبقى حالتها واتصالاتها
+    const bool floating = camera && m_videoRunning;
+    if (floating != m_liveControlsFloating) {
+        m_liveControlsFloating = floating;
+        // تُدرج قبل «تحسين الصورة» بالترتيب نفسه الذي كانت عليه
+        for (FancyButton *button : {m_pauseButton, m_recordButton, m_stopButton}) {
+            if (floating)
+                m_liveBar->barLayout()->addWidget(button);
+            else
+                m_headerLayout->insertWidget(m_headerLayout->indexOf(m_enhanceImageButton), button);
+        }
+    }
+    m_liveBar->setVisible(floating);
+    if (floating)
+        m_liveBar->reposition();
 
     // العنوان: اسم الصفحة قبل فتح ملف، واسم الملف ومعلوماته بعده
     QString fileName;

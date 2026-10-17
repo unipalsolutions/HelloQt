@@ -424,8 +424,9 @@ void Toast::show(QWidget *host, const QString &text, Kind kind)
     auto *toast = new Toast(host, text, kind);
     s_current = toast;
 
-    const QPoint end((host->width() - toast->width()) / 2, host->height() - toast->height() - 44);
-    toast->move(end + QPoint(0, 24));
+    // في وسط الأعلى تحت الترويسة، بعيداً عن أدوات التشغيل والعدّاد أسفل الصورة، وتنزل من الأعلى
+    const QPoint end((host->width() - toast->width()) / 2, std::min(86, host->height() / 5));
+    toast->move(end - QPoint(0, 24));
     auto *effect = new QGraphicsOpacityEffect(toast);
     effect->setOpacity(0.0);
     toast->setGraphicsEffect(effect);
@@ -438,7 +439,7 @@ void Toast::show(QWidget *host, const QString &text, Kind kind)
     auto *slideIn = new QPropertyAnimation(toast, "pos");
     slideIn->setDuration(380);
     slideIn->setEndValue(end);
-    slideIn->setEasingCurve(QEasingCurve::OutBack);
+    slideIn->setEasingCurve(QEasingCurve::OutCubic);
     auto *enter = new QParallelAnimationGroup;
     enter->addAnimation(fadeIn);
     enter->addAnimation(slideIn);

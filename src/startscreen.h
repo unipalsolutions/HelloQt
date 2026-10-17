@@ -4,12 +4,13 @@
 
 #include <QWidget>
 
+class QAbstractButton;
 class QLabel;
-class QToolButton;
+class QSpacerItem;
 class QVBoxLayout;
 
-// شاشة البداية في صفحة التعرف قبل فتح أي ملف: أزرار كبيرة للصورة والفيديو والكاميرا والمجلد،
-// آخر الملفات والكاميرات بنقرة، ومنطقة سحب وإفلات، وأهم الاختصارات
+// شاشة البداية في صفحة التعرف قبل فتح أي ملف: بطاقات كبيرة للصورة والفيديو والكاميرا والمجلد والأرشيف،
+// آخر الملفات بصور مصغرة والكاميرات بنقرة، ومنطقة سحب وإفلات، وأهم الاختصارات
 class StartScreen : public QWidget
 {
     Q_OBJECT
@@ -37,16 +38,22 @@ signals:
 protected:
     void paintEvent(QPaintEvent *event) override;
     void showEvent(QShowEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
-    QToolButton *tile(Icons::Name icon, const QString &title, const QString &hint);
-    QToolButton *listButton(Icons::Name icon, const QString &text, const QString &tip);
+    QAbstractButton *tile(Icons::Name icon, const QString &title, const QString &hint);
+    QWidget *panel(Icons::Name icon, const QString &title, QVBoxLayout **list, QLabel **count);
     void clearList(QVBoxLayout *layout);
 
-    QList<QToolButton *> m_tiles;
+    QList<QAbstractButton *> m_tiles;
     QVBoxLayout *m_recentLayout = nullptr;
     QVBoxLayout *m_cameraLayout = nullptr;
+    QLabel *m_recentCount = nullptr;
+    QLabel *m_cameraCount = nullptr;
     QLabel *m_status = nullptr;
+    QLabel *m_logo = nullptr;
+    QVBoxLayout *m_outer = nullptr;
+    QList<QSpacerItem *> m_gaps;
     bool m_ready = false;
     bool m_dropHighlight = false;
 };

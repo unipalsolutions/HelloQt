@@ -8,6 +8,7 @@
 
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QToolButton>
 
 using namespace MainWindowHelpers;
 
@@ -748,6 +749,7 @@ QWidget *MainWindow::createRecognitionPage()
     // ── الرأس سطر واحد: العنوان أو اسم الملف، كبسولة الحالة، الأزرار، ثم أدوات الإطار والإعدادات ──
     m_recognitionHeader = new QWidget(page);
     auto *header = new QHBoxLayout(m_recognitionHeader);
+    m_headerLayout = header;
     header->setContentsMargins(0, 0, 0, 0);
     header->setSpacing(8);
     m_pageTitle = label(QStringLiteral("التعرف على الوجوه"), QStringLiteral("title"), page);
@@ -1051,6 +1053,32 @@ QWidget *MainWindow::createRecognitionPage()
     m_view = new ImageView(viewPage);
     m_view->setMinimumSize(280, 180);
     viewLayout->addWidget(m_view, 1);
+    // أدوات التكبير عائمة فوق الصورة في زاويتها السفلية
+    m_zoomBar = new FloatingBar(m_view);
+    QToolButton *zoomOut = m_zoomBar->addButton(Icons::Name::ZoomOut, QStringLiteral("تصغير (−)"));
+    auto *zoomLabel = new QLabel(QStringLiteral("100%"), m_zoomBar);
+    zoomLabel->setMinimumWidth(46);
+    zoomLabel->setAlignment(Qt::AlignCenter);
+    m_zoomBar->barLayout()->addWidget(zoomLabel);
+    QToolButton *zoomIn = m_zoomBar->addButton(Icons::Name::ZoomIn, QStringLiteral("تكبير (+)"));
+    QToolButton *zoomFit = m_zoomBar->addButton(Icons::Name::FitWidth, QStringLiteral("العرض الكامل (0)"));
+    connect(zoomOut, &QToolButton::clicked, this, [this] { m_view->zoomBy(0.8); });
+    connect(zoomIn, &QToolButton::clicked, this, [this] { m_view->zoomBy(1.25); });
+    connect(zoomFit, &QToolButton::clicked, m_view, &ImageView::resetZoom);
+    connect(m_view, &ImageView::zoomChanged, zoomLabel, [zoomLabel, zoomFit](double zoom) {
+        // \u2066…\u2069 تُبقي النسبة بترتيبها الصحيح
+        zoomLabel->setText(QStringLiteral("\u2066%1%\u2069").arg(qRound(zoom * 100)));
+        zoomFit->setEnabled(zoom > 1.001);
+    });
+    zoomFit->setEnabled(false);
+    m_zoomBar->reposition();
+    // أدوات البث الحي عائمة فوق الكاميرا: تنتقل إليها أزرار الإيقاف المؤقت والتسجيل والإيقاف من الرأس
+    m_liveBar = new FloatingBar(m_view, false);
+    m_liveBar->setLayoutDirection(Qt::RightToLeft);
+    m_liveBar->barLayout()->setContentsMargins(6, 5, 6, 5);
+    m_liveBar->barLayout()->setSpacing(6);
+    m_liveBar->barLayout()->addWidget(new LiveBadge(m_liveBar));
+    m_liveBar->setVisible(false);
     m_playbackBar = new PlaybackBar(viewPage);
     m_playbackBar->setVisible(false);
     viewLayout->addWidget(m_playbackBar);

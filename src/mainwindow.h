@@ -51,6 +51,8 @@ class QSpinBox;
 class SegmentedControl;
 class SideDrawer;
 class Stepper;
+class FloatingBar;
+class QHBoxLayout;
 class ProgressRing;
 class CollapsibleSection;
 class QThread;
@@ -463,6 +465,11 @@ private:
     QWidget *m_frameStepGroup = nullptr;
     FancyButton *m_advancedButton = nullptr;    // إظهار «إعدادات التحليل» النادرة أو طيّها
     QWidget *m_statusStrip = nullptr;           // ماذا يجري، كم بقي، والخطوة المقترحة
+    FloatingBar *m_zoomBar = nullptr;
+    FloatingBar *m_liveBar = nullptr;
+    QHBoxLayout *m_headerLayout = nullptr;
+    bool m_liveControlsFloating = false;
+    CollapsibleSection *m_detailsSection = nullptr;
     ProgressRing *m_statusRing = nullptr;
     QLabel *m_statusTitle = nullptr;
     QLabel *m_statusDetail = nullptr;

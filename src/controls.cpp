@@ -14,6 +14,7 @@
 #include <QScrollArea>
 #include <QSettings>
 #include <QStyleOptionSlider>
+#include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
 #include <QVariantAnimation>
@@ -677,7 +678,8 @@ void CollapsibleSection::applyHeight(double progress)
 {
     m_progress = progress;
     const int full = std::max(m_content->sizeHint().height(), m_content->minimumSizeHint().height());
-    m_content->setMaximumHeight(int(std::round(full * progress)));
+    // مفتوحاً بالكامل يكبر المحتوى بلا حد إن أُعطي مساحة (داخل مقسِّم مثلاً)
+    m_content->setMaximumHeight(progress >= 1.0 ? QWIDGETSIZE_MAX : int(std::round(full * progress)));
     // القسم نفسه يتقلص أيضاً، فيستعيد المقسِّم الذي يحويه المساحة المحررة
     const QMargins margins = layout()->contentsMargins();
     setMaximumHeight(progress >= 1.0 ? QWIDGETSIZE_MAX
@@ -908,4 +910,123 @@ void ProgressRing::paintEvent(QPaintEvent *)
         p.drawArc(ring, int(-m_spin * 16), 90 * 16);
     else
         p.drawArc(ring, 90 * 16, int(-m_progress * 360 * 16));
+}
+
+FloatingBar::FloatingBar(QWidget *host, bool atEnd)
+    : QWidget(host)
+    , m_layout(new QHBoxLayout(this))
+    , m_atEnd(atEnd)
+{
+    m_layout->setContentsMargins(6, 4, 6, 4);
+    m_layout->setSpacing(2);
+    // الأدوات تُقرأ من اليسار مثل «− 100% +» في كل اللغات؛ الموضع وحده يتبع اتجاه الواجهة
+    setLayoutDirection(Qt::LeftToRight);
+    setStyleSheet(QStringLiteral("QToolButton { background: transparent; border: none; border-radius: 13px; padding: 0; }"
+                                 "QToolButton:hover { background: %1; }"
+                                 "QToolButton:disabled { background: transparent; }"
+                                 "QLabel { color: %2; font-size: 9pt; padding: 0 4px; }")
+                      .arg(Theme::SurfaceHigh.name(), Theme::Text.name()));
+    host->installEventFilter(this);
+}
+
+QToolButton *FloatingBar::addButton(Icons::Name icon, const QString &tip)
+{
+    auto *button = new QToolButton(this);
+    button->setIcon(Icons::icon(icon, Theme::Text, 16));
+    button->setIconSize(QSize(16, 16));
+    button->setFixedSize(26, 26);
+    button->setToolTip(tip);
+    button->setCursor(Qt::PointingHandCursor);
+    m_layout->addWidget(button);
+    return button;
+}
+
+void FloatingBar::reposition()
+{
+    QWidget *host = parentWidget();
+    if (!host)
+        return;
+    adjustSize();
+    const int margin = 12;
+    int x = (host->width() - width()) / 2;
+    if (m_atEnd)
+        x = host->isRightToLeft() ? margin : host->width() - width() - margin;
+    move(x, host->height() - height() - margin);
+    raise();
+}
+
+bool FloatingBar::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == parentWidget() && (event->type() == QEvent::Resize || event->type() == QEvent::Show))
+        reposition();
+    return QWidget::eventFilter(watched, event);
+}
+
+void FloatingBar::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF bar = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    p.setPen(QPen(Theme::withAlpha(Theme::Border, 230), 1));
+    p.setBrush(Theme::withAlpha(Theme::Surface, 225));
+    p.drawRoundedRect(bar, bar.height() / 2, bar.height() / 2);
+}
+
+LiveBadge::LiveBadge(QWidget *parent)
+    : QWidget(parent)
+    , m_animation(new QVariantAnimation(this))
+{
+    m_animation->setStartValue(0.0);
+    m_animation->setEndValue(1.0);
+    m_animation->setDuration(1400);
+    m_animation->setLoopCount(-1);
+    connect(m_animation, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        m_pulse = value.toDouble();
+        update();
+    });
+    setToolTip(QStringLiteral("بث حي من الكاميرا"));
+}
+
+QSize LiveBadge::sizeHint() const
+{
+    QFont bold = font();
+    bold.setWeight(QFont::Bold);
+    return {QFontMetrics(bold).horizontalAdvance(QStringLiteral("مباشر")) + 40, 30};
+}
+
+void LiveBadge::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    m_animation->start();
+}
+
+void LiveBadge::hideEvent(QHideEvent *event)
+{
+    QWidget::hideEvent(event);
+    m_animation->stop();
+}
+
+void LiveBadge::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const QRectF pill = QRectF(rect()).adjusted(1, 1, -1, -1);
+    p.setPen(Qt::NoPen);
+    p.setBrush(Theme::withAlpha(Theme::Danger, 46));
+    p.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
+
+    // النقطة وموجة تتسع حولها وتخفت
+    const bool rtl = isRightToLeft();
+    const QPointF dot(rtl ? pill.right() - 15 : pill.left() + 15, pill.center().y());
+    p.setBrush(Theme::withAlpha(Theme::Danger, int(150 * (1.0 - m_pulse))));
+    p.drawEllipse(dot, 4 + 6 * m_pulse, 4 + 6 * m_pulse);
+    p.setBrush(QColor(0xff, 0x6b, 0x45));
+    p.drawEllipse(dot, 4.5, 4.5);
+
+    QFont bold = font();
+    bold.setWeight(QFont::Bold);
+    p.setFont(bold);
+    p.setPen(QColor(0xff, 0xb4, 0x9c));
+    const QRectF text = rtl ? pill.adjusted(8, 0, -28, 0) : pill.adjusted(28, 0, -8, 0);
+    p.drawText(text, Qt::AlignCenter, QStringLiteral("مباشر"));
 }

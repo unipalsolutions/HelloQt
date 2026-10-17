@@ -216,8 +216,12 @@ void MainWindow::setupFacePanel(QWidget *side, QVBoxLayout *sideLayout)
     auto *sideSplitter = new QSplitter(Qt::Vertical, side);
     sideSplitter->setHandleWidth(8);
     sideSplitter->setChildrenCollapsible(false);
+    // التفاصيل في قسم يُطوى، فتأخذ القائمة المساحة كلها حين لا يحتاجها المستخدم
+    m_detailsSection = new CollapsibleSection(QStringLiteral("تفاصيل الوجه"), side, QStringLiteral("faces/detailsExpanded"));
+    m_detailsSection->contentLayout()->setContentsMargins(8, 0, 8, 8);
+    m_detailsSection->contentLayout()->addWidget(detailsScroll);
     sideSplitter->addWidget(m_faceList);
-    sideSplitter->addWidget(detailsScroll);
+    sideSplitter->addWidget(m_detailsSection);
     sideSplitter->setStretchFactor(0, 3);
     sideSplitter->setStretchFactor(1, 2);
     sideSplitter->setSizes({300, 200});
