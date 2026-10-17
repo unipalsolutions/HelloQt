@@ -3,6 +3,7 @@
 #include "cameras.h"
 #include "faceengine.h"
 #include "imageio.h"
+#include "performance.h"
 #include "videofilters.h"
 
 #include <QElapsedTimer>
@@ -53,6 +54,12 @@ constexpr int IdleAfter = 20;             // إطارات محللة متتال�
 constexpr double StillDifference = 1.6;   // متوسط تغيّر البكسل (من 255) الذي يُعد دونه الإطار ساكناً
 constexpr int MaxStillSkips = 50;
 constexpr double MinAnalysisRate = 4.0;   // أقل معدل يصل إليه التكيّف مع الجهاز البطيء (إطارات محللة لكل ثانية)
+// العرض سبق التحليل بأكثر من هذا إلى جزء لم يُحلَّل: يقفز التحليل إلى موضع العرض لتظهر المربعات عليه،
+// ويعود إلى ما تخطاه بعد ذلك
+constexpr qint64 FollowLagMs = 800;
+constexpr qint64 FollowLeadMs = 300;      // يبدأ التحليل بعد موضع العرض بقليل فتصل نتيجته قبل عرض الإطار
+// أثناء التشغيل على جهاز لا يلحق: أبعد مسافة بين إطارين محللين، دون مهلة عرض النتيجة (600) فلا تختفي المربعات بينهما
+constexpr qint64 FollowMaxSpacingMs = 500;
 constexpr int ThumbnailHeight = 120;
 // الكاميرا تعمل أياماً ويمر أمامها آلاف الأشخاص: أقدم من غاب طويلاً يُنسى (ظهوره سُجِّل في القاعدة)
 // فتبقى الذاكرة وسرعة البحث ثابتتين
@@ -168,11 +175,19 @@ void addExemplar(Identity &identity, const std::vector<float> &embedding, float 
         *weakest = {embedding, quality};
 }
 
+void mergeAppearances(std::vector<std::pair<qint64, qint64>> &list);
+
 void addAppearance(Identity &identity, qint64 ms)
 {
     auto &list = identity.appearances;
     if (!list.empty() && ms >= list.back().first && ms - list.back().second <= AppearanceGapMs) {
         list.back().second = std::max(list.back().second, ms);
+        return;
+    }
+    if (!list.empty() && ms < list.back().first) {
+        // تحليل جزء تخطاه سابقاً ليلحق العرض: الفترة تُضم في مكانها
+        list.push_back({ms, ms});
+        mergeAppearances(list);
         return;
     }
     if (list.size() >= MaxAppearances) {
@@ -231,6 +246,13 @@ public:
         m_hist = hist;
         m_gray = gray;
         return cut;
+    }
+
+    // بعد القفز إلى موضع آخر: الإطار التالي ليس استمراراً لما قبله
+    void reset()
+    {
+        m_hist.release();
+        m_gray.release();
     }
 
 private:
@@ -302,6 +324,12 @@ void VideoWorker::requestStop()
 void VideoWorker::setPaused(bool paused)
 {
     m_paused = paused;
+}
+
+void VideoWorker::setDisplayPosition(qint64 positionMs, bool playing)
+{
+    m_displayMs = positionMs;
+    m_displayPlaying = playing;
 }
 
 void VideoWorker::frameShown()
@@ -388,9 +416,15 @@ void VideoWorker::run(const QString &source)
     // التكيّف مع سرعة الجهاز: متوسط زمن تحليل الإطار، ومنه كم إطاراً يمر من الفيديو أثناء تحليل واحد
     const bool adaptive = automatic && m_adaptive && !quick;
     const int slowestStep = std::max(step, int(std::lround(rate / MinAnalysisRate)));
+    const int playingSlowestStep = std::max(slowestStep, int(rate * FollowMaxSpacingMs / 1000.0));
     double analysisCostMs = 0.0;
+    double embedCostMs = 0.0; // زمن بصمة الوجه الواحد
+    double baseCostMs = 0.0;  // زمن الإطار دون البصمات (القراءة والكشف والتتبع)
+    double frameEmbedMs = 0.0;
     QElapsedTimer analysisClock;
     const bool deliverFrames = camera || m_deliverFrames;
+    // الكشف الخفيف على الجهاز الضعيف ما دام التحليل على المعالج (كرت الشاشة يكفيه الدقيق)
+    const bool fastAllowed = Performance::fastDetection() && m_engine->hasFastDetector();
     qint64 lastThumbnailMs = LLONG_MIN / 2;
     QElapsedTimer previewClock;
     previewClock.start();
@@ -417,6 +451,15 @@ void VideoWorker::run(const QString &source)
     int endFrame = frameCount;
     if (endMs > 0 && validFps)
         endFrame = std::min(frameCount > 0 ? frameCount : INT_MAX, int(std::ceil(endMs * fps / 1000.0)));
+    // اللحاق بالعرض: الأجزاء المحللة [بداية، نهاية) بأرقام الإطارات، والجزء الجاري من runStart حتى frameIndex
+    // وينتهي عند runLimit (بداية أول جزء محلل بعده، أو نهاية المطلوب)
+    const bool follow = adaptive && validFps && endFrame > startFrame;
+    std::map<int, int> covered;
+    int runStart = frameIndex;
+    int runLimit = endFrame;
+    int coveredFrames = 0;
+    m_displayMs = -1;
+    m_displayPlaying = false;
     const qint64 durationMs = validFps && frameCount > 0 ? qint64(frameCount * 1000.0 / fps) : 0;
     emit started(step, validFps ? fps : 0.0, durationMs);
 
@@ -553,15 +596,96 @@ void VideoWorker::run(const QString &source)
         }
     };
 
+    const auto isCovered = [&](int index) {
+        const auto it = covered.upper_bound(index);
+        return it != covered.begin() && std::prev(it)->second > index;
+    };
+    // يضم الجزء الجاري إلى المحلل (حتى end) ويحدّث عدد إطاراته
+    const auto commitRun = [&](int end) {
+        end = std::min(end, runLimit);
+        if (end <= runStart)
+            return;
+        int from = runStart;
+        int to = end;
+        auto it = covered.upper_bound(from);
+        if (it != covered.begin() && std::prev(it)->second >= from)
+            it = std::prev(it);
+        while (it != covered.end() && it->first <= to) {
+            from = std::min(from, it->first);
+            to = std::max(to, it->second);
+            it = covered.erase(it);
+        }
+        covered[from] = to;
+        coveredFrames = 0;
+        for (const auto &[first, last] : covered)
+            coveredFrames += last - first;
+        runStart = end;
+    };
+    // أول إطار لم يُحلَّل بعد، أو -1 إذا اكتمل المطلوب
+    const auto firstGap = [&] {
+        int position = startFrame;
+        for (const auto &[first, last] : covered) {
+            if (first > position)
+                return position;
+            position = std::max(position, last);
+        }
+        return position < endFrame ? position : -1;
+    };
+    // بداية جزء جديد: القراءة من target حتى أول جزء محلل بعده؛ المسارات والإطار الساكن لا تمتد عبر القفزة
+    const auto beginRun = [&](int target) {
+        capture.set(cv::CAP_PROP_POS_FRAMES, double(target));
+        frameIndex = target;
+        runStart = target;
+        const auto next = covered.upper_bound(target);
+        runLimit = next == covered.end() ? endFrame : std::min(endFrame, next->first);
+        skip = 0;
+        tracks.clear();
+        stillReference.release();
+        sceneCuts.reset();
+    };
+
     while (!m_stop) {
         while (m_paused && !m_stop)
             QThread::msleep(25);
+        if (follow) {
+            if (frameIndex >= runLimit) {
+                commitRun(frameIndex);
+                const int gap = firstGap();
+                if (gap < 0)
+                    break;
+                beginRun(gap);
+                continue;
+            }
+            const qint64 display = m_displayMs;
+            if (display >= 0) {
+                const int displayFrame = int(double(display) * fps / 1000.0);
+                const int lagFrames = int(FollowLagMs * fps / 1000.0);
+                // خارج الجزء الجاري بأكثر من المهلة: أمامه، أو خلف بدايته (رجع المستخدم إلى جزء لم يُحلَّل)
+                const bool outside = displayFrame > frameIndex + lagFrames || displayFrame < runStart - lagFrames;
+                if (outside && displayFrame >= startFrame && displayFrame < endFrame && !isCovered(displayFrame)) {
+                    commitRun(frameIndex);
+                    const double leadMs = std::min(FollowLeadMs + analysisCostMs, FollowLagMs / 2.0);
+                    int target = displayFrame + int(std::ceil(leadMs * fps / 1000.0));
+                    if (target >= endFrame || isCovered(target))
+                        target = displayFrame;
+                    beginRun(target);
+                    continue;
+                }
+            }
+        }
         if (!camera && endFrame > startFrame && frameIndex >= endFrame)
             break;
         // الإطارات المتخطاة تُقرأ دون تحويلها إلى صورة، وهذا أسرع بكثير
         if (!camera && skip > 0) {
-            if (!capture.grab())
+            if (!capture.grab()) {
+                if (follow) {
+                    // بقية هذا الجزء لا تُقرأ: تُعد منتهية ويُنتقل إلى غيره
+                    commitRun(runLimit);
+                    frameIndex = runLimit;
+                    continue;
+                }
                 break;
+            }
             ++frameIndex;
             --skip;
             continue;
@@ -602,6 +726,11 @@ void VideoWorker::run(const QString &source)
             QMutexLocker locker(&m_mutex);
             m_lastCameraFrame = frame;
         } else if (!capture.read(frame)) {
+            if (follow) {
+                commitRun(runLimit);
+                frameIndex = runLimit;
+                continue;
+            }
             break;
         }
         ++frameIndex;
@@ -694,7 +823,8 @@ void VideoWorker::run(const QString &source)
 
         std::vector<Detection> detections;
         const double minFace = filters.minFaceSize * scale;
-        for (DetectedFace face : still ? std::vector<DetectedFace>() : m_engine->detect(cropped ? work(area) : work, false)) {
+        const bool fastDetection = fastAllowed && m_engine->gpuName().isEmpty();
+        for (DetectedFace face : still ? std::vector<DetectedFace>() : m_engine->detect(cropped ? work(area) : work, false, 0.45f, fastDetection)) {
             if (minFace > 0 && std::min(face.box.width, face.box.height) < minFace)
                 continue;
             face.box.x += float(area.x);
@@ -715,7 +845,9 @@ void VideoWorker::run(const QString &source)
             int wanted = idleAnalyses >= IdleAfter ? idleStep : step;
             if (adaptive && analysisCostMs > 0.0) {
                 const int needed = int(std::ceil(analysisCostMs * rate / 1000.0));
-                wanted = std::max(wanted, std::clamp(needed, step, slowestStep));
+                // والعرض يجري يتباعد التحليل أكثر ليبقى معه، وعند توقفه يعود إلى الكثافة المعتادة
+                const int slowest = follow && m_displayPlaying ? playingSlowestStep : slowestStep;
+                wanted = std::max(wanted, std::clamp(needed, step, slowest));
             }
             if (wanted != currentStep) {
                 currentStep = wanted;
@@ -744,23 +876,59 @@ void VideoWorker::run(const QString &source)
 
         // 2) البصمة تُحسب للوجوه الجديدة، وللمتتبَّعة كل عدة إطارات، أو عند ربط غير مؤكد
         //    (مسار حديث، تداخل ضعيف، عودة بعد غياب) أو ظهور لقطة أوضح
-        std::vector<cv::Mat> toEmbed;
+        // والعرض يجري: عدد البصمات في الإطار محدود بما يتسع له أبعد تباعد بين إطارين محللين، فلا يتأخر
+        // التحليل عن الإطار المعروض إن ظهرت وجوه كثيرة معاً؛ وعلى جهاز بلغ هذا التباعد يُكتفى للوجه المتتبَّع
+        // المعتمد بالموضع، وبصمته كل عدة إطارات للتحقق أنه الشخص نفسه
+        const bool playing = follow && m_displayPlaying;
+        const bool struggling = playing && analysisCostMs * rate / 1000.0 > double(slowestStep);
         for (Detection &detection : detections) {
             if (detection.track < 0) {
                 detection.needsEmbedding = true;
-            } else {
-                const Track &track = tracks[size_t(detection.track)];
-                const Identity &identity = identities[track.identity];
-                detection.needsEmbedding = track.embedding.empty() || track.hits < MinTrackHits
-                    || detection.iou < 0.5f || processed - track.lastSeen > 1
-                    || processed - track.lastEmbedded >= (quick ? QuickEmbedInterval : EmbedInterval)
-                    || detection.quality > identity.best.quality + BetterShotMargin;
+                continue;
             }
+            const Track &track = tracks[size_t(detection.track)];
+            const Identity &identity = identities[track.identity];
+            const bool due = processed - track.lastEmbedded >= (quick ? QuickEmbedInterval : EmbedInterval);
+            if (struggling) {
+                detection.needsEmbedding = track.embedding.empty() || due || (!identity.confirmed && detection.iou < 0.5f);
+                continue;
+            }
+            detection.needsEmbedding = track.embedding.empty() || track.hits < MinTrackHits
+                || detection.iou < 0.5f || processed - track.lastSeen > 1 || due
+                || detection.quality > identity.best.quality + BetterShotMargin;
+        }
+        if (playing && embedCostMs > 0.0) {
+            const double spacingMs = std::max(double(FollowMaxSpacingMs), currentStep * 1000.0 / rate);
+            const int budget = std::max(0, int((spacingMs - baseCostMs) / embedCostMs));
+            // الأولوية للوجوه الجديدة (بلا بصمة لا تظهر) وواحد منها على الأقل، ثم الأوضح؛ البقية في الإطارات التالية
+            std::vector<Detection *> wanted;
+            for (Detection &detection : detections) {
+                if (detection.needsEmbedding)
+                    wanted.push_back(&detection);
+            }
+            std::stable_sort(wanted.begin(), wanted.end(), [](const Detection *a, const Detection *b) {
+                if ((a->track < 0) != (b->track < 0))
+                    return a->track < 0;
+                return a->quality > b->quality;
+            });
+            const bool anyNew = !wanted.empty() && wanted.front()->track < 0;
+            for (size_t i = size_t(std::max(budget, anyNew ? 1 : 0)); i < wanted.size(); ++i)
+                wanted[i]->needsEmbedding = false;
+        }
+        std::vector<cv::Mat> toEmbed;
+        for (const Detection &detection : detections) {
             if (detection.needsEmbedding)
                 toEmbed.push_back(detection.aligned);
         }
         // دون الصورة المعكوسة: الوجه يظهر في إطارات كثيرة بزوايا مختلفة فلا تضيف دقة تُذكر، وتضاعف الزمن
+        QElapsedTimer embedClock;
+        embedClock.start();
         const std::vector<std::vector<float>> embeddings = m_engine->embedMany(toEmbed, false, !quick);
+        frameEmbedMs = double(embedClock.nsecsElapsed()) / 1e6;
+        if (!toEmbed.empty()) {
+            const double each = frameEmbedMs / double(toEmbed.size());
+            embedCostMs = embedCostMs > 0.0 ? embedCostMs * 0.8 + each * 0.2 : each;
+        }
         for (size_t d = 0, e = 0; d < detections.size() && e < embeddings.size(); ++d) {
             if (detections[d].needsEmbedding)
                 detections[d].embedding = embeddings[e++];
@@ -833,9 +1001,9 @@ void VideoWorker::run(const QString &source)
             ++track.hits;
             ++identity.frames;
             identity.lastSeen = processed;
-            if (identity.firstSeenMs < 0)
+            if (identity.firstSeenMs < 0 || positionMs < identity.firstSeenMs)
                 identity.firstSeenMs = positionMs;
-            identity.lastSeenMs = positionMs;
+            identity.lastSeenMs = std::max(identity.lastSeenMs, positionMs);
             addAppearance(identity, positionMs);
             identity.changed = true;
 
@@ -934,8 +1102,10 @@ void VideoWorker::run(const QString &source)
         }
 
         double progress = -1.0;
-        if (!camera && endFrame > startFrame)
-            progress = std::clamp(double(frameIndex - startFrame) / double(endFrame - startFrame), 0.0, 1.0);
+        if (!camera && endFrame > startFrame) {
+            const int done = follow ? coveredFrames + frameIndex - runStart : frameIndex - startFrame;
+            progress = std::clamp(double(done) / double(endFrame - startFrame), 0.0, 1.0);
+        }
         if (!deliverFrames) {
             // العرض من VideoPlayer: النتيجة وحدها بلا صورة، فلا ينتظر التحليل الواجهة
             emit frameReady(QImage(), current, positionMs, progress);
@@ -960,6 +1130,9 @@ void VideoWorker::run(const QString &source)
         }
         const double cost = double(analysisClock.nsecsElapsed()) / 1e6;
         analysisCostMs = analysisCostMs > 0.0 ? analysisCostMs * 0.8 + cost * 0.2 : cost;
+        const double base = std::max(0.0, cost - frameEmbedMs);
+        baseCostMs = baseCostMs > 0.0 ? baseCostMs * 0.8 + base * 0.2 : base;
+        frameEmbedMs = 0.0;
     }
 
     // دمج أخير ثم التحديث الأخير لكل وجه بعدد إطاراته ونتيجته النهائية

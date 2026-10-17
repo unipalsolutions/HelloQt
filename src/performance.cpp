@@ -30,6 +30,8 @@ QString settingsFile()
 
 int forced = -1;
 bool cpuForced = false;
+int fastForced = -1;
+constexpr int FastDetectionCores = 4;
 
 } // namespace
 
@@ -93,6 +95,21 @@ void setLastRunOnGpu(bool onGpu)
 void forceCpu()
 {
     cpuForced = true;
+}
+
+bool fastDetection()
+{
+    if (fastForced >= 0)
+        return fastForced == 1;
+    const QVariant value = QSettings(settingsFile(), QSettings::IniFormat).value(QStringLiteral("fastDetection"));
+    if (value.isValid())
+        return value.toBool();
+    return QThread::idealThreadCount() <= FastDetectionCores;
+}
+
+void forceFastDetection(bool fast)
+{
+    fastForced = fast ? 1 : 0;
 }
 
 void save(Level level)

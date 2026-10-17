@@ -51,7 +51,10 @@ public:
     static QString gpuIdentity();
 
     // thorough: كشف متعدد المقاييس مع تحسين الإضاءة وتقسيم الصور الكبيرة (أدق وأبطأ)
-    std::vector<DetectedFace> detect(const cv::Mat &bgr, bool thorough, float threshold = 0.45f) const;
+    // fast: نموذج الكشف الخفيف إن وُجد (أسرع بنحو ثلاث مرات على المعالج، ويفوته بعض الوجوه الصغيرة جداً)
+    std::vector<DetectedFace> detect(const cv::Mat &bgr, bool thorough, float threshold = 0.45f, bool fast = false) const;
+    // هل حُمّل نموذج الكشف الخفيف (يعمل على المعالج دائماً)
+    bool hasFastDetector() const;
     cv::Mat align(const cv::Mat &bgr, const DetectedFace &face) const;
     std::vector<float> embed(const cv::Mat &aligned) const;
     // mirrored = false: دون الصورة المعكوسة، أسرع بنحو الضعف (للفيديو، حيث تعوّض كثرة اللقطات عنها)

@@ -143,7 +143,8 @@ void TimelineView::setRange(qint64 startMs, qint64 endMs)
 
 void TimelineView::setAnalyzedUntil(qint64 ms)
 {
-    m_analyzedUntil = ms;
+    // التحليل قد يعود إلى جزء تخطاه ليلحق العرض: الحد لا يرجع إلى الوراء
+    m_analyzedUntil = ms < 0 ? -1 : std::max(m_analyzedUntil, ms);
     update();
 }
 

@@ -185,6 +185,7 @@ add_custom_command(TARGET Malamih POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Malamih>/models"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${FACE_MODELS_DIR}/det_10g.onnx"
+            "${FACE_MODELS_DIR}/det_2.5g.onnx"
             "${FACE_MODELS_DIR}/w600k_r50.onnx"
             "$<TARGET_FILE_DIR:Malamih>/models"
 )

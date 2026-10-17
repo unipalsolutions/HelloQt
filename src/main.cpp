@@ -134,6 +134,7 @@ int main(int argc, char *argv[])
         // نتائج الفحوص ثابتة على المعالج؛ MALAMIH_GPU=1 لتجربتها على كرت الشاشة
         if (qEnvironmentVariable("MALAMIH_GPU") != QLatin1String("1"))
             Performance::forceCpu();
+        Performance::forceFastDetection(qEnvironmentVariable("MALAMIH_DETECTOR") == QLatin1String("fast"));
     }
     Performance::apply(Performance::saved());
     const int diagnostics = Diagnostics::run(args);

@@ -271,27 +271,38 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     int analyzed = 0;
     int boxes = 0;
     qint64 analyzedMs = 0;
-    QObject::connect(worker, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &faces, qint64 ms, double) {
+    // مواضع الإطارات المحللة حتى الآن، لمعرفة هل كان للإطار المعروض نتيجة لحظة عرضه
+    QList<qint64> analyzedPositions;
+    // الإشارتان تُستقبلان في هذا الخيط كما في الواجهة، فلا تتسابق الخيوط على المتغيرات
+    QObject receiver;
+    QObject::connect(worker, &VideoWorker::frameReady, &receiver, [&](const QImage &, const QList<FaceItem> &faces, qint64 ms, double) {
         ++analyzed;
         boxes += int(faces.size());
         analyzedMs = ms;
+        analyzedPositions.append(ms);
     });
     bool finished = false;
-    QObject::connect(worker, &VideoWorker::finished, [&](const QString &) { finished = true; });
+    QObject::connect(worker, &VideoWorker::finished, &receiver, [&](const QString &) { finished = true; });
 
     VideoPlayer player;
     int shown = 0;
     qint64 playedMs = 0;
     double worstGapMs = 0.0;
+    int uncovered = 0;
     QElapsedTimer gap;
-    QObject::connect(&player, &VideoPlayer::frameReady, [&](const QImage &frame, qint64 ms) {
+    QObject::connect(&player, &VideoPlayer::frameReady, &receiver, [&](const QImage &frame, qint64 ms) {
         if (!frame.isNull())
             ++shown;
+        // إطار معروض دون إطار محلل قريب قبله: تختفي عنه المربعات كما في الواجهة
+        const auto it = std::upper_bound(analyzedPositions.cbegin(), analyzedPositions.cend(), ms);
+        if (it == analyzedPositions.cbegin() || ms - *std::prev(it) > VideoPlayer::AnalysisToleranceMs)
+            ++uncovered;
         // الفجوة بين إطارين معروضين بعد أول ثانية (فتح الملف وتحميل التحليل)
         if (gap.isValid() && playedMs > 1000)
             worstGapMs = std::max(worstGapMs, gap.nsecsElapsed() / 1e6);
         gap.start();
         playedMs = ms;
+        worker->setDisplayPosition(ms, player.isPlaying());
         player.frameShown();
     });
     if (!player.openFile(path, 0)) {
@@ -310,6 +321,7 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     const double elapsed = clock.elapsed() / 1000.0;
     // مقاييس السلاسة قبل تجربة الأدوات (الإيقاف والسرعة يغيّرانها)
     const int shownPlain = shown;
+    const int uncoveredPlain = uncovered;
     const double worstGapPlain = worstGapMs;
     const qint64 playedPlain = playedMs;
 
@@ -363,6 +375,7 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     out << "analyzed_frames=" << analyzed << "\n";
     out << "analyzed_ms=" << analyzedMs << "\n";
     out << "analysis_lag_ms=" << playedPlain - analyzedMs << "\n";
+    out << "covered_ratio=" << (shownPlain > 0 ? 1.0 - double(uncoveredPlain) / shownPlain : 0.0) << "\n";
     out << "boxes=" << boxes << "\n";
     out << "analysis_finished=" << int(finished) << "\n";
     out << "step_forward_ms=" << stepForwardMs << "\n";

@@ -34,6 +34,8 @@ extern "C" OrtStatus *ORT_API_CALL OrtSessionOptionsAppendExecutionProvider_DML(
 namespace {
 
 const char *const DetectorFile = "det_10g.onnx";
+// كشف أخف بالمخرجات والنقاط نفسها، لتحليل الفيديو على الأجهزة الضعيفة؛ البصمة لا تتغير فتبقى القاعدة كما هي
+const char *const FastDetectorFile = "det_2.5g.onnx";
 const char *const RecognizerFile = "w600k_r50.onnx";
 
 constexpr int AlignedSize = 112;
@@ -207,6 +209,10 @@ struct FaceEngine::Impl
     // mutable: إن تعطل كرت الشاشة أثناء العمل تُستبدل الجلستان بجلستين على المعالج
     mutable std::unique_ptr<Ort::Session> detector;
     mutable std::unique_ptr<Ort::Session> recognizer;
+    // على المعالج دائماً ولا يُبدَّل مع الجهاز؛ فارغ إن لم يوجد ملفه
+    std::unique_ptr<Ort::Session> fastDetector;
+    std::string fastDetectorInput;
+    std::vector<std::string> fastDetectorOutputs;
     QString detectorPath;
     QString recognizerPath;
     std::string detectorInput;
@@ -245,7 +251,7 @@ struct FaceEngine::Impl
     }
     void switchToCpu(const QString &reason) const;
 
-    std::vector<DetectedFace> detectAt(const cv::Mat &bgr, int inputSize, float threshold) const;
+    std::vector<DetectedFace> detectAt(const cv::Mat &bgr, int inputSize, float threshold, bool fast = false) const;
     bool recognizerBatch = false; // هل يقبل نموذج البصمة أكثر من وجه في التشغيل الواحد
 
     std::vector<std::vector<float>> recognize(const std::vector<cv::Mat> &faces, std::vector<float> *norms = nullptr) const;
@@ -258,8 +264,9 @@ struct FaceEngine::Sessions
     QString gpu;
 };
 
-std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inputSize, float threshold) const
+std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inputSize, float threshold, bool fast) const
 {
+    fast = fast && fastDetector;
     // تصغير/تكبير مع الحفاظ على النسبة. المدخل يُقرَّب إلى مضاعفات 32 فقط بدل مربع كامل،
     // فإطار 16:9 بحجم 640 يصبح 640x384 بدل 640x640 (حساب أقل بنحو 40%)
     const float ratio = float(bgr.rows) / float(bgr.cols);
@@ -282,13 +289,15 @@ std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inp
     const std::array<int64_t, 4> shape{1, 3, inputHeight, inputWidth};
     Ort::Value input = Ort::Value::CreateTensor<float>(memory, blob.data(), blob.size(), shape.data(), shape.size());
 
-    const char *inputName = detectorInput.c_str();
+    const char *inputName = fast ? fastDetectorInput.c_str() : detectorInput.c_str();
     std::vector<const char *> outputNames;
-    for (const std::string &name : detectorOutputs)
+    for (const std::string &name : fast ? fastDetectorOutputs : detectorOutputs)
         outputNames.push_back(name.c_str());
-    std::vector<Ort::Value> outputs = guardedRun([&] {
-        return detector->Run(Ort::RunOptions{nullptr}, &inputName, &input, 1, outputNames.data(), outputNames.size());
-    });
+    std::vector<Ort::Value> outputs = fast
+        ? fastDetector->Run(Ort::RunOptions{nullptr}, &inputName, &input, 1, outputNames.data(), outputNames.size())
+        : guardedRun([&] {
+              return detector->Run(Ort::RunOptions{nullptr}, &inputName, &input, 1, outputNames.data(), outputNames.size());
+          });
 
     // مخرجات SCRFD: درجات ثم صناديق ثم نقاط لكل خطوة (8، 16، 32) مع مرساتين لكل خلية
     const int strides[3] = {8, 16, 32};
@@ -520,7 +529,30 @@ bool FaceEngine::load(const QString &modelsDir, QString *error, Device device)
     d->recognizer = std::move(sessions.recognizer);
     d->gpu = sessions.gpu;
     d->onGpu.store(!d->gpu.isEmpty());
+
+    // الكشف الخفيف اختياري: إن غاب ملفه أو تعذر تحميله يُستخدم الدقيق دائماً
+    d->fastDetector.reset();
+    const QString fastPath = QDir(modelsDir).filePath(QString::fromLatin1(FastDetectorFile));
+    if (QFileInfo::exists(fastPath)) {
+        try {
+            auto session = std::make_unique<Ort::Session>(d->env, toOrtPath(fastPath).c_str(), cpuOptions());
+            Ort::AllocatorWithDefaultOptions allocator;
+            d->fastDetectorInput = session->GetInputNameAllocated(0, allocator).get();
+            d->fastDetectorOutputs.clear();
+            for (size_t i = 0; i < session->GetOutputCount(); ++i)
+                d->fastDetectorOutputs.emplace_back(session->GetOutputNameAllocated(i, allocator).get());
+            if (d->fastDetectorOutputs.size() == 9)
+                d->fastDetector = std::move(session);
+        } catch (const std::exception &e) {
+            qWarning("تعذر تحميل نموذج الكشف الخفيف: %s", e.what());
+        }
+    }
     return true;
+}
+
+bool FaceEngine::hasFastDetector() const
+{
+    return bool(d->fastDetector);
 }
 
 bool FaceEngine::switchDevice(Device device, QString *error)
@@ -576,7 +608,7 @@ QString FaceEngine::gpuIdentity()
     return identity(findGpu());
 }
 
-std::vector<DetectedFace> FaceEngine::detect(const cv::Mat &bgr, bool thorough, float threshold) const
+std::vector<DetectedFace> FaceEngine::detect(const cv::Mat &bgr, bool thorough, float threshold, bool fast) const
 {
     if (!isLoaded() || bgr.empty())
         return {};
@@ -592,13 +624,13 @@ std::vector<DetectedFace> FaceEngine::detect(const cv::Mat &bgr, bool thorough, 
         }
     };
 
-    collect(d->detectAt(bgr, 640, threshold));
+    collect(d->detectAt(bgr, 640, threshold, fast));
 
     const bool poorlyLit = isPoorlyLit(bgr);
     cv::Mat enhanced;
     if (poorlyLit) {
         enhanced = enhance(bgr);
-        collect(d->detectAt(enhanced, 640, threshold));
+        collect(d->detectAt(enhanced, 640, threshold, fast));
     }
 
     if (thorough) {

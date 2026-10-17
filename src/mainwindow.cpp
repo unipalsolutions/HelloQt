@@ -1501,12 +1501,16 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     QString status = endMs > 0 ? QStringLiteral("الموضع %1 من %2").arg(ImageIO::formatTime(positionMs), ImageIO::formatTime(endMs))
                                : QStringLiteral("الموضع %1").arg(ImageIO::formatTime(positionMs));
     const double seconds = m_videoClock.isValid() ? (m_videoClock.elapsed() - m_pausedMs) / 1000.0 : 0.0;
-    if (seconds > 1.0 && positionMs > m_videoStartMs) {
+    // ما حُلِّل من الجزء المطلوب: التحليل قد يقفز ليلحق العرض ثم يعود إلى ما تخطاه، فالموضع وحده لا يكفي
+    const qint64 rangeMs = endMs > m_videoStartMs ? endMs - m_videoStartMs : 0;
+    const qint64 doneMs = progress >= 0.0 && rangeMs > 0 ? qint64(progress * rangeMs) : positionMs - m_videoStartMs;
+    if (seconds > 1.0 && doneMs > 0) {
         // السرعة بالنسبة لزمن التشغيل العادي: 2× تعني أن دقيقة من الفيديو تُحلَّل في نصف دقيقة
-        const double speed = (positionMs - m_videoStartMs) / 1000.0 / seconds;
+        const double speed = doneMs / 1000.0 / seconds;
         status += QStringLiteral(" · السرعة %1×").arg(QLocale().toString(speed, 'f', 1));
         m_analysisSpeed = speed;
-        m_analysisRemainingMs = endMs > positionMs && speed > 0.0 ? qint64((endMs - positionMs) / speed) : -1;
+        const qint64 leftMs = rangeMs > 0 ? rangeMs - doneMs : endMs - positionMs;
+        m_analysisRemainingMs = leftMs > 0 && speed > 0.0 ? qint64(leftMs / speed) : -1;
         if (m_analysisRemainingMs >= 0)
             status += QStringLiteral(" · المتبقي %1").arg(ImageIO::formatTime(m_analysisRemainingMs));
     }
@@ -1524,13 +1528,6 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     statusBar()->showMessage(status);
 }
 
-namespace {
-
-// أبعد فجوة بين إطار معروض وأقرب إطار محلل قبله تُعرض فيها نتيجته
-constexpr qint64 AnalysisToleranceMs = 600;
-
-} // namespace
-
 bool MainWindow::filePlayerOpen() const
 {
     return m_player && m_player->isOpen() && !m_player->isLive();
@@ -1544,13 +1541,16 @@ void MainWindow::updatePauseButton()
     m_pauseButton->setEnabled(m_videoRunning && !filePlayerOpen());
     m_pauseButton->setVisible(m_videoRunning && !filePlayerOpen());
     m_playbackBar->setPlaying(filePlayerOpen() && m_player->isPlaying());
+    // أُوقف العرض أو استؤنف: التحليل يعود إلى كثافته المعتادة أو يتباعد ليبقى معه
+    if (m_videoRunning && filePlayerOpen())
+        m_videoWorker->setDisplayPosition(m_videoPositionMs, m_player->isPlaying());
     syncAudio();
 }
 
 bool MainWindow::hasAnalysisNear(qint64 positionMs) const
 {
     auto it = m_analyzedFaces.upperBound(positionMs);
-    return it != m_analyzedFaces.begin() && positionMs - std::prev(it).key() <= AnalysisToleranceMs;
+    return it != m_analyzedFaces.begin() && positionMs - std::prev(it).key() <= VideoPlayer::AnalysisToleranceMs;
 }
 
 QList<FaceItem> MainWindow::analyzedFacesAt(qint64 positionMs) const
@@ -1559,11 +1559,11 @@ QList<FaceItem> MainWindow::analyzedFacesAt(qint64 positionMs) const
     if (next == m_analyzedFaces.begin())
         return {};
     const auto previous = std::prev(next);
-    if (positionMs - previous.key() > AnalysisToleranceMs)
+    if (positionMs - previous.key() > VideoPlayer::AnalysisToleranceMs)
         return {};
     QList<FaceItem> faces = previous.value();
     // بين إطارين محللين: المربع ينتقل خطياً من موضعه في الأول إلى موضعه في الثاني
-    const bool between = next != m_analyzedFaces.end() && next.key() - previous.key() <= AnalysisToleranceMs;
+    const bool between = next != m_analyzedFaces.end() && next.key() - previous.key() <= VideoPlayer::AnalysisToleranceMs;
     const double t = between ? double(positionMs - previous.key()) / double(next.key() - previous.key()) : 0.0;
     QList<FaceItem> result;
     result.reserve(faces.size());
@@ -1601,6 +1601,9 @@ void MainWindow::onPlayerFrame(const QImage &frame, qint64 positionMs)
     if (m_player->isLive())
         return;
     m_videoPositionMs = positionMs;
+    // التحليل يلحق العرض إن سبقه إلى جزء لم يُحلَّل
+    if (m_videoRunning)
+        m_videoWorker->setDisplayPosition(positionMs, m_player->isPlaying());
     m_view->setFaces(analyzedFacesAt(positionMs));
     if (!m_timelineCard->isHidden())
         m_timeline->setPosition(positionMs);

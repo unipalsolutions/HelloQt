@@ -30,5 +30,10 @@ bool lastRunOnGpu();
 void setLastRunOnGpu(bool onGpu);
 // فحوص سطر الأوامر تعمل على المعالج دائماً لتبقى نتائجها ثابتة (إلا مع MALAMIH_GPU=1)
 void forceCpu();
+// كشف الوجوه الخفيف في الفيديو والكاميرا حين يعمل التحليل على المعالج: تلقائياً على الأجهزة بأربعة
+// خيوط أو أقل (لابتوب i3 مثلاً)، أو حسب الإعداد fastDetection إن ضُبط. الصور تبقى على الكشف الدقيق
+bool fastDetection();
+// يتجاوز الإعداد (اختبارات سطر الأوامر على الدقيق لتبقى نتائجها ثابتة، إلا مع MALAMIH_DETECTOR=fast)
+void forceFastDetection(bool fast);
 
 } // namespace Performance

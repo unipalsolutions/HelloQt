@@ -27,6 +27,9 @@ class VideoPlayer : public QObject
     Q_OBJECT
 
 public:
+    // أبعد فجوة بين إطار معروض وأقرب إطار محلل قبله تُعرض فيها نتيجته
+    static constexpr qint64 AnalysisToleranceMs = 600;
+
     explicit VideoPlayer(QObject *parent = nullptr);
     ~VideoPlayer() override;
 

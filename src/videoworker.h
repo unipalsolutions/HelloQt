@@ -62,6 +62,9 @@ public:
     void setDeliverFrames(bool deliver) { m_deliverFrames = deliver; }
     // الوضع التلقائي للملفات: يقل عدد الإطارات المحللة على الجهاز البطيء ليبقى التحليل قريباً من التشغيل
     void setAdaptive(bool adaptive) { m_adaptive = adaptive; }
+    // موضع الإطار المعروض الآن في VideoPlayer (أو -1): في الوضع التلقائي يلحق التحليل العرض إن سبقه إلى
+    // جزء لم يُحلَّل، ثم يعود إلى ما تخطاه
+    void setDisplayPosition(qint64 positionMs, bool playing);
     // فحص الأرشيف السريع للملفات: 4 إطارات محللة في الثانية، وبصمة واحدة لكل وجه، وتخطّي الساكن دائماً،
     // وصورة معاينة كل ثانية من الوقت الفعلي بدل كل ثانية من الفيديو
     void setQuickScan(bool quick) { m_quick = quick; }
@@ -108,6 +111,8 @@ private:
     std::atomic<bool> m_deliverFrames{true};
     std::atomic<bool> m_adaptive{false};
     std::atomic<bool> m_quick{false};
+    std::atomic<qint64> m_displayMs{-1};
+    std::atomic<bool> m_displayPlaying{false};
     cv::Mat m_lastCameraFrame; // يحميه m_mutex
     std::shared_ptr<Cameras::FrameSlot> m_liveFrames; // يحميه m_mutex
 };
