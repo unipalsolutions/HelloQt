@@ -78,6 +78,16 @@ QPushButton:hover { border-color: @accent; background: #17305a; }
 QPushButton:default { background: @accent; border-color: @accent; color: white; }
 QPushButton:default:hover { background: #4b90ff; }
 QCheckBox { spacing: 8px; }
+QToolButton#tab {
+    background: transparent; color: @muted; border: 1px solid @border; border-radius: 13px; padding: 3px 10px;
+}
+QToolButton#tab:hover { color: @text; border-color: @accent; }
+QToolButton#tab:checked { background: rgba(47, 124, 246, 60); color: @text; border-color: @accent; font-weight: 600; }
+QToolButton#chip {
+    background: @surfaceHigh; color: @text; border: 1px solid @border; border-radius: 9px; padding: 2px 8px;
+}
+QToolButton#chip:hover { border-color: @accent2; color: @accent2; }
+QToolButton#chip:checked { border-color: @accent; background: rgba(47, 124, 246, 60); }
 )");
     const QList<QPair<QString, QColor>> colors{
         {QStringLiteral("@surfaceHigh"), SurfaceHigh}, {QStringLiteral("@surface"), Surface},

@@ -490,6 +490,17 @@ void MainWindow::refreshWatched()
     // إضافة شخص إلى المراقبة أثناء عرض صورة أو فيديو تنبّه عنه فوراً إن كان ظاهراً
     for (const FaceItem &face : std::as_const(m_faces))
         checkWatchAlert(face);
+    // حلقة المراقَب وتبويبه في لوحة الوجوه
+    for (int i = 0; i < m_faces.size() && i < m_faceList->count(); ++i) {
+        const FaceItem &face = m_faces.at(i);
+        if (face.match.status == MatchStatus::Confirmed && m_faceList->item(i)->data(CardRole::Watched).toBool() != m_watched.contains(face.match.personId)) {
+            updateFaceListItem(m_faceList->item(i), face);
+            m_faceList->setRowHidden(i, !faceMatchesFilter(face));
+        }
+    }
+    if (m_faceTabsTimer)
+        updateFaceTabs();
+    m_personAvatars.clear();
     if (m_faceList->currentRow() >= 0)
         showFaceDetails();
 }

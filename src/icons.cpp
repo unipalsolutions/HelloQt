@@ -403,6 +403,21 @@ QPainterPath outline(Name name)
         p.lineTo(18, 13);
         p.lineTo(6, 13);
         break;
+    case Name::Grid:
+        for (double x : {4.0, 13.0})
+            for (double y : {4.0, 13.0})
+                p.addRoundedRect(QRectF(x, y, 7, 7), 1.5, 1.5);
+        break;
+    case Name::List:
+        for (double y : {6.0, 12.0, 18.0}) {
+            line(4, y, 5, y);
+            line(9, y, 20, y);
+        }
+        break;
+    case Name::Reject:
+        line(6, 6, 18, 18);
+        line(18, 6, 6, 18);
+        break;
     }
     return p;
 }

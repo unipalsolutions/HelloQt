@@ -55,6 +55,7 @@ qt_add_executable(Malamih
     src/mainwindow_records.cpp
     src/mainwindow_persons.cpp
     src/mainwindow_playback.cpp
+    src/mainwindow_faces.cpp
     src/faceengine.h
     src/faceengine.cpp
     src/facedatabase.h
@@ -62,6 +63,8 @@ qt_add_executable(Malamih
     src/facetypes.h
     src/carddelegates.h
     src/carddelegates.cpp
+    src/facedetails.h
+    src/facedetails.cpp
     src/diagnostics.h
     src/diagnostics.cpp
     src/icons.h

@@ -57,6 +57,9 @@ enum class Name {
     Panels,   // إظهار اللوحات الجانبية أو إخفاؤها
     Keyboard, // الاختصارات
     Flag,     // علامة على الخط الزمني
+    Grid,     // عرض شبكي
+    List,     // عرض قائمة
+    Reject,   // علامة ×
 };
 
 void paint(QPainter &painter, Name name, const QRectF &rect, const QColor &color);

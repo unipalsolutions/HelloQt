@@ -16,6 +16,10 @@
 #include <QSet>
 
 class AnimatedStack;
+class FaceCardDelegate;
+class FaceDetailsPanel;
+class QToolButton;
+class QVBoxLayout;
 class QButtonGroup;
 class QComboBox;
 class QTimeEdit;
@@ -171,6 +175,23 @@ private:
     QList<int> selectedFaceIds() const;
     void mergeFaces(const QList<int> &ids);
     void removeFaces(const QList<int> &ids);
+    // لوحة الوجوه المكتشفة (mainwindow_faces.cpp)
+    void setupFacePanel(QWidget *side, QVBoxLayout *layout);
+    int faceTab(const FaceItem &face) const; // 1 معروف، 2 محتمل، 3 مجهول، 4 مراقَب
+    void updateFaceTabs();
+    void updateBulkBar();
+    void setFaceView(bool grid, int scalePercent);
+    int faceActions(const FaceItem &face) const;
+    void onFaceAction(int id, int action);
+    void confirmFaceMatch(int id);
+    void rejectFaceMatch(int id);
+    void toggleFaceWatch(int id);
+    void addFacesToPerson(const QList<int> &ids);
+    void exportFaces(const QList<int> &ids);
+    void writeFaces(const QList<FaceItem> &faces, const QString &folder);
+    void updateMergeSuggestions();
+    void showMergeSuggestions();
+    QPixmap personAvatar(const QString &personId);
     void openShotViewer(int id, qint64 positionMs = -1);
     void rebuildTimelineLanes();
     void loadVideoFrame(qint64 positionMs);
@@ -216,7 +237,6 @@ private:
     void updateFiltersButton();
     void selectFace(int id);
     void showFaceDetails();
-    QString candidatesHtml(const FaceItem &face) const;
     void refreshMatches();
     void refreshFaceList();
     void updateFaceListItem(QListWidgetItem *listItem, const FaceItem &face);
@@ -295,6 +315,16 @@ private:
     VideoFilters::Settings m_fileFilters; // معالجات الملفات، تعود بعد إيقاف كاميرا بمعالجاتها الخاصة
     qint64 m_restartFromMs = -1; // إعادة التحليل من موضع بعد توقف التحليل الجاري
     QSet<int> m_hiddenFaces;     // وجوه حذفها المستخدم أثناء التحليل فلا تعود للظهور
+    QHash<int, QString> m_rejectedMatches; // وجه ← شخص رفض المستخدم مطابقته فلا يعود إليه
+    struct MergeSuggestion
+    {
+        int a = 0;
+        int b = 0;
+        float score = 0.0f;
+    };
+    QList<MergeSuggestion> m_mergeSuggestions;
+    QSet<quint64> m_dismissedMerges;       // أزواج قال المستخدم إنهما شخصان مختلفان
+    QHash<QString, QPixmap> m_personAvatars; // صور المرشحين المصغرة
     // العرض بسرعة الفيديو الأصلية منفصلاً عن التحليل، ونتائج التحليل لكل موضع محلل لتُعرض عليه
     VideoPlayer *m_player = nullptr;
     QMap<qint64, QList<FaceItem>> m_analyzedFaces;
@@ -340,7 +370,8 @@ private:
     ImageView *m_view = nullptr;
     QListWidget *m_faceList = nullptr;
     QLabel *m_faceCount = nullptr;
-    QLabel *m_faceDetails = nullptr;
+    FaceDetailsPanel *m_faceDetails = nullptr;
+    FaceCardDelegate *m_faceDelegate = nullptr;
     FancyButton *m_openImageButton = nullptr;
     FancyButton *m_openVideoButton = nullptr;
     FancyButton *m_cameraButton = nullptr;
@@ -367,7 +398,16 @@ private:
     FancyButton *m_reanalyzeButton = nullptr;
     FancyButton *m_filtersButton = nullptr;
     QLineEdit *m_faceFilter = nullptr;
-    QComboBox *m_faceStatusFilter = nullptr;
+    QButtonGroup *m_faceTabs = nullptr;        // الكل، معروفون، محتملون، مجهولون، مراقَبون
+    QList<QToolButton *> m_faceTabButtons;
+    QTimer *m_faceTabsTimer = nullptr;         // تحديث عدادات التبويبات مرة كل ربع ثانية على الأكثر أثناء التحليل
+    FancyButton *m_gridViewButton = nullptr;
+    FancyButton *m_listViewButton = nullptr;
+    QSlider *m_cardSizeSlider = nullptr;
+    QWidget *m_bulkBar = nullptr;              // العمليات على عدة وجوه محددة
+    QLabel *m_bulkLabel = nullptr;
+    FancyButton *m_bulkMergeButton = nullptr;
+    FancyButton *m_mergeSuggestButton = nullptr; // «غالباً الشخص نفسه»
     QComboBox *m_faceSort = nullptr;
     FancyButton *m_viewShotButton = nullptr;
     QList<QWidget *> m_videoSettings;

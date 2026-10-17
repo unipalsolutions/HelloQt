@@ -993,108 +993,8 @@ QWidget *MainWindow::createRecognitionPage()
     auto *sideLayout = new QVBoxLayout(sideContent);
     sideLayout->setContentsMargins(12, 14, 12, 12);
     sideLayout->setSpacing(8);
-    auto *sideHeader = new QHBoxLayout;
-    sideHeader->addWidget(label(QStringLiteral("الوجوه المكتشفة"), QStringLiteral("sectionTitle"), side));
-    sideHeader->addStretch();
-    m_faceCount = label(QStringLiteral("0"), QStringLiteral("badge"), side);
-    sideHeader->addWidget(m_faceCount);
-    sideLayout->addLayout(sideHeader);
 
-    // البحث والتصفية والترتيب
-    m_faceFilter = new QLineEdit(side);
-    m_faceFilter->setPlaceholderText(QStringLiteral("بحث بالاسم…"));
-    m_faceFilter->setClearButtonEnabled(true);
-    m_faceFilter->addAction(Icons::icon(Icons::Name::Search, Theme::Muted, 18), QLineEdit::LeadingPosition);
-    m_faceStatusFilter = new QComboBox(side);
-    m_faceStatusFilter->addItems({QStringLiteral("الكل"), QStringLiteral("المعروفون"), QStringLiteral("المحتملون"),
-                                  QStringLiteral("غير المعروفين")});
-    m_faceStatusFilter->setToolTip(QStringLiteral("عرض الوجوه حسب نتيجة المطابقة"));
-    m_faceSort = new QComboBox(side);
-    m_faceSort->addItems({QStringLiteral("حسب الظهور"), QStringLiteral("الأكثر ظهوراً"), QStringLiteral("الأوضح"),
-                          QStringLiteral("المعروفون أولاً")});
-    m_faceSort->setToolTip(QStringLiteral("ترتيب القائمة"));
-    connect(m_faceFilter, &QLineEdit::textChanged, this, &MainWindow::applyFaceFilter);
-    connect(m_faceStatusFilter, &QComboBox::currentIndexChanged, this, &MainWindow::applyFaceFilter);
-    connect(m_faceSort, &QComboBox::currentIndexChanged, this, &MainWindow::sortFaces);
-    auto *filters = new QHBoxLayout;
-    filters->setSpacing(6);
-    filters->addWidget(m_faceStatusFilter, 1);
-    filters->addWidget(m_faceSort, 1);
-    sideLayout->addWidget(m_faceFilter);
-    sideLayout->addLayout(filters);
-
-    m_faceList = new QListWidget(side);
-    m_faceList->setItemDelegate(new FaceCardDelegate(m_faceList));
-    m_faceList->setUniformItemSizes(true);
-    m_faceList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    m_faceList->setMouseTracking(true);
-    m_faceList->setMinimumHeight(90);
-    m_faceList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_faceList->setContextMenuPolicy(Qt::CustomContextMenu);
-    m_faceList->setToolTip(QStringLiteral("نقر مزدوج: تكبير الوجه في الصورة، أو عرض لقطاته في الفيديو\n"
-                                          "Ctrl أو Shift لتحديد عدة وجوه ثم زر الفأرة الأيمن للدمج أو الحذف"));
-    connect(m_faceList, &QListWidget::currentRowChanged, this, &MainWindow::showFaceDetails);
-    connect(m_faceList, &QListWidget::customContextMenuRequested, this, &MainWindow::showFaceContextMenu);
-    connect(m_faceList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
-        if (m_videoMode)
-            openShotViewer(item->data(CardRole::Id).toInt());
-        else
-            m_view->zoomToFace(item->data(CardRole::Id).toInt());
-    });
-
-    // التفاصيل تُمرَّر إن طالت حتى تبقى الأزرار ظاهرة على الشاشات القصيرة
-    m_faceDetails = new QLabel(side);
-    m_faceDetails->setWordWrap(true);
-    m_faceDetails->setTextFormat(Qt::RichText);
-    m_faceDetails->setAlignment(Qt::AlignTop);
-    m_faceDetails->setObjectName(QStringLiteral("muted"));
-    m_faceDetails->setTextInteractionFlags(Qt::LinksAccessibleByMouse);
-    connect(m_faceDetails, &QLabel::linkActivated, this, [this](const QString &link) {
-        const int row = m_faceList->currentRow();
-        if (row < 0 || row >= m_faces.size() || !m_ready)
-            return;
-        if (link.startsWith(QStringLiteral("assign:")))
-            assignFace(m_faces.at(row).id, link.mid(7));
-        else if (link == QStringLiteral("other"))
-            addFaceToDatabase(m_faces.at(row));
-    });
-    auto *detailsScroll = new QScrollArea(side);
-    detailsScroll->setWidget(m_faceDetails);
-    detailsScroll->setWidgetResizable(true);
-    detailsScroll->setFrameShape(QFrame::NoFrame);
-    detailsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    detailsScroll->setMinimumHeight(110);
-    detailsScroll->setStyleSheet(QStringLiteral("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"));
-    // القائمة والتفاصيل في مقسم حتى يكبّر المستخدم أيهما شاء
-    auto *sideSplitter = new QSplitter(Qt::Vertical, side);
-    sideSplitter->setHandleWidth(8);
-    sideSplitter->setChildrenCollapsible(false);
-    sideSplitter->addWidget(m_faceList);
-    sideSplitter->addWidget(detailsScroll);
-    sideSplitter->setStretchFactor(0, 1);
-    sideSplitter->setStretchFactor(1, 1);
-    sideSplitter->setSizes({190, 290});
-    sideLayout->addWidget(sideSplitter, 1);
-
-    m_viewShotButton = new FancyButton(Icons::Name::Film, QStringLiteral("اللقطات"), FancyButton::Kind::Secondary, side);
-    m_viewShotButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_viewShotButton->setToolTip(QStringLiteral("الرجوع إلى إطارات ظهور الوجه، وأوضح لقطة له، وتحسينها وحفظها"));
-    m_viewShotButton->setVisible(false);
-    connect(m_viewShotButton, &QAbstractButton::clicked, this, [this] {
-        const int row = m_faceList->currentRow();
-        if (row >= 0 && row < m_faces.size())
-            openShotViewer(m_faces.at(row).id);
-    });
-
-    m_enrollFaceButton = new FancyButton(Icons::Name::UserPlus, QStringLiteral("إضافة للقاعدة"), FancyButton::Kind::Primary, side);
-    m_enrollFaceButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_enrollFaceButton->setToolTip(QStringLiteral("إضافة الوجه المحدد إلى شخص في قاعدة البيانات، أو إلى شخص جديد"));
-    connect(m_enrollFaceButton, &QAbstractButton::clicked, this, &MainWindow::addSelectedFaceToDatabase);
-    auto *faceActions = new QHBoxLayout;
-    faceActions->setSpacing(8);
-    faceActions->addWidget(m_enrollFaceButton, 1);
-    faceActions->addWidget(m_viewShotButton, 1);
-    sideLayout->addLayout(faceActions);
+    setupFacePanel(side, sideLayout);
 
     // الخط الزمني أسفل الفيديو بأسلوب برامج المونتاج
     m_timelineCard = card(page);
@@ -1256,6 +1156,9 @@ void MainWindow::analyzeImage(const QString &path)
     clearWatchAlerts();
     addRecentFile(path);
     m_faces.clear();
+    m_rejectedMatches.clear();
+    m_mergeSuggestions.clear();
+    m_mergeSuggestButton->setVisible(false);
     refreshFaceList();
     m_view->setFaces({});
     setBusy(true);
@@ -1385,6 +1288,10 @@ void MainWindow::startVideo(const QString &source)
         addRecentFile(source);
     m_faces.clear();
     m_hiddenFaces.clear();
+    m_rejectedMatches.clear();
+    m_dismissedMerges.clear();
+    m_mergeSuggestions.clear();
+    m_mergeSuggestButton->setVisible(false);
     m_analyzedFaces.clear();
     m_mergedInto.clear();
     refreshFaceList();
@@ -1624,6 +1531,14 @@ void MainWindow::onTrackUpdated(const FaceItem &track)
 {
     if (m_hiddenFaces.contains(track.id))
         return;
+    // رفض المستخدم مطابقة هذا الوجه لهذا الشخص: يبقى غير معروف حتى لو أعاد المحلل المطابقة نفسها
+    const auto rejected = m_rejectedMatches.constFind(track.id);
+    if (rejected != m_rejectedMatches.constEnd() && !track.match.personId.isEmpty() && track.match.personId == *rejected) {
+        FaceItem cleared = track;
+        cleared.match = MatchResult();
+        onTrackUpdated(cleared);
+        return;
+    }
     if (m_faces.isEmpty())
         m_faceRows.clear();
     const int i = m_faceRows.value(track.id, -1);
@@ -1634,6 +1549,8 @@ void MainWindow::onTrackUpdated(const FaceItem &track)
         m_faceList->setRowHidden(i, !faceMatchesFilter(track));
         if (!m_laneTimer->isActive())
             m_laneTimer->start();
+        if (!m_faceTabsTimer->isActive())
+            m_faceTabsTimer->start();
         // الوجه المحدد يتحدث عدة مرات في الثانية، وتفاصيله تستعلم القاعدة وتعيد بناء النص: مرة كل ثلث ثانية تكفي
         if (m_faceList->currentRow() == i) {
             if (!m_detailsTimer) {
@@ -1709,6 +1626,8 @@ void MainWindow::onVideoFinished(const QString &error)
         if (m_faceSort->currentIndex() != 0)
             sortFaces();
         recordSightings(m_videoSource);
+        if (!cameraSource)
+            updateMergeSuggestions();
         const QString summary = QStringLiteral("انتهى التحليل — أشخاص مختلفون: %1 · انقر نقراً مزدوجاً على وجه لعرض لقطاته")
                                     .arg(m_faces.size());
         statusBar()->showMessage(recorded.isEmpty() ? summary : summary + QStringLiteral(" · ") + recorded);
@@ -1726,41 +1645,6 @@ void MainWindow::rebuildFaceRows()
     m_faceRows.clear();
     for (int i = 0; i < m_faces.size(); ++i)
         m_faceRows.insert(m_faces.at(i).id, i);
-}
-
-bool MainWindow::faceMatchesFilter(const FaceItem &face) const
-{
-    switch (m_faceStatusFilter->currentIndex()) {
-    case 1:
-        if (face.match.status != MatchStatus::Confirmed)
-            return false;
-        break;
-    case 2:
-        if (face.match.status != MatchStatus::Possible)
-            return false;
-        break;
-    case 3:
-        if (face.match.status != MatchStatus::Unknown)
-            return false;
-        break;
-    default:
-        break;
-    }
-    const QString text = m_faceFilter->text().trimmed();
-    return text.isEmpty() || matchLabel(face.match).contains(text, Qt::CaseInsensitive);
-}
-
-void MainWindow::applyFaceFilter()
-{
-    int shown = 0;
-    for (int i = 0; i < m_faces.size() && i < m_faceList->count(); ++i) {
-        const bool visible = faceMatchesFilter(m_faces.at(i));
-        m_faceList->setRowHidden(i, !visible);
-        shown += visible ? 1 : 0;
-    }
-    m_laneTimer->start();
-    const bool filtered = !m_faceFilter->text().trimmed().isEmpty() || m_faceStatusFilter->currentIndex() != 0;
-    m_faceCount->setText(filtered ? QStringLiteral("%1 / %2").arg(shown).arg(m_faces.size()) : QString::number(m_faces.size()));
 }
 
 void MainWindow::sortFaces()
@@ -1918,6 +1802,12 @@ void MainWindow::onIdentitiesMerged(int keepId, int removedId)
     rebuildFaceRows();
     applyFaceFilter();
     showFaceDetails();
+    // اقتراحات الدمج التي تخص الوجه المدموج لم تعد قائمة
+    if (!m_mergeSuggestions.isEmpty()) {
+        m_mergeSuggestions.removeIf([removedId](const MergeSuggestion &s) { return s.a == removedId || s.b == removedId; });
+        m_mergeSuggestButton->setText(QStringLiteral("غالباً الشخص نفسه: %1 اقتراح").arg(m_mergeSuggestions.size()));
+        m_mergeSuggestButton->setVisible(!m_mergeSuggestions.isEmpty());
+    }
 }
 
 void MainWindow::removeFaces(const QList<int> &ids)
@@ -1930,7 +1820,10 @@ void MainWindow::removeFaces(const QList<int> &ids)
         m_faces.removeAt(row);
         delete m_faceList->takeItem(row);
         rebuildFaceRows();
+        m_mergeSuggestions.removeIf([id](const MergeSuggestion &s) { return s.a == id || s.b == id; });
     }
+    m_mergeSuggestButton->setText(QStringLiteral("غالباً الشخص نفسه: %1 اقتراح").arg(m_mergeSuggestions.size()));
+    m_mergeSuggestButton->setVisible(!m_mergeSuggestions.isEmpty());
     applyFaceFilter();
     showFaceDetails();
     setBusy(m_analyzing);
@@ -2126,8 +2019,11 @@ void MainWindow::refreshMatches()
     const GalleryPtr gallery = m_database.gallery();
     if (!gallery || (m_videoMode && (m_videoRunning || m_faces.size() > 300)))
         return;
-    for (FaceItem &face : m_faces)
+    for (FaceItem &face : m_faces) {
         face.match = FaceDatabase::identify(*gallery, face.embedding, threshold());
+        if (!face.match.personId.isEmpty() && m_rejectedMatches.value(face.id) == face.match.personId)
+            face.match = MatchResult();
+    }
     refreshFaceList();
     if (!m_videoMode) {
         m_view->setFaces(m_faces);
@@ -2159,33 +2055,6 @@ void MainWindow::refreshFaceList()
     setBusy(m_analyzing);
 }
 
-void MainWindow::updateFaceCount()
-{
-    if (m_faceFilter->text().trimmed().isEmpty() && m_faceStatusFilter->currentIndex() == 0)
-        m_faceCount->setText(QString::number(m_faces.size()));
-    else
-        applyFaceFilter();
-}
-
-void MainWindow::updateFaceListItem(QListWidgetItem *listItem, const FaceItem &face)
-{
-    if (!listItem)
-        return;
-    QString subtitle = QStringLiteral("جودة الصورة %1%").arg(qRound(face.quality * 100));
-    if (m_videoMode) {
-        subtitle += QStringLiteral(" · ظهر في %1 إطار").arg(face.frames);
-        if (face.firstSeenMs >= 0)
-            subtitle += QStringLiteral(" · ") + ImageIO::formatTime(face.firstSeenMs);
-    }
-    listItem->setData(CardRole::Id, face.id);
-    listItem->setData(CardRole::Title, matchLabel(face.match));
-    listItem->setData(CardRole::Subtitle, subtitle);
-    listItem->setData(CardRole::Status, int(face.match.status));
-    listItem->setData(CardRole::Score, double(face.match.score));
-    if (!listItem->data(CardRole::Avatar).isValid() || m_videoMode)
-        listItem->setData(CardRole::Avatar, circularPixmap(ImageIO::faceCrop(face), 54));
-}
-
 void MainWindow::selectFace(int id)
 {
     for (int i = 0; i < m_faces.size(); ++i) {
@@ -2195,99 +2064,6 @@ void MainWindow::selectFace(int id)
             return;
         }
     }
-}
-
-// أقرب المرشحين في القاعدة مع نسبهم، حتى يرى المستخدم البدائل حين يكون التطابق غير مؤكد ويصحح بنقرة
-QString MainWindow::candidatesHtml(const FaceItem &face) const
-{
-    QString html;
-    if (!face.embedding.empty() && m_database.personCount() > 0) {
-        GalleryPtr gallery = m_database.gallery();
-        const QList<MatchResult> candidates = FaceDatabase::candidates(*gallery, face.embedding, 3, threshold());
-        if (!candidates.isEmpty()) {
-            html += QStringLiteral("<br><br><span style='color:#8aa3c7'>أقرب المرشحين في القاعدة:</span>");
-            html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='2'>");
-            for (const MatchResult &candidate : candidates) {
-                const int percent = std::clamp(qRound(candidate.score * 100), 0, 100);
-                // تصحيح بنقرة: إضافة الوجه إلى صور المرشح فتتحسن مطابقته في المرات القادمة
-                const bool current = face.match.status == MatchStatus::Confirmed && candidate.personId == face.match.personId;
-                const QString action = current
-                    ? QStringLiteral("<span style='color:%1'>✓</span>").arg(matchColor(MatchStatus::Confirmed).name())
-                    : QStringLiteral("<a href='assign:%1' style='color:%2; text-decoration:none'>هذا هو</a>")
-                          .arg(candidate.personId.toHtmlEscaped(), Theme::Accent2.name());
-                html += QStringLiteral("<tr><td style='color:%1'>● <span style='color:#e6f0ff'>%2</span></td>"
-                                       "<td align='left' width='40' style='color:%1'>%3%</td>"
-                                       "<td align='left' width='48'>%4</td></tr>")
-                            .arg(matchColor(candidate.status).name(), candidate.name.toHtmlEscaped())
-                            .arg(percent)
-                            .arg(action);
-            }
-            html += QStringLiteral("</table>");
-            html += QStringLiteral("<a href='other' style='color:%1; text-decoration:none'>ليس أحدهم؟ اختر شخصاً آخر أو أضف شخصاً جديداً…</a>")
-                        .arg(Theme::Accent2.name());
-        }
-    }
-    return html;
-}
-
-void MainWindow::showFaceDetails()
-{
-    const int row = m_faceList->currentRow();
-    m_enrollFaceButton->setEnabled(m_ready && row >= 0);
-    m_viewShotButton->setVisible(m_videoMode && !m_videoSource.startsWith(QStringLiteral("camera:")));
-    m_viewShotButton->setEnabled(row >= 0 && row < m_faces.size());
-    if (row < 0 || row >= m_faces.size()) {
-        m_faceDetails->setText(QStringLiteral("اختر وجهاً من القائمة أو اضغط عليه في الصورة لعرض تفاصيله."));
-        m_view->setSelectedFace(-1);
-        return;
-    }
-
-    const FaceItem &face = m_faces.at(row);
-    m_view->setSelectedFace(face.id);
-    m_timeline->setSelectedLane(face.id);
-    const QString color = matchColor(face.match.status).name();
-    QString html = QStringLiteral("<div style='font-size:13pt; font-weight:600; color:%1'>%2</div>"
-                                  "<div style='color:%3'>%4</div>")
-                       .arg(Theme::Text.name(), matchLabel(face.match).toHtmlEscaped(), color, statusDescription(face.match.status));
-    if (face.match.status == MatchStatus::Confirmed && m_watched.contains(face.match.personId))
-        html += QStringLiteral("<div style='color:%1; font-weight:600'>⚠ هذا الشخص في قائمة المراقبة</div>").arg(Theme::Accent2.name());
-    auto row_ = [](const QString &key, const QString &value) {
-        return QStringLiteral("<br><span style='color:#8aa3c7'>%1:</span> <span style='color:#e6f0ff'>%2</span>").arg(key, value.toHtmlEscaped());
-    };
-    html += QStringLiteral("<br><span style='color:#8aa3c7'>التشابه:</span> <span style='color:#e6f0ff'>%1%</span>"
-                           "&nbsp;&nbsp;·&nbsp;&nbsp;<span style='color:#8aa3c7'>جودة الوجه:</span> <span style='color:#e6f0ff'>%2%</span>")
-                .arg(qRound(face.match.score * 100))
-                .arg(qRound(face.quality * 100));
-    if (face.quality < 0.35f)
-        html += QStringLiteral("<br><span style='color:#93c5fd'>جودة الوجه منخفضة: النتيجة أقل موثوقية</span>");
-    html += candidatesHtml(face);
-    if (m_videoMode && face.firstSeenMs >= 0) {
-        html += row_(QStringLiteral("أول ظهور"), ImageIO::formatTime(face.firstSeenMs));
-        html += row_(QStringLiteral("آخر ظهور"), ImageIO::formatTime(face.lastSeenMs));
-        html += row_(QStringLiteral("عدد الإطارات"), QString::number(face.frames));
-        if (face.bestMs >= 0)
-            html += row_(QStringLiteral("أوضح لقطة"), ImageIO::formatTime(face.bestMs));
-        if (face.appearances.size() > 1) {
-            QStringList times;
-            for (qsizetype i = 0; i < std::min<qsizetype>(face.appearances.size(), 6); ++i)
-                times << ImageIO::formatTime(face.appearances.at(i).first);
-            if (face.appearances.size() > 6)
-                times << QStringLiteral("…");
-            html += row_(QStringLiteral("مرات الظهور (%1)").arg(face.appearances.size()), times.join(QStringLiteral("، ")));
-        }
-    }
-    if (!face.match.personId.isEmpty()) {
-        const Person person = m_database.person(face.match.personId);
-        if (!person.nationalId.isEmpty())
-            html += row_(QStringLiteral("رقم الهوية"), person.nationalId);
-        if (!person.phone.isEmpty())
-            html += row_(QStringLiteral("الهاتف"), person.phone);
-        if (!person.tags.isEmpty())
-            html += row_(QStringLiteral("التصنيفات"), person.tags);
-        if (!person.notes.isEmpty())
-            html += row_(QStringLiteral("ملاحظات"), person.notes);
-    }
-    m_faceDetails->setText(html);
 }
 
 void MainWindow::addRecentFile(const QString &path)
@@ -2486,9 +2262,12 @@ void MainWindow::saveFaces()
     if (m_faces.isEmpty())
         return;
     const QString folder = QFileDialog::getExistingDirectory(this, QStringLiteral("اختر مجلد حفظ الوجوه"));
-    if (folder.isEmpty())
-        return;
+    if (!folder.isEmpty())
+        writeFaces(m_faces, folder);
+}
 
+void MainWindow::writeFaces(const QList<FaceItem> &faces, const QString &folder)
+{
     // مع الصور يُحفظ تقرير CSV (يفتح في Excel) بكل وجه ونتيجته، وأوقات ظهوره في الفيديو
     QFile report(QDir(folder).filePath(QStringLiteral("تقرير_الوجوه.csv")));
     QTextStream csv(&report);
@@ -2505,8 +2284,8 @@ void MainWindow::saveFaces()
         return QLatin1Char('"') + text + QLatin1Char('"');
     };
     int saved = 0;
-    for (int i = 0; i < m_faces.size(); ++i) {
-        const FaceItem &face = m_faces.at(i);
+    for (int i = 0; i < faces.size(); ++i) {
+        const FaceItem &face = faces.at(i);
         const QString name = face.match.status == MatchStatus::Unknown ? QStringLiteral("غير_معروف") : face.match.name;
         const QString fileName = QStringLiteral("وجه_%1_%2.png").arg(i + 1).arg(safeFileName(name));
         if (ImageIO::faceCrop(face).save(QDir(folder).filePath(fileName)))
@@ -2526,7 +2305,7 @@ void MainWindow::saveFaces()
     source.path = m_videoMode ? m_videoSource : m_currentImagePath;
     source.durationMs = m_videoDurationMs;
     const QString htmlPath = QDir(folder).filePath(QStringLiteral("تقرير.html"));
-    const bool html = Report::writeHtml(htmlPath, m_faces, source);
+    const bool html = Report::writeHtml(htmlPath, faces, source);
     bool csvSaved = false;
     if (hasReport) {
         csv.flush();
