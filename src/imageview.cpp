@@ -56,7 +56,10 @@ void ImageView::setImage(const QImage &image, bool animate)
         m_zoom = 1.0;
         m_pan = QPointF();
     }
-    m_image = image;
+    // صيغة يرسمها Qt مباشرة؛ إطارات BGR888 كانت تُحوَّل في كل رسم
+    m_image = image.format() == QImage::Format_ARGB32_Premultiplied || image.format() == QImage::Format_RGB32
+        ? image : image.convertToFormat(image.hasAlphaChannel() ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32);
+    m_scaled = QImage();
     startTicking();
     update();
 }
@@ -115,6 +118,7 @@ void ImageView::clear()
 {
     m_image = QImage();
     m_previous = QImage();
+    m_scaled = QImage();
     m_boxes.clear();
     m_selected = -1;
     m_hovered = -1;
@@ -124,14 +128,28 @@ void ImageView::clear()
 
 void ImageView::startTicking()
 {
-    if (!m_timer.isActive())
+    m_timer.setInterval(16);
+    if (!m_timer.isActive() && isVisible())
         m_timer.start();
+}
+
+void ImageView::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    startTicking();
 }
 
 void ImageView::tick()
 {
-    bool active = m_busy || m_image.isNull() || m_selected >= 0
-                  || std::any_of(m_boxes.cbegin(), m_boxes.cend(), [](const Box &b) { return b.watched; });
+    // مخفي (صفحة أخرى أو نافذة مصغّرة): لا رسم، ويعود المؤقت عند الظهور
+    if (!isVisible()) {
+        m_timer.stop();
+        return;
+    }
+    // حركة مستمرة هادئة (النبض والانتظار وشاشة البداية) تكفيها 30 إطاراً في الثانية، والانتقالات 60
+    const bool ambient = m_busy || m_image.isNull() || m_selected >= 0
+                         || std::any_of(m_boxes.cbegin(), m_boxes.cend(), [](const Box &b) { return b.watched; });
+    bool active = false;
     if (m_fade < 1.0) {
         m_fade = std::min(1.0, m_fade + 0.06);
         active = true;
@@ -150,8 +168,10 @@ void ImageView::tick()
         }
     }
     update();
-    if (!active)
+    if (!active && !ambient)
         m_timer.stop();
+    else
+        m_timer.setInterval(active ? 16 : 33);
 }
 
 QRectF ImageView::fitRect(const QImage &image) const
@@ -404,7 +424,17 @@ void ImageView::paintEvent(QPaintEvent *)
     QPainterPath clip;
     clip.addRoundedRect(target.intersected(QRectF(rect()).adjusted(6, 6, -6, -6)), 10, 10);
     p.setClipPath(clip);
-    p.drawImage(zoomed, m_image);
+    if (fade >= 1.0 && m_zoom <= 1.0) {
+        // بلا تكبير ولا انتقال: نسخة مصغّرة مرة واحدة لكل إطار وحجم نافذة
+        const QSize size = target.size().toSize();
+        if (m_scaled.size() != size || m_scaledKey != m_image.cacheKey()) {
+            m_scaled = m_image.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            m_scaledKey = m_image.cacheKey();
+        }
+        p.drawImage(target.topLeft(), m_scaled);
+    } else {
+        p.drawImage(zoomed, m_image);
+    }
     p.setOpacity(1.0);
 
     paintRegion(p);

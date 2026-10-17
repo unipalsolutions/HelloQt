@@ -20,7 +20,7 @@ void MainWindow::verifyGpu(bool interactive)
         m_gpuChecking = false;
         if (m_gpuCheckButton)
             m_gpuCheckButton->setEnabled(true);
-        const QString gpu = FaceEngine::availableGpu();
+        const QString gpu = FaceEngine::gpuIdentity();
         const bool reliable = !crashed && result.reliable();
         if (!gpu.isEmpty())
             Performance::setGpuVerified(gpu, reliable);
@@ -35,7 +35,7 @@ void MainWindow::verifyGpu(bool interactive)
         if (!gpu.isEmpty() && !reliable)
             text += QStringLiteral("\n\nأُوقف كرت الشاشة ويبقى التحليل على المعالج.");
         else if (reliable && Performance::gpuEnabled() && m_engine.gpuName().isEmpty())
-            text += QStringLiteral("\n\nاجتاز كرت الشاشة الفحص، ويُستخدم من التشغيل القادم للبرنامج.");
+            text += QStringLiteral("\n\nاجتاز كرت الشاشة الفحص، وينتقل التحليل إليه الآن.");
         else if (reliable && !Performance::gpuEnabled())
             text += QStringLiteral("\n\nكرت الشاشة متوقف في الإعدادات؛ فعّله من مفتاح «كرت الشاشة».");
         if (interactive) {
@@ -46,7 +46,60 @@ void MainWindow::verifyGpu(bool interactive)
         } else {
             Toast::show(this, text.simplified(), reliable ? Toast::Kind::Info : Toast::Kind::Warning);
         }
+        applyEngineDevice();
     });
+}
+
+void MainWindow::applyEngineDevice()
+{
+    if (!m_ready || m_deviceWatcher.isRunning())
+        return;
+    const bool wantGpu = Performance::gpuEnabled() && Performance::gpuVerified(FaceEngine::gpuIdentity());
+    if (wantGpu == !m_engine.gpuName().isEmpty())
+        return;
+    // التحليل الجاري لا يتوقف: يكمل على الجلستين القديمتين حتى لحظة التبديل
+    FaceEngine *engine = &m_engine;
+    const FaceEngine::Device device = wantGpu ? FaceEngine::Device::Auto : FaceEngine::Device::Cpu;
+    if (m_deviceLabel)
+        m_deviceLabel->setText(wantGpu ? QStringLiteral("جارٍ نقل التحليل إلى كرت الشاشة…") : QStringLiteral("جارٍ نقل التحليل إلى المعالج…"));
+    m_deviceWatcher.setFuture(QtConcurrent::run([engine, device] {
+        QString error;
+        engine->switchDevice(device, &error);
+        return error;
+    }));
+}
+
+void MainWindow::updateDeviceLabel()
+{
+    if (!m_deviceLabel || m_deviceWatcher.isRunning())
+        return;
+    const QString gpu = m_engine.gpuName();
+    QString text = gpu.isEmpty() ? QStringLiteral("التحليل: المعالج") : QStringLiteral("التحليل: %1").arg(gpu);
+    if (m_videoRunning)
+        text += QStringLiteral(" · %1 إطار/ث").arg(m_analyzedFrames);
+    m_analyzedFrames = 0;
+    // لماذا ليس على الكرت، حين يوجد كرت يُفترض أن يُستخدم (البحث عن الكرت مرة واحدة: يتكرر كل ثانية)
+    static const bool hasGpu = !FaceEngine::availableGpu().isEmpty();
+    QString why;
+    const QString fallback = m_engine.fallbackReason();
+    if (gpu.isEmpty() && !fallback.isEmpty())
+        why = QStringLiteral("رجع التحليل إلى المعالج بعد عطل في كرت الشاشة: %1").arg(fallback);
+    else if (gpu.isEmpty() && hasGpu && Performance::gpuEnabled())
+        why = m_gpuChecking ? QStringLiteral("كرت الشاشة قيد الفحص، وينتقل التحليل إليه فور اجتيازه")
+                            : QStringLiteral("كرت الشاشة لم يجتز الفحص؛ أعد فحصه من «استهلاك الموارد»");
+    else if (gpu.isEmpty() && hasGpu)
+        why = QStringLiteral("كرت الشاشة متوقف من مفتاح «كرت الشاشة»");
+    const bool warn = !fallback.isEmpty() && gpu.isEmpty();
+    m_deviceLabel->setText(warn ? QStringLiteral("⚠ ") + text : text);
+    m_deviceLabel->setToolTip(why.isEmpty() ? QStringLiteral("مكان تحليل الوجوه وعدد الإطارات المحللة في الثانية") : why);
+    const QString style = QStringLiteral("color: %1; padding: 0 8px;").arg((warn ? Theme::Warning : Theme::Muted).name());
+    if (m_deviceLabel->styleSheet() != style)
+        m_deviceLabel->setStyleSheet(style);
+    if (warn && fallback != m_shownFallback) {
+        m_shownFallback = fallback;
+        AppLog::write(QStringLiteral("[تحذير] %1").arg(why));
+        Toast::show(this, why, Toast::Kind::Warning);
+    }
 }
 
 void MainWindow::setupTray()
@@ -524,8 +577,12 @@ void MainWindow::noteCameraFaces(const QImage &frame, const QList<FaceItem> &fac
             const FaceItem &card = m_faces.at(row);
             item.embedding = card.embedding;
             item.quality = std::max(item.quality, card.quality);
-            if (face.match.status != MatchStatus::Possible)
-                item.crop = ImageIO::faceCrop(card);
+            // فك الصورة مع كل إطار كان يثقل الواجهة؛ تُفك عند الحاجة فقط (CameraWatch::cropOf)
+            if (face.match.status != MatchStatus::Possible) {
+                item.crop = card.crop;
+                if (item.crop.isNull())
+                    item.packedCrop = card.packedCrop;
+            }
         }
         watched.append(item);
     }

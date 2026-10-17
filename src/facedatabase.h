@@ -161,7 +161,8 @@ public:
                            float score, const QImage &face, const QString &snapshot);
     QList<Sighting> sightings(const QString &personId, int limit = 50) const;
     // يحذف ظهور الكاميرات (للمعروفين والزوار) الأقدم من before؛ ظهور الصور والفيديو يبقى. يعيد عدد المحذوف
-    int removeCameraSightingsBefore(const QDateTime &before);
+    // batch > 0: يحذف حتى batch صفاً من كل جدول، وmore تعني أن الباقي يحتاج استدعاءً آخر
+    int removeCameraSightingsBefore(const QDateTime &before, int batch = 0, bool *more = nullptr);
     // أحدث الظهور لكل الأشخاص منذ since (أو كله إن كان غير صالح)؛ watchedOnly لقائمة المراقبة فقط
     QList<SightingEntry> recentSightings(bool watchedOnly, const QDateTime &since, int limit) const;
 

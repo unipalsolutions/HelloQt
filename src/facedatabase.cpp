@@ -707,6 +707,8 @@ bool FaceDatabase::open(const QString &directory, QString *error)
                        " thumb BLOB, snapshot TEXT)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS visitor_sightings_visitor ON visitor_sightings(visitor_id, id)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS visitor_sightings_seen ON visitor_sightings(seen)"),
+        // عدّ ظهور المجهول اليوم (تنبيه المتكرر) دون المرور على تاريخه كله
+        QStringLiteral("CREATE INDEX IF NOT EXISTS visitor_sightings_visitor_seen ON visitor_sightings(visitor_id, seen)"),
         QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES('model', 'insightface-buffalo_l')"),
         QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES('generation', '1')"),
     };
@@ -1010,22 +1012,36 @@ bool FaceDatabase::backupFile(const QString &databaseFile, const QString &target
     return ok;
 }
 
-int FaceDatabase::removeCameraSightingsBefore(const QDateTime &before)
+int FaceDatabase::removeCameraSightingsBefore(const QDateTime &before, int batch, bool *more)
 {
+    if (more)
+        *more = false;
     if (!m_db.isOpen() || !before.isValid())
         return 0;
     const qint64 limit = before.toSecsSinceEpoch();
+    // بدفعات: أول تفعيل للحذف قد يصادف سجل أشهر، فيُحذف على مراحل لا تجمّد الواجهة
+    const QString limitClause = batch > 0 ? QStringLiteral(" LIMIT %1").arg(batch) : QString();
     int removed = 0;
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral("DELETE FROM sightings WHERE seen < ? AND camera IS NOT NULL AND camera <> ''"));
+    query.prepare(QStringLiteral("DELETE FROM sightings WHERE id IN (SELECT id FROM sightings WHERE seen < ?"
+                                 " AND camera IS NOT NULL AND camera <> ''%1)").arg(limitClause));
     query.addBindValue(limit);
-    if (query.exec())
-        removed += std::max(0, query.numRowsAffected());
-    query.prepare(QStringLiteral("DELETE FROM visitor_sightings WHERE seen < ?"));
+    if (query.exec()) {
+        const int count = std::max(0, query.numRowsAffected());
+        removed += count;
+        if (more && batch > 0 && count >= batch)
+            *more = true;
+    }
+    query.prepare(QStringLiteral("DELETE FROM visitor_sightings WHERE id IN (SELECT id FROM visitor_sightings WHERE seen < ?%1)").arg(limitClause));
     query.addBindValue(limit);
-    if (query.exec())
-        removed += std::max(0, query.numRowsAffected());
-    if (removed > 0) {
+    if (query.exec()) {
+        const int count = std::max(0, query.numRowsAffected());
+        removed += count;
+        if (more && batch > 0 && count >= batch)
+            *more = true;
+    }
+    // الإشعار مرة واحدة بعد آخر دفعة، فلا تُعاد قراءة القوائم مع كل دفعة
+    if (removed > 0 && !(more && *more)) {
         emit changed();
         emit visitorsChanged();
     }

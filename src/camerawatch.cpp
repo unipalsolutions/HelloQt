@@ -4,10 +4,12 @@
 #include "facedatabase.h"
 
 #include <QDateTime>
+#include <QMutex>
 #include <QSettings>
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <optional>
 
 namespace {
 
@@ -26,18 +28,35 @@ CameraWatch::CameraWatch(FaceDatabase *database, QObject *parent)
 {
 }
 
+namespace {
+
+// يُقرآن مع كل إطار من كل كاميرا، فيُحفظان في الذاكرة بدل فتح ملف الإعدادات كل مرة؛ يتغيران من هنا فقط
+QMutex cacheMutex;
+int visitorsCache = -1;
+std::optional<CameraWatch::StrangerAlerts> strangerCache;
+
+} // namespace
+
 bool CameraWatch::visitorsEnabled()
 {
-    return QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("saveVisitors"), true).toBool();
+    QMutexLocker locker(&cacheMutex);
+    if (visitorsCache < 0)
+        visitorsCache = QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("saveVisitors"), true).toBool();
+    return visitorsCache == 1;
 }
 
 void CameraWatch::setVisitorsEnabled(bool enabled)
 {
+    QMutexLocker locker(&cacheMutex);
     QSettings(settingsPath(), QSettings::IniFormat).setValue(QStringLiteral("saveVisitors"), enabled);
+    visitorsCache = enabled;
 }
 
 CameraWatch::StrangerAlerts CameraWatch::strangerAlerts()
 {
+    QMutexLocker locker(&cacheMutex);
+    if (strangerCache)
+        return *strangerCache;
     QSettings settings(settingsPath(), QSettings::IniFormat);
     StrangerAlerts result;
     result.dailyCount = std::max(0, settings.value(QStringLiteral("strangerDailyCount"), result.dailyCount).toInt());
@@ -48,11 +67,14 @@ CameraWatch::StrangerAlerts CameraWatch::strangerAlerts()
         result.nightWindow.from = from;
     if (to.isValid())
         result.nightWindow.to = to;
+    strangerCache = result;
     return result;
 }
 
 void CameraWatch::setStrangerAlerts(const StrangerAlerts &value)
 {
+    QMutexLocker locker(&cacheMutex);
+    strangerCache.reset();
     QSettings settings(settingsPath(), QSettings::IniFormat);
     settings.setValue(QStringLiteral("strangerDailyCount"), std::max(0, value.dailyCount));
     settings.setValue(QStringLiteral("strangerNight"), value.night);
@@ -124,6 +146,11 @@ QImage CameraWatch::cropOf(const QImage &frame, const Face &face) const
 {
     if (!face.crop.isNull())
         return face.crop;
+    if (!face.packedCrop.isEmpty()) {
+        const QImage unpacked = QImage::fromData(face.packedCrop, "JPG");
+        if (!unpacked.isNull())
+            return unpacked;
+    }
     const QRectF box = face.box;
     return frame.copy(box.adjusted(-box.width() * 0.3, -box.height() * 0.3, box.width() * 0.3, box.height() * 0.3)
                           .toAlignedRect()

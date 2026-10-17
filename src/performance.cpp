@@ -58,24 +58,26 @@ void setGpuEnabled(bool enabled)
     QSettings(settingsFile(), QSettings::IniFormat).setValue(QStringLiteral("useGpu"), enabled);
 }
 
-namespace {
-
-QString verificationKey(const QString &gpu)
-{
-    return gpu + QStringLiteral("|") + QCoreApplication::applicationVersion();
-}
-
-} // namespace
-
 bool gpuVerified(const QString &gpu)
 {
-    return !gpu.isEmpty()
-        && QSettings(settingsFile(), QSettings::IniFormat).value(QStringLiteral("gpuVerified")).toString() == verificationKey(gpu);
+    if (gpu.isEmpty())
+        return false;
+    QSettings settings(settingsFile(), QSettings::IniFormat);
+    const QString stored = settings.value(QStringLiteral("gpuVerified")).toString();
+    if (stored == gpu)
+        return true;
+    // النسخ السابقة ربطت الفحص باسم الكرت ورقم إصدار البرنامج («الاسم|3.0.x») فكان يسقط مع كل تحديث؛
+    // كرت اجتاز الفحص بتلك الصيغة يبقى مقبولاً ويُحفظ بالصيغة الجديدة
+    if (stored.count(QLatin1Char('|')) == 1 && gpu.startsWith(stored.section(QLatin1Char('|'), 0, 0) + QLatin1Char('|'))) {
+        settings.setValue(QStringLiteral("gpuVerified"), gpu);
+        return true;
+    }
+    return false;
 }
 
 void setGpuVerified(const QString &gpu, bool verified)
 {
-    QSettings(settingsFile(), QSettings::IniFormat).setValue(QStringLiteral("gpuVerified"), verified ? verificationKey(gpu) : QString());
+    QSettings(settingsFile(), QSettings::IniFormat).setValue(QStringLiteral("gpuVerified"), verified ? gpu : QString());
 }
 
 bool lastRunOnGpu()

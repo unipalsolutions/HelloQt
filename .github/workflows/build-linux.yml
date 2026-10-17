@@ -50,4 +50,5 @@ jobs:
           run "Backup" --backup-test "$PWD/backuptest" "$PWD/backup.txt"
           run "Daily report" --daily-report-test "$PWD/dailytest" "$PWD/daily.txt"
           run "Recording" --record-test "$PWD/recordtest" "$PWD/record.txt"
+          run "Speed" --bench - 5 "$PWD/bench.txt"
           exit $failed

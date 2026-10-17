@@ -53,6 +53,7 @@ signals:
 
 private:
     void run();
+    void removeSightings(int recordings, int sightings, const QDateTime &before);
     void startBackup(bool force);
 
     FaceDatabase *m_database;

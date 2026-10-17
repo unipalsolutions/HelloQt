@@ -67,6 +67,7 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private:
     struct Box
@@ -99,6 +100,9 @@ private:
 
     QImage m_image;
     QImage m_previous;
+    // الصورة مصغّرة بحجم عرضها: الرسم المتكرر (نبض الوجه المحدد، المربعات) لا يعيد تصغير الإطار كاملاً
+    QImage m_scaled;
+    qint64 m_scaledKey = 0;
     double m_fade = 1.0;
     QList<Box> m_boxes;
     int m_selected = -1;

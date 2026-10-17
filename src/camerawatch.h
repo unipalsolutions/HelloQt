@@ -45,6 +45,7 @@ public:
         float quality = 0.0f;
         int track = -1; // رقم مسار الوجه إن كان التتبع متاحاً (الكاميرا الواحدة)، وإلا -1
         QImage crop;    // صورة أوضح للوجه إن توفرت، وإلا تُقتطع من الإطار
+        QByteArray packedCrop; // أو الصورة الأوضح مضغوطة، تُفك فقط إن احتيج إليها (تنبيه أو حفظ ظهور)
     };
 
     explicit CameraWatch(FaceDatabase *database, QObject *parent = nullptr);

@@ -86,6 +86,10 @@ private:
     void onEngineLoaded();
     // فحص كرت الشاشة في عملية منفصلة؛ interactive: نتيجته في رسالة، وإلا إشعار قصير
     void verifyGpu(bool interactive);
+    // ينقل المحرك إلى الكرت أو المعالج حسب الإعدادات ونتيجة الفحص، دون إعادة تشغيل البرنامج
+    void applyEngineDevice();
+    // مكان التحليل وسرعته في شريط الحالة، مع تنبيه إن رجع إلى المعالج
+    void updateDeviceLabel();
     void setupShortcuts();
     void loadSettings();
     void saveSettings() const;
@@ -223,6 +227,12 @@ private:
     bool m_cameraOfflineAlerted = false;
     QTimer *m_cameraRetryTimer = nullptr; // إعادة تشغيل الكاميرا الموصولة إن انقطعت ولم تعد
     QFutureWatcher<QString> m_loadWatcher; // تحميل النماذج في الخلفية حتى تظهر النافذة فوراً
+    QFutureWatcher<QString> m_deviceWatcher; // نقل المحرك بين المعالج والكرت في الخلفية
+    QLabel *m_deviceLabel = nullptr;
+    QTimer *m_deviceTimer = nullptr;
+    QTimer *m_detailsTimer = nullptr; // تحديث تفاصيل الوجه المحدد أثناء التحليل بتمهّل
+    int m_analyzedFrames = 0; // الإطارات المحللة منذ آخر تحديث لسرعة التحليل
+    QString m_shownFallback;  // سبب الرجوع إلى المعالج الذي نُبّه إليه
     QString m_databaseError;
     QString m_pendingFile;
     QString m_currentImagePath;

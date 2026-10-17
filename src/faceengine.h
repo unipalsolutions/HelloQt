@@ -41,8 +41,14 @@ public:
     bool isLoaded() const;
     // أين تعمل النماذج: اسم كرت الشاشة، أو فارغ للمعالج
     QString gpuName() const;
+    // ينقل التحليل إلى جهاز آخر دون إعادة تشغيل البرنامج، والتحليل الجاري يكمل بعد لحظة التبديل
+    bool switchDevice(Device device, QString *error = nullptr);
+    // لماذا رجع التحليل إلى المعالج بعد أن كان على الكرت (تعطل التعريف مثلاً)، فارغ إن لم يرجع
+    QString fallbackReason() const;
     // كرت الشاشة الذي يُستخدم إن سُمح به (فارغ إن لم يوجد كرت مناسب أو كانت النسخة للمعالج فقط)
     static QString availableGpu();
+    // الكرت وتعريفه ونسخة ONNX Runtime: ما يُربط به فحص الكرت (فارغ بلا كرت)
+    static QString gpuIdentity();
 
     // thorough: كشف متعدد المقاييس مع تحسين الإضاءة وتقسيم الصور الكبيرة (أدق وأبطأ)
     std::vector<DetectedFace> detect(const cv::Mat &bgr, bool thorough, float threshold = 0.45f) const;
@@ -65,6 +71,9 @@ public:
     static void normalize(std::vector<float> &v);
 
 private:
+    struct Sessions;
+    bool createSessions(Device device, Sessions *out, QString *error) const;
+
     struct Impl;
     std::unique_ptr<Impl> d;
 };

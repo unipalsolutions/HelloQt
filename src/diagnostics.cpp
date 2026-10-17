@@ -13,12 +13,14 @@
 #include "recorder.h"
 #include "faceengine.h"
 #include "gpucheck.h"
+#include "performance.h"
 #include "imageio.h"
 #include "report.h"
 #include "videoexport.h"
 #include "videofilters.h"
 #include "videoworker.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
@@ -41,7 +43,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <thread>
 #include <functional>
 #include <random>
 
@@ -1857,6 +1862,88 @@ int rulesTest(const QString &directory, QTextStream &out)
 }
 } // namespace
 
+// قياس سرعة ثابت الصيغة للمقارنة بين النسخ: الكشف والبصمة لإطار، ثم أول ثوانٍ من فيديو، ثم نقل المحرك
+// بين جهازين والتحليل جارٍ في خيط آخر (يجب ألا ينهار ولا يتوقف التحليل)
+int bench(const QString &videoPath, int seconds, QTextStream &out)
+{
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    out << "version=" << QCoreApplication::applicationVersion() << "\n";
+    out << "device=" << (engine.gpuName().isEmpty() ? QStringLiteral("cpu") : engine.gpuName()) << "\n";
+    out << "gpu_identity=" << FaceEngine::gpuIdentity() << "\n";
+    out << "threads=" << Performance::threads(Performance::saved()) << "\n";
+
+    cv::Mat frame;
+    cv::VideoCapture capture;
+    const bool hasVideo = videoPath != QLatin1String("-") && ImageIO::openVideo(capture, videoPath) && capture.read(frame);
+    if (!hasVideo) {
+        frame = cv::Mat(480, 640, CV_8UC3, cv::Scalar(70, 90, 110));
+        cv::randn(frame, cv::Scalar::all(110), cv::Scalar::all(40));
+    }
+    const auto measure = [](auto &&work, int repeats) {
+        work();
+        QElapsedTimer timer;
+        timer.start();
+        for (int i = 0; i < repeats; ++i)
+            work();
+        return timer.nsecsElapsed() / 1e6 / repeats;
+    };
+    out << "frame=" << frame.cols << "x" << frame.rows << "\n";
+    out << "detect_ms=" << measure([&] { engine.detect(frame, false); }, 10) << "\n";
+    const cv::Mat aligned(112, 112, CV_8UC3, cv::Scalar(90, 120, 160));
+    out << "embed_ms=" << measure([&] { engine.embed(aligned); }, 10) << "\n";
+    out << "embed_many_ms=" << measure([&] { engine.embedMany({aligned}); }, 10) << "\n";
+    out << "analyze_ms=" << measure([&] { engine.analyze(frame, false); }, 5) << "\n";
+
+    int analyzed = 0;
+    double videoSeconds = 0.0;
+    if (hasVideo) {
+        VideoWorker worker(&engine);
+        worker.setFrameStep(0);
+        worker.setRange(0, qint64(seconds) * 1000);
+        QObject::connect(&worker, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &, qint64, double) {
+            ++analyzed;
+            worker.frameShown();
+        });
+        QElapsedTimer timer;
+        timer.start();
+        worker.process(videoPath);
+        videoSeconds = std::max(0.001, timer.elapsed() / 1000.0);
+        out << "video_seconds=" << seconds << "\n";
+        out << "video_elapsed_s=" << videoSeconds << "\n";
+        out << "video_analyzed_frames=" << analyzed << "\n";
+        out << "video_analyzed_per_second=" << analyzed / videoSeconds << "\n";
+        out << "video_realtime_factor=" << seconds / videoSeconds << "\n";
+    }
+
+    // نقل المحرك والتحليل جارٍ: ثلاث مرات إلى المعالج نفسه (يكفي لاختبار القفل على أي جهاز)
+    std::atomic<bool> running{true};
+    std::atomic<int> during{0};
+    std::thread analysis([&] {
+        while (running.load()) {
+            engine.detect(frame, false);
+            ++during;
+        }
+    });
+    bool switched = true;
+    QElapsedTimer timer;
+    timer.start();
+    for (int i = 0; i < 3; ++i)
+        switched = engine.switchDevice(FaceEngine::Device::Cpu) && switched;
+    const double switchMs = timer.elapsed() / 3.0;
+    const int before = during.load();
+    while (during.load() < before + 2)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    running.store(false);
+    analysis.join();
+    out << "switch_ok=" << switched << "\n";
+    out << "switch_ms=" << switchMs << "\n";
+    out << "detect_during_switch=" << during.load() << "\n";
+    out << "peak_memory_mb=" << peakMemoryMb() << "\n";
+    return switched && (!hasVideo || analyzed > 0) ? 0 : 1;
+}
+
 int run(const QStringList &args)
 {
     if (args.size() < 2)
@@ -1869,7 +1956,8 @@ int run(const QStringList &args)
         && command != QLatin1String("--backup-test") && command != QLatin1String("--filters-test")
         && command != QLatin1String("--camera-test") && command != QLatin1String("--record-test")
         && command != QLatin1String("--watch-test") && command != QLatin1String("--daily-report-test")
-        && command != QLatin1String("--gpu-test") && command != QLatin1String("--rules-test"))
+        && command != QLatin1String("--gpu-test") && command != QLatin1String("--rules-test")
+        && command != QLatin1String("--bench"))
         return -1;
 
     QFile output(args.last());
@@ -1920,6 +2008,9 @@ int run(const QStringList &args)
     // Malamih --watch-test <مجلد مؤقت> <ملف النتائج>
     if (command == QLatin1String("--watch-test") && args.size() == 4)
         return watchTest(args.at(2), out);
+    // Malamih --bench <فيديو أو -> [ثوانٍ من الفيديو، افتراضياً 20] <ملف النتائج>
+    if (command == QLatin1String("--bench") && (args.size() == 4 || args.size() == 5))
+        return bench(args.at(2), args.size() == 5 ? std::max(1, args.at(3).toInt()) : 20, out);
     // Malamih --report-test <صورة> <تقرير.html> <ملف النتائج>
     if (command == QLatin1String("--report-test") && args.size() == 5)
         return reportTest(args.at(2), args.at(3), out);

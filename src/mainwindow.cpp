@@ -63,6 +63,25 @@ MainWindow::MainWindow(QWidget *parent)
     auto *version = new QLabel(QStringLiteral("الإصدار \u2066%1\u2069").arg(QApplication::applicationVersion()), this);
     version->setStyleSheet(QStringLiteral("color: %1; padding: 0 8px;").arg(Theme::Muted.name()));
     statusBar()->addPermanentWidget(version);
+    m_deviceLabel = new QLabel(this);
+    m_deviceLabel->setTextFormat(Qt::PlainText);
+    statusBar()->addPermanentWidget(m_deviceLabel);
+    m_deviceTimer = new QTimer(this);
+    m_deviceTimer->setInterval(1000);
+    connect(m_deviceTimer, &QTimer::timeout, this, &MainWindow::updateDeviceLabel);
+    connect(&m_deviceWatcher, &QFutureWatcher<QString>::finished, this, [this] {
+        const QString error = m_deviceWatcher.result();
+        Performance::setLastRunOnGpu(!m_engine.gpuName().isEmpty());
+        if (!error.isEmpty()) {
+            AppLog::write(QStringLiteral("[تحذير] تعذر نقل التحليل: %1").arg(error));
+            Toast::show(this, error, Toast::Kind::Warning);
+        } else {
+            const QString device = m_engine.gpuName().isEmpty() ? QStringLiteral("المعالج") : m_engine.gpuName();
+            AppLog::write(QStringLiteral("انتقل التحليل إلى %1 دون إعادة تشغيل").arg(device));
+            Toast::show(this, QStringLiteral("التحليل الآن على %1").arg(device), Toast::Kind::Success);
+        }
+        updateDeviceLabel();
+    });
 
     connect(&m_database, &FaceDatabase::changed, this, [this] {
         refreshStats();
@@ -244,9 +263,12 @@ void MainWindow::onEngineLoaded()
     AppLog::write(QStringLiteral("جاهز — التحليل على %1، والقاعدة فيها %2 شخصاً").arg(device).arg(m_database.personCount()));
     m_maintenance->start();
     Performance::setLastRunOnGpu(!m_engine.gpuName().isEmpty());
-    // كرت مفعّل لم يجتز الفحص بعد على هذه النسخة: يُفحص في الخلفية، والتحليل الآن على المعالج
-    if (Performance::gpuEnabled() && !FaceEngine::availableGpu().isEmpty()
-        && !Performance::gpuVerified(FaceEngine::availableGpu()))
+    updateDeviceLabel();
+    m_deviceTimer->start();
+    // كرت مفعّل لم يجتز الفحص بعد (كرت جديد أو تعريف محدَّث): يُفحص في الخلفية، والتحليل الآن على المعالج
+    // وينتقل إلى الكرت وحده فور اجتيازه
+    if (Performance::gpuEnabled() && !FaceEngine::gpuIdentity().isEmpty()
+        && !Performance::gpuVerified(FaceEngine::gpuIdentity()))
         verifyGpu(false);
     if (m_previousCrash.isValid()) {
         Toast::show(this,
@@ -492,6 +514,7 @@ void MainWindow::pasteImage()
 MainWindow::~MainWindow()
 {
     m_loadWatcher.waitForFinished();
+    m_deviceWatcher.waitForFinished();
     m_videoWorker->requestStop();
     m_videoThread->quit();
     m_videoThread->wait();
@@ -810,14 +833,14 @@ QWidget *MainWindow::createRecognitionPage()
     m_gpuSwitch->setEnabled(!gpu.isEmpty());
     m_gpuSwitch->setToolTip(gpu.isEmpty() ? QStringLiteral("لا يوجد كرت شاشة يدعم DirectX 12 في هذا الجهاز؛ التحليل على المعالج")
                                           : QStringLiteral("تحليل الوجوه على %1 بدل المعالج: أسرع عادةً بعدة مرات، ويبقى المعالج "
-                                                           "متاحاً لبقية البرامج. يُفحص الكرت أولاً، ويُطبَّق عند إعادة تشغيل البرنامج")
+                                                           "متاحاً لبقية البرامج. يُفحص الكرت أولاً، ثم ينتقل التحليل إليه فوراً")
                                                 .arg(gpu));
     connect(m_gpuSwitch, &QAbstractButton::toggled, this, [this](bool on) {
         Performance::setGpuEnabled(on);
-        if (on && !Performance::gpuVerified(FaceEngine::availableGpu()))
+        if (on && !Performance::gpuVerified(FaceEngine::gpuIdentity()))
             verifyGpu(false);
         else
-            Toast::show(this, QStringLiteral("يُطبَّق عند إعادة تشغيل البرنامج"), Toast::Kind::Info);
+            applyEngineDevice();
     });
     m_gpuCheckButton = new FancyButton(Icons::Name::Scan, QStringLiteral("فحص"), FancyButton::Kind::Secondary, settings);
     m_gpuCheckButton->setToolTip(QStringLiteral("قياس سرعة التحليل على كرت الشاشة مقابل المعالج، والتحقق أن نتائجه مطابقة للمعالج"));
@@ -1361,6 +1384,7 @@ void MainWindow::togglePause()
 void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress)
 {
     m_videoWorker->frameShown();
+    ++m_analyzedFrames;
     if (!m_videoRunning)
         return;
     m_view->setBusy(false);
@@ -1412,8 +1436,17 @@ void MainWindow::onTrackUpdated(const FaceItem &track)
         m_faceList->setRowHidden(i, !faceMatchesFilter(track));
         if (!m_laneTimer->isActive())
             m_laneTimer->start();
-        if (m_faceList->currentRow() == i)
-            showFaceDetails();
+        // الوجه المحدد يتحدث عدة مرات في الثانية، وتفاصيله تستعلم القاعدة وتعيد بناء النص: مرة كل ثلث ثانية تكفي
+        if (m_faceList->currentRow() == i) {
+            if (!m_detailsTimer) {
+                m_detailsTimer = new QTimer(this);
+                m_detailsTimer->setSingleShot(true);
+                m_detailsTimer->setInterval(300);
+                connect(m_detailsTimer, &QTimer::timeout, this, &MainWindow::showFaceDetails);
+            }
+            if (!m_detailsTimer->isActive())
+                m_detailsTimer->start();
+        }
         return;
     }
     m_faceRows.insert(track.id, int(m_faces.size()));

@@ -92,6 +92,14 @@ jobs:
           if ($different -gt 0.25) { throw "Different people similarity too high: $different" }
         shell: pwsh
 
+      - name: Speed benchmark
+        run: |
+          $out = Join-Path $PWD "bench.txt"
+          $p = Start-Process dist\Malamih\Malamih.exe -ArgumentList '--bench', '-', '5', $out -Wait -PassThru
+          Write-Host "exit $($p.ExitCode):`n$(Get-Content $out -Raw)"
+          if ($p.ExitCode -ne 0) { throw "Speed benchmark failed" }
+        shell: pwsh
+
       - name: Enhancement test
         run: |
           $out = Join-Path $PWD "enhance.txt"

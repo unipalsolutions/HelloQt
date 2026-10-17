@@ -14,6 +14,8 @@
 #include <atomic>
 #include <cmath>
 #include <mutex>
+#include <shared_mutex>
+#include <thread>
 #include <stdexcept>
 
 #ifdef _WIN32
@@ -49,6 +51,7 @@ struct GpuAdapter
 {
     int index = -1;
     QString name;
+    QString driver; // إصدار تعريف الكرت، مثل 31.0.15.5222
 };
 
 // كرت شاشة حقيقي يدعم DirectX 12؛ مع كرتين (مدمج ومنفصل) يُختار صاحب الذاكرة الأكبر.
@@ -65,18 +68,32 @@ GpuAdapter findGpu()
     for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
         DXGI_ADAPTER_DESC1 desc{};
         const bool ok = SUCCEEDED(adapter->GetDesc1(&desc));
+        LARGE_INTEGER umd{};
+        const bool hasDriver = ok && SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd));
         adapter->Release();
         if (!ok || (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || desc.VendorId == 0x1414)
             continue;
         if (best.index < 0 || desc.DedicatedVideoMemory > bestMemory) {
             best.index = int(i);
             best.name = QString::fromWCharArray(desc.Description).trimmed();
+            best.driver = hasDriver ? QStringLiteral("%1.%2.%3.%4")
+                                          .arg(HIWORD(umd.HighPart)).arg(LOWORD(umd.HighPart))
+                                          .arg(HIWORD(umd.LowPart)).arg(LOWORD(umd.LowPart))
+                                    : QString();
             bestMemory = desc.DedicatedVideoMemory;
         }
     }
     factory->Release();
 #endif
     return best;
+}
+
+// ما يُربط به فحص الكرت: الكرت نفسه وتعريفه ونسخة ONNX Runtime، فلا يتغير بتحديث البرنامج
+QString identity(const GpuAdapter &adapter)
+{
+    if (adapter.name.isEmpty())
+        return QString();
+    return QStringLiteral("%1|%2|ORT %3").arg(adapter.name, adapter.driver, QString::fromLatin1(OrtGetApiBase()->GetVersionString()));
 }
 
 std::basic_string<ORTCHAR_T> toOrtPath(const QString &path)
@@ -200,12 +217,20 @@ struct FaceEngine::Impl
     // DirectML لا يقبل تشغيلين متزامنين للجلسة نفسها، والمعالج يقبل
     mutable std::mutex runMutex;
     mutable std::atomic<bool> onGpu{false};
+    // تبديل الجلستين أثناء العمل (المعالج ⇄ الكرت) يقفله حصرياً، وكل تشغيل للنموذج يقفله مشتركاً؛
+    // وswitching يوقف التشغيلات الجديدة حتى لا يبقى التبديل منتظراً خلف خيوط لا تتوقف
+    mutable std::shared_mutex sessionMutex;
+    std::atomic<bool> switching{false};
+    mutable QString fallbackReason; // لماذا رجع التحليل إلى المعالج، فارغ إن لم يرجع
 
     // يشغّل النموذج، وعلى كرت الشاشة يمنع التشغيل المتزامن؛ وإن فشل الكرت (تعطل التعريف، نفاد ذاكرته،
     // فصل الشاشة) ينتقل المحرك كله إلى المعالج ويعيد المحاولة بدل أن يتوقف التحليل أو ينهار البرنامج
     template<typename Run>
     std::vector<Ort::Value> guardedRun(Run run) const
     {
+        while (switching.load())
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        std::shared_lock<std::shared_mutex> sessions(sessionMutex);
         if (!onGpu.load())
             return run();
         std::lock_guard<std::mutex> lock(runMutex);
@@ -224,6 +249,13 @@ struct FaceEngine::Impl
     bool recognizerBatch = false; // هل يقبل نموذج البصمة أكثر من وجه في التشغيل الواحد
 
     std::vector<std::vector<float>> recognize(const std::vector<cv::Mat> &faces, std::vector<float> *norms = nullptr) const;
+};
+
+struct FaceEngine::Sessions
+{
+    std::unique_ptr<Ort::Session> detector;
+    std::unique_ptr<Ort::Session> recognizer;
+    QString gpu;
 };
 
 std::vector<DetectedFace> FaceEngine::Impl::detectAt(const cv::Mat &bgr, int inputSize, float threshold) const
@@ -354,6 +386,7 @@ void FaceEngine::Impl::switchToCpu(const QString &reason) const
     auto cpuRecognizer = std::make_unique<Ort::Session>(env, toOrtPath(recognizerPath).c_str(), options);
     detector = std::move(cpuDetector);
     recognizer = std::move(cpuRecognizer);
+    fallbackReason = reason;
     onGpu.store(false);
 }
 
@@ -367,6 +400,76 @@ FaceEngine::~FaceEngine() = default;
 QString FaceEngine::defaultModelsDir()
 {
     return QCoreApplication::applicationDirPath() + QStringLiteral("/models");
+}
+
+namespace {
+
+Ort::SessionOptions cpuOptions()
+{
+    Ort::SessionOptions options;
+    // يُحترم مستوى استهلاك الموارد المختار حتى لا يتجمد الجهاز أثناء التحليل
+    options.SetIntraOpNumThreads(Performance::threads(Performance::saved()));
+    options.SetInterOpNumThreads(1);
+    options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    return options;
+}
+
+} // namespace
+
+// جلستا الكشف والبصمة على الجهاز المطلوب؛ Auto: كرت اجتاز الفحص في عملية منفصلة (انظر Performance::gpuVerified)
+// ثم المعالج إن تعذر. لا تلمس الجلستين العاملتين، فيصلح بناؤهما والتحليل جارٍ
+bool FaceEngine::createSessions(Device device, Sessions *out, QString *error) const
+{
+    try {
+#ifdef MALAMIH_DIRECTML
+        GpuAdapter adapter;
+        if (device == Device::Gpu || (device == Device::Auto && Performance::gpuEnabled())) {
+            adapter = findGpu();
+            if (device == Device::Auto && !Performance::gpuVerified(identity(adapter)))
+                adapter = GpuAdapter();
+        }
+        QString gpuError = adapter.index < 0 ? QStringLiteral("لا يوجد كرت شاشة يدعم DirectX 12") : QString();
+        if (adapter.index >= 0) {
+            try {
+                Ort::SessionOptions gpuOptions = cpuOptions();
+                // شرطان من DirectML
+                gpuOptions.DisableMemPattern();
+                gpuOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+                Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(gpuOptions, adapter.index));
+                out->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(d->detectorPath).c_str(), gpuOptions);
+                out->recognizer = std::make_unique<Ort::Session>(d->env, toOrtPath(d->recognizerPath).c_str(), gpuOptions);
+                out->gpu = adapter.name.isEmpty() ? QStringLiteral("كرت الشاشة") : adapter.name;
+                return true;
+            } catch (const std::exception &e) {
+                out->detector.reset();
+                out->recognizer.reset();
+                gpuError = QString::fromLocal8Bit(e.what());
+            }
+        }
+        if (device == Device::Gpu) {
+            if (error)
+                *error = QStringLiteral("تعذر التشغيل على كرت الشاشة: %1").arg(gpuError);
+            return false;
+        }
+#else
+        if (device == Device::Gpu) {
+            if (error)
+                *error = QStringLiteral("هذه النسخة تعمل على المعالج فقط");
+            return false;
+        }
+#endif
+        const Ort::SessionOptions options = cpuOptions();
+        out->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(d->detectorPath).c_str(), options);
+        out->recognizer = std::make_unique<Ort::Session>(d->env, toOrtPath(d->recognizerPath).c_str(), options);
+        out->gpu.clear();
+        return true;
+    } catch (const std::exception &e) {
+        out->detector.reset();
+        out->recognizer.reset();
+        if (error)
+            *error = QStringLiteral("تعذر تحميل النماذج: %1").arg(QString::fromLocal8Bit(e.what()));
+        return false;
+    }
 }
 
 bool FaceEngine::load(const QString &modelsDir, QString *error, Device device)
@@ -384,88 +487,64 @@ bool FaceEngine::load(const QString &modelsDir, QString *error, Device device)
         }
     }
 
+    d->gpu.clear();
+    d->onGpu.store(false);
+    d->fallbackReason.clear();
+    d->detectorPath = detectorPath;
+    d->recognizerPath = recognizerPath;
+    d->detector.reset();
+    d->recognizer.reset();
+    Sessions sessions;
+    if (!createSessions(device, &sessions, error))
+        return false;
     try {
-        Ort::SessionOptions options;
-        // يُحترم مستوى استهلاك الموارد المختار حتى لا يتجمد الجهاز أثناء التحليل
-        options.SetIntraOpNumThreads(Performance::threads(Performance::saved()));
-        options.SetInterOpNumThreads(1);
-        options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-
-        d->gpu.clear();
-        d->onGpu.store(false);
-        d->detectorPath = detectorPath;
-        d->recognizerPath = recognizerPath;
-        d->detector.reset();
-        d->recognizer.reset();
-#ifdef MALAMIH_DIRECTML
-        // كرت الشاشة أولاً إن وُجد وسُمح به؛ أي فشل فيه يعيد التحميل على المعالج
-        // تلقائياً: فقط كرت اجتاز الفحص في عملية منفصلة على هذه النسخة (انظر Performance::gpuVerified)
-        GpuAdapter adapter;
-        if (device == Device::Gpu || (device == Device::Auto && Performance::gpuEnabled())) {
-            adapter = findGpu();
-            if (device == Device::Auto && !Performance::gpuVerified(adapter.name))
-                adapter = GpuAdapter();
-        }
-        QString gpuError = adapter.index < 0 ? QStringLiteral("لا يوجد كرت شاشة يدعم DirectX 12") : QString();
-        if (adapter.index >= 0) {
-            try {
-                Ort::SessionOptions gpuOptions;
-                gpuOptions.SetIntraOpNumThreads(Performance::threads(Performance::saved()));
-                gpuOptions.SetInterOpNumThreads(1);
-                gpuOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-                // شرطان من DirectML
-                gpuOptions.DisableMemPattern();
-                gpuOptions.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-                Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_DML(gpuOptions, adapter.index));
-                d->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(detectorPath).c_str(), gpuOptions);
-                d->recognizer = std::make_unique<Ort::Session>(d->env, toOrtPath(recognizerPath).c_str(), gpuOptions);
-                d->gpu = adapter.name.isEmpty() ? QStringLiteral("كرت الشاشة") : adapter.name;
-                d->onGpu.store(true);
-            } catch (const std::exception &e) {
-                d->detector.reset();
-                d->recognizer.reset();
-                d->gpu.clear();
-                d->onGpu.store(false);
-                gpuError = QString::fromLocal8Bit(e.what());
-            }
-        }
-        if (device == Device::Gpu && d->gpu.isEmpty()) {
-            if (error)
-                *error = QStringLiteral("تعذر التشغيل على كرت الشاشة: %1").arg(gpuError);
-            return false;
-        }
-#else
-        if (device == Device::Gpu) {
-            if (error)
-                *error = QStringLiteral("هذه النسخة تعمل على المعالج فقط");
-            return false;
-        }
-#endif
-        if (!d->detector || !d->recognizer) {
-            d->detector = std::make_unique<Ort::Session>(d->env, toOrtPath(detectorPath).c_str(), options);
-            d->recognizer = std::make_unique<Ort::Session>(d->env, toOrtPath(recognizerPath).c_str(), options);
-        }
-
         Ort::AllocatorWithDefaultOptions allocator;
-        d->detectorInput = d->detector->GetInputNameAllocated(0, allocator).get();
+        d->detectorInput = sessions.detector->GetInputNameAllocated(0, allocator).get();
         d->detectorOutputs.clear();
-        for (size_t i = 0; i < d->detector->GetOutputCount(); ++i)
-            d->detectorOutputs.emplace_back(d->detector->GetOutputNameAllocated(i, allocator).get());
-        d->recognizerInput = d->recognizer->GetInputNameAllocated(0, allocator).get();
-        d->recognizerOutput = d->recognizer->GetOutputNameAllocated(0, allocator).get();
+        for (size_t i = 0; i < sessions.detector->GetOutputCount(); ++i)
+            d->detectorOutputs.emplace_back(sessions.detector->GetOutputNameAllocated(i, allocator).get());
+        d->recognizerInput = sessions.recognizer->GetInputNameAllocated(0, allocator).get();
+        d->recognizerOutput = sessions.recognizer->GetOutputNameAllocated(0, allocator).get();
         const std::vector<int64_t> recognizerShape =
-            d->recognizer->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+            sessions.recognizer->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
         d->recognizerBatch = !recognizerShape.empty() && recognizerShape[0] < 0;
 
         if (d->detectorOutputs.size() != 9)
             throw std::runtime_error("Unsupported face detector model");
     } catch (const std::exception &e) {
-        d->detector.reset();
-        d->recognizer.reset();
         if (error)
             *error = QStringLiteral("تعذر تحميل النماذج: %1").arg(QString::fromLocal8Bit(e.what()));
         return false;
     }
+    d->detector = std::move(sessions.detector);
+    d->recognizer = std::move(sessions.recognizer);
+    d->gpu = sessions.gpu;
+    d->onGpu.store(!d->gpu.isEmpty());
+    return true;
+}
+
+bool FaceEngine::switchDevice(Device device, QString *error)
+{
+    if (!isLoaded()) {
+        if (error)
+            *error = QStringLiteral("النماذج لم تُحمّل بعد");
+        return false;
+    }
+    // البناء (ثوانٍ على الكرت) والتحليل جارٍ على الجلستين القديمتين، ثم استبدال لحظي بينهما
+    Sessions sessions;
+    if (!createSessions(device, &sessions, error))
+        return false;
+    d->switching.store(true);
+    {
+        std::unique_lock<std::shared_mutex> lock(d->sessionMutex);
+        std::swap(d->detector, sessions.detector);
+        std::swap(d->recognizer, sessions.recognizer);
+        d->gpu = sessions.gpu;
+        d->fallbackReason.clear();
+        d->onGpu.store(!d->gpu.isEmpty());
+    }
+    d->switching.store(false);
+    // الجلستان القديمتان تُهدمان هنا خارج القفل
     return true;
 }
 
@@ -477,12 +556,24 @@ bool FaceEngine::isLoaded() const
 QString FaceEngine::gpuName() const
 {
     // فارغ أيضاً إن انتقل التحليل إلى المعالج بعد تعطل كرت الشاشة
+    std::shared_lock<std::shared_mutex> lock(d->sessionMutex);
     return d->onGpu.load() ? d->gpu : QString();
+}
+
+QString FaceEngine::fallbackReason() const
+{
+    std::shared_lock<std::shared_mutex> lock(d->sessionMutex);
+    return d->onGpu.load() ? QString() : d->fallbackReason;
 }
 
 QString FaceEngine::availableGpu()
 {
     return findGpu().name;
+}
+
+QString FaceEngine::gpuIdentity()
+{
+    return identity(findGpu());
 }
 
 std::vector<DetectedFace> FaceEngine::detect(const cv::Mat &bgr, bool thorough, float threshold) const

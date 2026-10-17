@@ -133,16 +133,27 @@ void Maintenance::run()
     connect(files, &QFutureWatcher<int>::finished, this, [this, files] {
         const int recordings = files->result();
         files->deleteLater();
-        int sightings = 0;
-        if (const int days = sightingRetentionDays(); days > 0 && m_database)
-            sightings = m_database->removeCameraSightingsBefore(QDateTime::currentDateTime().addDays(-days));
-        if (recordings > 0 || sightings > 0) {
-            AppLog::write(QStringLiteral("الصيانة: حُذف %1 ملف تسجيل ولقطة قديم و%2 ظهوراً قديماً من السجل").arg(recordings).arg(sightings));
-            emit cleaned(recordings, sightings);
-        }
+        const int days = sightingRetentionDays();
+        removeSightings(recordings, 0, days > 0 ? QDateTime::currentDateTime().addDays(-days) : QDateTime());
     });
     files->setFuture(QtConcurrent::run([] { return CameraRecorder::removeExpired(); }));
     startBackup(false);
+}
+
+void Maintenance::removeSightings(int recordings, int sightings, const QDateTime &before)
+{
+    // دفعات صغيرة بينها فاصل، فتبقى الواجهة والكاميرا تعملان أثناء حذف سجل طويل
+    bool more = false;
+    if (before.isValid() && m_database)
+        sightings += m_database->removeCameraSightingsBefore(before, 2000, &more);
+    if (more) {
+        QTimer::singleShot(30, this, [this, recordings, sightings, before] { removeSightings(recordings, sightings, before); });
+        return;
+    }
+    if (recordings > 0 || sightings > 0) {
+        AppLog::write(QStringLiteral("الصيانة: حُذف %1 ملف تسجيل ولقطة قديم و%2 ظهوراً قديماً من السجل").arg(recordings).arg(sightings));
+        emit cleaned(recordings, sightings);
+    }
 }
 
 void Maintenance::backupNow()
