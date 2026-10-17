@@ -126,6 +126,7 @@ int main(int argc, char *argv[])
     app.installEventFilter(new FitToScreen(&app));
     qRegisterMetaType<FaceItem>();
     qRegisterMetaType<QList<FaceItem>>();
+    qRegisterMetaType<QList<QPair<qint64, qint64>>>();
 
     const QStringList args = app.arguments();
     const bool startup = args.contains(QStringLiteral("--startup"));

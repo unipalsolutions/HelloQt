@@ -275,11 +275,24 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     QList<qint64> analyzedPositions;
     // الإشارتان تُستقبلان في هذا الخيط كما في الواجهة، فلا تتسابق الخيوط على المتغيرات
     QObject receiver;
+    // الأجزاء المحللة كما يرسمها الخط الزمني: مرتبة لا تتداخل، وكل إطار محلل داخل أحدها
+    QList<QPair<qint64, qint64>> ranges;
+    bool rangesOk = true;
+    int mostRanges = 0;
+    QObject::connect(worker, &VideoWorker::analyzedRanges, &receiver, [&](const QList<QPair<qint64, qint64>> &list) {
+        for (int i = 0; i < list.size(); ++i)
+            rangesOk = rangesOk && list[i].first < list[i].second && (i == 0 || list[i - 1].second < list[i].first);
+        ranges = list;
+        mostRanges = std::max(mostRanges, int(list.size()));
+    });
     QObject::connect(worker, &VideoWorker::frameReady, &receiver, [&](const QImage &, const QList<FaceItem> &faces, qint64 ms, double) {
         ++analyzed;
         boxes += int(faces.size());
         analyzedMs = ms;
         analyzedPositions.append(ms);
+        const bool inside = std::any_of(ranges.cbegin(), ranges.cend(),
+                                        [ms](const QPair<qint64, qint64> &r) { return ms >= r.first && ms <= r.second + 100; });
+        rangesOk = rangesOk && inside;
     });
     bool finished = false;
     QObject::connect(worker, &VideoWorker::finished, &receiver, [&](const QString &) { finished = true; });
@@ -377,6 +390,8 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     out << "analysis_lag_ms=" << playedPlain - analyzedMs << "\n";
     out << "covered_ratio=" << (shownPlain > 0 ? 1.0 - double(uncoveredPlain) / shownPlain : 0.0) << "\n";
     out << "boxes=" << boxes << "\n";
+    out << "ranges_ok=" << int(rangesOk) << "\n";
+    out << "most_ranges=" << mostRanges << "\n";
     out << "analysis_finished=" << int(finished) << "\n";
     out << "step_forward_ms=" << stepForwardMs << "\n";
     out << "step_back_ms=" << stepBackMs << "\n";
@@ -385,7 +400,7 @@ int playerTest(const QString &path, int seconds, QTextStream &out)
     out << "markers_ok=" << int(markersOk && markersCleared) << "\n";
     out << "peak_memory_mb=" << peakMemoryMb() << "\n";
     const qint64 frameMs = qint64(1000.0 / std::max(1.0, player.fps()));
-    const bool controlsOk = parseOk && markersOk && markersCleared && std::llabs(stepForwardMs - frameMs) <= 2 && std::llabs(stepBackMs) <= 2
+    const bool controlsOk = rangesOk && parseOk && markersOk && markersCleared && std::llabs(stepForwardMs - frameMs) <= 2 && std::llabs(stepBackMs) <= 2
         && measuredRate > 1.6;
     return shown > 0 && analyzed > 0 && controlsOk ? 0 : 1;
 }

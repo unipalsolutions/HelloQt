@@ -110,7 +110,8 @@ void TimelineView::clear()
 {
     m_duration = 0;
     m_rangeStart = m_rangeEnd = 0;
-    m_analyzedUntil = -1;
+    m_analyzedRanges.clear();
+    m_analyzing = false;
     m_position = -1;
     m_thumbnails.clear();
     m_previews.clear();
@@ -141,10 +142,18 @@ void TimelineView::setRange(qint64 startMs, qint64 endMs)
     update();
 }
 
-void TimelineView::setAnalyzedUntil(qint64 ms)
+void TimelineView::setAnalyzedRanges(const QList<QPair<qint64, qint64>> &ranges)
 {
-    // التحليل قد يعود إلى جزء تخطاه ليلحق العرض: الحد لا يرجع إلى الوراء
-    m_analyzedUntil = ms < 0 ? -1 : std::max(m_analyzedUntil, ms);
+    // التحليل قد يقفز ليلحق العرض ثم يعود إلى ما تخطاه، فتُعرض الأجزاء كما هي لا حد واحد
+    m_analyzedRanges = ranges;
+    m_analyzing = true;
+    update();
+}
+
+void TimelineView::clearAnalyzedRanges()
+{
+    m_analyzedRanges.clear();
+    m_analyzing = false;
     update();
 }
 
@@ -463,9 +472,19 @@ void TimelineView::paintEvent(QPaintEvent *)
             p.drawLine(QPointF(cx, grip.top() + 14), QPointF(cx, grip.bottom() - 14));
         }
     }
-    if (m_analyzedUntil >= 0) {
-        const double x = std::max(left, xOf(m_analyzedUntil));
-        p.fillRect(QRectF(x, RulerHeight, right - x, FilmHeight), QColor(0, 0, 0, 90));
+    if (m_analyzing) {
+        // يُعتَّم كل ما بين الأجزاء المحللة (الأجزاء مرتبة ولا تتداخل)
+        double from = left;
+        const auto shade = [&](double to) {
+            to = std::min(to, right);
+            if (to > from)
+                p.fillRect(QRectF(from, RulerHeight, to - from, FilmHeight), QColor(0, 0, 0, 90));
+        };
+        for (const auto &[first, last] : std::as_const(m_analyzedRanges)) {
+            shade(xOf(first));
+            from = std::max(from, xOf(last));
+        }
+        shade(right);
     }
     // تغيّرات اللقطات: خط أبيض قصير أسفل شريط المصغرات
     p.setPen(QPen(QColor(255, 255, 255, 170), 1.5));

@@ -79,6 +79,8 @@ signals:
     void frameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress);
     // صورة مصغرة لشريط الزمن، كل ثانية تقريباً من الجزء المحلل (للملفات حين لا تُرسل الإطارات)
     void thumbnailReady(qint64 positionMs, const QImage &thumbnail);
+    // الأجزاء المحللة من الملف حتى الآن [بداية، نهاية) بالمللي ثانية، مرتبة ولا تتداخل
+    void analyzedRanges(const QList<QPair<qint64, qint64>> &ranges);
     void trackUpdated(const FaceItem &track);
     // تغيّرت اللقطة عند هذا الموضع (قطع في المونتاج أو تبدّل الكاميرا)، للملفات فقط
     void shotChanged(qint64 positionMs);

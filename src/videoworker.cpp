@@ -1106,6 +1106,33 @@ void VideoWorker::run(const QString &source)
             const int done = follow ? coveredFrames + frameIndex - runStart : frameIndex - startFrame;
             progress = std::clamp(double(done) / double(endFrame - startFrame), 0.0, 1.0);
         }
+        if (!camera && validFps && endFrame > startFrame) {
+            QList<QPair<qint64, qint64>> ranges;
+            const auto toMs = [&](int index) { return qint64(index * 1000.0 / fps); };
+            const auto add = [&](int first, int last) {
+                if (last <= first)
+                    return;
+                if (!ranges.isEmpty() && ranges.back().second >= toMs(first))
+                    ranges.back().second = std::max(ranges.back().second, toMs(last));
+                else
+                    ranges.append({toMs(first), toMs(last)});
+            };
+            const int runFirst = follow ? runStart : startFrame;
+            const int runLast = std::min(frameIndex, endFrame);
+            bool runAdded = false;
+            if (follow) {
+                for (const auto &[first, last] : covered) {
+                    if (!runAdded && runFirst <= first) {
+                        add(runFirst, runLast);
+                        runAdded = true;
+                    }
+                    add(first, last);
+                }
+            }
+            if (!runAdded)
+                add(runFirst, runLast);
+            emit analyzedRanges(ranges);
+        }
         if (!deliverFrames) {
             // العرض من VideoPlayer: النتيجة وحدها بلا صورة، فلا ينتظر التحليل الواجهة
             emit frameReady(QImage(), current, positionMs, progress);

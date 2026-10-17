@@ -171,7 +171,7 @@ MainWindow::MainWindow(QWidget *parent)
         m_timeline->setFps(m_videoFps);
         m_timeline->setDuration(camera ? 0 : durationMs);
         m_timeline->setRange(m_videoStartMs, m_videoEndMs);
-        m_timeline->setAnalyzedUntil(m_videoStartMs);
+        m_timeline->setAnalyzedRanges({});
         m_timeline->setMarkers(m_markers);
         m_timeline->setShotChanges(m_shotChanges);
         m_timelineCard->setVisible(!camera && durationMs > 0 && !m_videoFullscreen);
@@ -194,6 +194,10 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_player, &VideoPlayer::reachedEnd, this, [this] {
         updatePauseButton();
         checkAutoNext();
+    });
+    connect(m_videoWorker, &VideoWorker::analyzedRanges, this, [this](const QList<QPair<qint64, qint64>> &ranges) {
+        if (!m_timelineCard->isHidden())
+            m_timeline->setAnalyzedRanges(ranges);
     });
     connect(m_videoWorker, &VideoWorker::shotChanged, this, [this](qint64 ms) {
         m_shotChanges.append(ms);
@@ -1491,8 +1495,6 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
     } else {
         m_analyzedFaces.insert(positionMs, faces);
     }
-    if (!m_timelineCard->isHidden())
-        m_timeline->setAnalyzedUntil(positionMs);
     if (progress >= 0.0) {
         m_progress->setRange(0, 1000);
         m_progress->setValue(int(progress * 1000.0));
@@ -1689,7 +1691,7 @@ void MainWindow::onVideoFinished(const QString &error)
         m_cameraId.clear();
         updateFiltersButton();
     }
-    m_timeline->setAnalyzedUntil(-1);
+    m_timeline->clearAnalyzedRanges();
     rebuildTimelineLanes();
     m_view->setBusy(false);
     m_progress->setVisible(false);

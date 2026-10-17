@@ -41,8 +41,10 @@ public:
     void setFps(double fps) { m_fps = fps > 1.0 ? fps : 25.0; }
     // الجزء المطلوب تحليله؛ ما خارجه يُعتَّم
     void setRange(qint64 startMs, qint64 endMs);
-    // ما وصل إليه التحليل (سالب = اكتمل)
-    void setAnalyzedUntil(qint64 ms);
+    // الأجزاء المحللة حتى الآن [بداية، نهاية) بالمللي ثانية، وما سواها يُعتَّم أثناء التحليل
+    void setAnalyzedRanges(const QList<QPair<qint64, qint64>> &ranges);
+    // اكتمل التحليل أو توقف: لا تعتيم
+    void clearAnalyzedRanges();
     void setPosition(qint64 ms);
     qint64 position() const { return m_position; }
     void addThumbnail(qint64 ms, const QImage &frame);
@@ -106,7 +108,8 @@ private:
     double m_fps = 25.0;
     qint64 m_rangeStart = 0;
     qint64 m_rangeEnd = 0;
-    qint64 m_analyzedUntil = -1;
+    QList<QPair<qint64, qint64>> m_analyzedRanges;
+    bool m_analyzing = false;
     qint64 m_position = -1;
     QMap<qint64, QImage> m_thumbnails;
     QList<TimelineLane> m_lanes;
