@@ -374,8 +374,8 @@ QString CameraDialog::chooseConnection()
                 continue;
             auto *card = new QPushButton(&chooser);
             card->setCursor(Qt::PointingHandCursor);
-            card->setMinimumSize(330, 66);
-            card->setStyleSheet(QStringLiteral("QPushButton { text-align: right; border-radius: 10px; padding: 0; }"));
+            // العرض الأدنى في ورقة الأنماط لأن min-width العامة للأزرار تتغلب على setMinimumSize
+            card->setStyleSheet(QStringLiteral("QPushButton { text-align: right; border-radius: 10px; padding: 0; min-width: 300px; min-height: 84px; }"));
             auto *cardLayout = new QHBoxLayout(card);
             cardLayout->setContentsMargins(12, 8, 12, 8);
             auto *icon = new QLabel(card);
@@ -403,7 +403,7 @@ QString CameraDialog::chooseConnection()
         columns->addLayout(column, 1);
     }
     layout->addLayout(columns);
-    auto *cancel = new FancyButton(Icons::Name::Check, QStringLiteral("إلغاء"), FancyButton::Kind::Secondary, &chooser);
+    auto *cancel = new FancyButton(Icons::Name::Reject, QStringLiteral("إلغاء"), FancyButton::Kind::Secondary, &chooser);
     connect(cancel, &QAbstractButton::clicked, &chooser, &QDialog::reject);
     layout->addWidget(cancel, 0, Qt::AlignLeft);
     return chooser.exec() == QDialog::Accepted ? chosen : QString();

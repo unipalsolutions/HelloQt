@@ -395,7 +395,7 @@ void VideoWorker::run(const QString &source)
             return;
         }
     } else if (!ImageIO::openVideo(capture, source)) {
-        emit finished(QStringLiteral("تعذر فتح ملف الفيديو"));
+        emit finished(QStringLiteral("تعذر فتح ملف الفيديو: قد يكون تالفاً أو ناقصاً أو بصيغة غير مدعومة"));
         return;
     }
     QString endError;

@@ -219,4 +219,14 @@ QString formatTime(qint64 ms)
         .arg(seconds % 60, 2, 10, QLatin1Char('0'));
 }
 
+QString timesText(int count)
+{
+    if (count == 1)
+        return QStringLiteral("مرة");
+    if (count == 2)
+        return QStringLiteral("مرتين");
+    const int tail = count % 100;
+    return QStringLiteral("%1 %2").arg(count).arg(tail >= 3 && tail <= 10 ? QStringLiteral("مرات") : QStringLiteral("مرة"));
+}
+
 } // namespace ImageIO

@@ -26,6 +26,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
+#include <QScreen>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTime>
@@ -91,7 +92,10 @@ MultiCameraWindow::MultiCameraWindow(FaceEngine *engine, FaceDatabase *database,
 {
     setWindowTitle(QStringLiteral("ملامح — عدة كاميرات"));
     setLayoutDirection(Qt::RightToLeft);
-    resize(1280, 800);
+    // الحجم الافتراضي لا يتجاوز الشاشة المتاحة كي لا تُقص الكاميرات السفلية على شاشات اللابتوب
+    const QScreen *display = parent ? parent->screen() : QGuiApplication::primaryScreen();
+    const QRect available = display ? display->availableGeometry() : QRect(0, 0, 1280, 800);
+    resize(qMin(1280, available.width() * 9 / 10), qMin(800, available.height() * 9 / 10));
     setStyleSheet(QStringLiteral("MultiCameraWindow { background: %1; }").arg(Theme::Background.name()));
 
     auto *layout = new QVBoxLayout(this);
@@ -121,8 +125,9 @@ MultiCameraWindow::MultiCameraWindow(FaceEngine *engine, FaceDatabase *database,
     layout->addLayout(bar);
 
     m_alertBar = new QFrame;
-    m_alertBar->setStyleSheet(QStringLiteral("QFrame { background: #3a1d14; border: 1px solid #d9542b; border-radius: 10px; }"
-                                             "QLabel { border: none; background: transparent; }"));
+    m_alertBar->setStyleSheet(QStringLiteral("QFrame { background: %1; border: 1px solid %2; border-radius: 10px; }"
+                                             "QLabel { border: none; background: transparent; }")
+                                  .arg(Theme::mix(Theme::Surface, Theme::Danger, 0.18).name(), Theme::Danger.name()));
     auto *alertLayout = new QHBoxLayout(m_alertBar);
     alertLayout->setContentsMargins(10, 6, 10, 6);
     m_alertAvatar = new QLabel;
@@ -682,7 +687,7 @@ void MultiCameraWindow::showAlert(Feed &feed, const QString &personId, const QSt
     m_alertAvatar->setPixmap(circularPixmap(crop, 44));
     m_alert->setText(QStringLiteral("<span style='color:%1; font-weight:700; font-size:12pt'>تنبيه مراقبة: ظهر %2</span>"
                                     "<br><span style='color:#e8dccd'>أمام «%3» · التشابه %4% · الساعة ⁦%5⁩</span>")
-                         .arg(Theme::Accent2.name(), name.toHtmlEscaped(), feed.camera.name.toHtmlEscaped())
+                         .arg(Theme::Watched.name(), name.toHtmlEscaped(), feed.camera.name.toHtmlEscaped())
                          .arg(qRound(score * 100))
                          .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss"))));
     m_alertBar->show();

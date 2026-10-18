@@ -492,11 +492,12 @@ QString Camera::url(bool withCredentials) const
 
 QString Camera::description() const
 {
+    // العنوان والدقة يُعزلان باتجاه يسار-يمين كي لا تنقلب الشرطات والأرقام داخل نص عربي
     if (kind == Kind::Network)
-        return url(false);
+        return QChar(0x2066) + url(false) + QChar(0x2069);
     QString text = QStringLiteral("موصولة بالجهاز · رقم %1").arg(index);
     if (width > 0 && height > 0)
-        text += QStringLiteral(" · %1×%2").arg(width).arg(height);
+        text += QStringLiteral(" · \u2066%1×%2\u2069").arg(width).arg(height);
     return text;
 }
 

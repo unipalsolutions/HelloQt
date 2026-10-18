@@ -306,7 +306,9 @@ void PlaybackBar::updateTime()
     // لا يُستبدل ما يكتبه المستخدم أثناء الكتابة
     if (!m_goTo->hasFocus())
         m_goTo->setText(formatPrecise(m_position));
-    m_length->setText(QStringLiteral("/ %1").arg(formatPrecise(m_duration).chopped(2)));
+    // أعشار الثانية تُحذف من المدة إلا في المقاطع القصيرة جداً كي لا تظهر مدتها صفراً
+    const QString length = formatPrecise(m_duration);
+    m_length->setText(QStringLiteral("/ %1").arg(m_duration > 0 && m_duration < 10000 ? length : length.chopped(2)));
     m_length->setToolTip(QStringLiteral("مدة الفيديو · الإطار الحالي %1").arg(qint64(std::floor(double(m_position) * m_fps / 1000.0 + 1e-6))));
 }
 

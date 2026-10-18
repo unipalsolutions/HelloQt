@@ -384,7 +384,7 @@ QString MainWindow::stopRecording()
     if (!wasRecording)
         return {};
     const QStringList files = m_recorder->files();
-    AppLog::write(QStringLiteral("إيقاف تسجيل الكاميرا «%1» (%2 ملفات)").arg(m_cameraName).arg(files.size()));
+    AppLog::write(QStringLiteral("إيقاف تسجيل الكاميرا «%1» (الملفات: %2)").arg(m_cameraName).arg(files.size()));
     if (files.isEmpty()) {
         Toast::show(this, QStringLiteral("لم يصل من الكاميرا ما يُسجَّل"), Toast::Kind::Warning);
         return {};
@@ -550,7 +550,7 @@ void MainWindow::showWatchAlert(const FaceItem &face, const QImage &crop)
     const QString time = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
     QString text = QStringLiteral("<span style='color:%1; font-weight:700; font-size:12pt'>تنبيه مراقبة: ظهر %2</span>"
                                   "<br><span style='color:#e8dccd'>التشابه %3%%4 · الساعة \u2066%5\u2069</span>")
-                       .arg(Theme::Accent2.name(), face.match.name.toHtmlEscaped())
+                       .arg(Theme::Watched.name(), face.match.name.toHtmlEscaped())
                        .arg(qRound(face.match.score * 100))
                        .arg(where, time);
     if (m_alertCount > 1)

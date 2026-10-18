@@ -235,6 +235,7 @@ private:
     void enhanceVideoFrame(qint64 positionMs);
     void showTimelineMenu(const QPoint &globalPos, qint64 positionMs, int laneId);
     void exportClip(const QList<QPair<qint64, qint64>> &segments, const QString &suggestedName);
+    QString saveFolder() const; // مجلد الحفظ المقترح لما يُستخرج من الفيديو
     void saveVideoFrame(qint64 positionMs);
     void setTrimRange(qint64 startMs, qint64 endMs);
     void exportTrimmedClip();
@@ -310,6 +311,7 @@ private:
     bool m_ready = false;
     QDateTime m_previousCrash;
     qint64 m_cameraLostAt = 0;      // بداية انقطاع الكاميرا الجارية
+    QString m_videoError;           // سبب توقف تحليل ملف الفيديو، فارغ إن انتهى طبيعياً
     bool m_cameraOfflineAlerted = false;
     QTimer *m_cameraRetryTimer = nullptr; // إعادة تشغيل الكاميرا الموصولة إن انقطعت ولم تعد
     QFutureWatcher<QString> m_loadWatcher; // تحميل النماذج في الخلفية حتى تظهر النافذة فوراً

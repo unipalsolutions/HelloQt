@@ -2,6 +2,7 @@
 
 #include "cameras.h"
 #include "dailyreport.h"
+#include "imageio.h"
 #include "theme.h"
 
 #include <QDateTime>
@@ -177,7 +178,7 @@ bool exportPersonPdf(const FaceDatabase &database, const QString &personId, cons
     field(QStringLiteral("أُضيف"), person.created.toString(QStringLiteral("yyyy/MM/dd HH:mm")), true);
     if (person.lastSeen.isValid())
         field(QStringLiteral("آخر ظهور"),
-              QStringLiteral("%1 (%2 مرة)").arg(person.lastSeen.toString(QStringLiteral("yyyy/MM/dd HH:mm"))).arg(person.seenCount));
+              QStringLiteral("%1 (%2)").arg(person.lastSeen.toString(QStringLiteral("yyyy/MM/dd HH:mm")), ImageIO::timesText(person.seenCount)));
     field(QStringLiteral("عدد الصور"), QString::number(person.photos.size()));
     html += section(QStringLiteral("البيانات"));
     html += QStringLiteral("<table width='100%' cellspacing='0' cellpadding='7'>");

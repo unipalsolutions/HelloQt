@@ -469,9 +469,11 @@ void MainWindow::showPersonDetails()
     QString html = QStringLiteral("<div style='font-size:18pt; font-weight:700'>%1</div>").arg(person.name.toHtmlEscaped());
     if (!person.tags.isEmpty()) {
         html += QStringLiteral("<div style='margin:2px 0 4px 0'>");
+        // تصنيفات المراقبة بلون المراقَبين، والبقية بالأخضر
         for (const QString &tag : person.tags.split(QStringLiteral("، "), Qt::SkipEmptyParts))
-            html += QStringLiteral("<span style='background:#2b231d; color:#6cc193; font-weight:600'>&nbsp;%1&nbsp;</span>&nbsp; ")
-                        .arg(tag.toHtmlEscaped());
+            html += QStringLiteral("<span style='background:%1; color:%2; font-weight:600'>&nbsp;%3&nbsp;</span>&nbsp; ")
+                        .arg(Theme::SurfaceHigh.name(),
+                             (FaceDatabase::isWatched(tag) ? Theme::Watched : Theme::Accent2).name(), tag.toHtmlEscaped());
         html += QStringLiteral("</div>");
     }
     html += QStringLiteral("<div>");
@@ -489,9 +491,9 @@ void MainWindow::showPersonDetails()
         html += chip(QStringLiteral("العنوان:"), person.address);
     html += chip(QStringLiteral("أُضيف:"), person.created.toString(QStringLiteral("yyyy/MM/dd")));
     if (person.lastSeen.isValid())
-        html += chip(QStringLiteral("آخر ظهور:"), QStringLiteral("%1 (%2 مرة)")
-                                                       .arg(person.lastSeen.toString(QStringLiteral("yyyy/MM/dd hh:mm")))
-                                                       .arg(person.seenCount));
+        html += chip(QStringLiteral("آخر ظهور:"), QStringLiteral("%1 (%2)")
+                                                       .arg(person.lastSeen.toString(QStringLiteral("yyyy/MM/dd hh:mm")),
+                                                            ImageIO::timesText(person.seenCount)));
     html += QStringLiteral("</div>");
     if (!person.notes.isEmpty())
         html += QStringLiteral("<div style='color:#a99a8a; margin-top:6px'>%1</div>")

@@ -225,6 +225,7 @@ MainWindow::MainWindow(QWidget *parent)
             m_cameraOfflineAlerted = false;
             AppLog::write(QStringLiteral("انقطع الاتصال بالكاميرا «%1»").arg(m_cameraName));
             Toast::show(this, QStringLiteral("انقطع الاتصال بالكاميرا — تُعاد المحاولة تلقائياً"), Toast::Kind::Warning);
+            updateStatusStrip();
         } else if (!m_cameraOfflineAlerted && m_cameraLostAt > 0 && now - m_cameraLostAt >= CameraOfflineAlertMs) {
             m_cameraOfflineAlerted = true;
             emit systemAlert(QStringLiteral("الكاميرا «%1» منقطعة").arg(m_cameraName),
@@ -244,6 +245,7 @@ MainWindow::MainWindow(QWidget *parent)
             Toast::show(this, QStringLiteral("عاد الاتصال بالكاميرا «%1»").arg(m_cameraName), Toast::Kind::Success);
         m_cameraLostAt = 0;
         m_cameraOfflineAlerted = false;
+        updateStatusStrip();
     });
     m_videoThread->start();
 
@@ -981,7 +983,7 @@ QWidget *MainWindow::createRecognitionPage()
     alertLayout->setContentsMargins(14, 8, 14, 8);
     alertLayout->setSpacing(12);
     auto *alertIcon = new QLabel(m_alertBar);
-    alertIcon->setPixmap(Icons::icon(Icons::Name::Alert, Theme::Accent2, 26).pixmap(26, 26));
+    alertIcon->setPixmap(Icons::icon(Icons::Name::Alert, Theme::Watched, 26).pixmap(26, 26));
     m_alertAvatar = new QLabel(m_alertBar);
     m_alertAvatar->setFixedSize(44, 44);
     m_alertText = new QLabel(m_alertBar);
@@ -1401,6 +1403,7 @@ void MainWindow::startVideo(const QString &source)
         m_view->setRegion(QRectF());
     }
     m_videoSource = source;
+    m_videoError.clear();
     m_videoMode = true;
     m_videoRunning = true;
     m_folderImages.clear();
@@ -1774,6 +1777,8 @@ void MainWindow::onVideoFinished(const QString &error)
     m_progress->setVisible(false);
     m_view->setStatusBadge(QString());
     const bool cameraSource = m_videoSource.startsWith(QStringLiteral("camera:"));
+    if (!cameraSource)
+        m_videoError = error;
     if (cameraSource)
         AppLog::write(error.isEmpty() ? QStringLiteral("إيقاف الكاميرا «%1»").arg(m_cameraName)
                                       : QStringLiteral("توقفت الكاميرا «%1»: %2").arg(m_cameraName, error));
@@ -1792,8 +1797,9 @@ void MainWindow::onVideoFinished(const QString &error)
         recordSightings(m_videoSource);
         if (!cameraSource)
             updateMergeSuggestions();
-        const QString summary = QStringLiteral("انتهى التحليل — أشخاص مختلفون: %1 · انقر نقراً مزدوجاً على وجه لعرض لقطاته")
-                                    .arg(m_faces.size());
+        const QString summary = m_faces.isEmpty()
+            ? QStringLiteral("انتهى التحليل — لم يظهر أي وجه")
+            : QStringLiteral("انتهى التحليل — أشخاص مختلفون: %1 · انقر نقراً مزدوجاً على وجه لعرض لقطاته").arg(m_faces.size());
         statusBar()->showMessage(recorded.isEmpty() ? summary : summary + QStringLiteral(" · ") + recorded);
         Toast::show(this, recorded.isEmpty() ? summary : QStringLiteral("انتهى التحليل وحُفظ تسجيل الكاميرا"), Toast::Kind::Info);
     }
@@ -2838,6 +2844,17 @@ void MainWindow::exportTrimmedClip()
                                                             ImageIO::formatTime(last).remove(QLatin1Char(':'))));
 }
 
+QString MainWindow::saveFolder() const
+{
+    // آخر مجلد استُخدم، وإلا مجلد الفيديو نفسه (فُتح من خارج البرنامج)، وإلا مجلد الفيديوهات
+    if (!m_lastDirectory.isEmpty() && QDir(m_lastDirectory).exists())
+        return m_lastDirectory;
+    const QFileInfo video(m_videoSource);
+    if (!m_videoSource.startsWith(QStringLiteral("camera:")) && video.exists())
+        return video.absolutePath();
+    return QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+}
+
 void MainWindow::exportClip(const QList<QPair<qint64, qint64>> &segments, const QString &suggestedName)
 {
     if (segments.isEmpty())
@@ -2845,7 +2862,7 @@ void MainWindow::exportClip(const QList<QPair<qint64, qint64>> &segments, const 
     QString name = suggestedName;
     name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|])")), QStringLiteral("_"));
     const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("تصدير مقطع فيديو"),
-                                                      QDir(m_lastDirectory).filePath(name + QStringLiteral(".mp4")),
+                                                      QDir(saveFolder()).filePath(name + QStringLiteral(".mp4")),
                                                       QStringLiteral("فيديو MP4 (*.mp4)"));
     if (path.isEmpty())
         return;
@@ -2903,7 +2920,7 @@ void MainWindow::saveVideoFrame(qint64 positionMs)
         return;
     }
     const QString suggested = QStringLiteral("إطار_%1.png").arg(ImageIO::formatTime(positionMs).replace(QLatin1Char(':'), QLatin1Char('-')));
-    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("حفظ الإطار"), QDir(m_lastDirectory).filePath(suggested),
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("حفظ الإطار"), QDir(saveFolder()).filePath(suggested),
                                                       QStringLiteral("صور (*.png *.jpg)"));
     if (path.isEmpty())
         return;

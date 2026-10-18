@@ -2,6 +2,7 @@
 
 #include "faceengine.h"
 #include "facedatabase.h"
+#include "imageio.h"
 #include "theme.h"
 
 #include <QDateTime>
@@ -280,7 +281,7 @@ void CameraWatch::checkStranger(qint64 visitorId, const QImage &crop)
         const int count = m_database->visitorSightingCount(visitorId, QDateTime(today, QTime(0, 0)));
         if (count >= settings.dailyCount) {
             dailyAlerted.insert(visitorId, today);
-            emit strangerAlert(visitorId, QStringLiteral("ظهر %1 مرات اليوم").arg(count), crop);
+            emit strangerAlert(visitorId, QStringLiteral("ظهر %1 اليوم").arg(ImageIO::timesText(count)), crop);
         }
     }
 }

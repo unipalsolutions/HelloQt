@@ -373,7 +373,7 @@ void MainWindow::updateFaceListItem(QListWidgetItem *listItem, const FaceItem &f
     QString subtitle;
     if (m_videoMode) {
         const int times = int(std::max<qsizetype>(1, face.appearances.size()));
-        subtitle = times == 1 ? QStringLiteral("ظهر مرة") : QStringLiteral("ظهر %1 مرات").arg(times);
+        subtitle = QStringLiteral("ظهر ") + ImageIO::timesText(times);
         const qint64 screen = Report::screenTime(face.appearances);
         if (screen > 0)
             subtitle += QStringLiteral(" · ") + ImageIO::formatTime(screen);

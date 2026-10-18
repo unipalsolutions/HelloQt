@@ -105,6 +105,8 @@ QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1p
 QCheckBox::indicator:hover { border-color: @accent2; }
 QCheckBox::indicator:checked { background: @accent; border-color: @accent; image: url(:/resources/check.png); }
 QCheckBox::indicator:disabled { background: @surface; border-color: @border; }
+QAbstractItemView::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1px solid @borderHover; background: @surfaceHigh; }
+QAbstractItemView::indicator:checked { background: @accent; border-color: @accent; image: url(:/resources/check.png); }
 QRadioButton::indicator { width: 16px; height: 16px; border-radius: 9px; border: 1px solid @borderHover; background: @surfaceHigh; }
 QRadioButton::indicator:checked { width: 8px; height: 8px; border: 5px solid @accent; background: white; }
 /* السهم في الطرف الأيسر كقوائم SelectBox؛ القائمة المنسدلة وحقل التاريخ ينعكسان مع الاتجاه العربي */

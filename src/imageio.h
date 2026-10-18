@@ -23,6 +23,8 @@ void pack(FaceItem &face);
 QImage faceCrop(const FaceItem &face);
 cv::Mat faceAligned(const FaceItem &face);
 QString formatTime(qint64 ms);
+// عدد المرات بصيغته العربية: مرة، مرتين، 3 مرات، 11 مرة
+QString timesText(int count);
 
 FaceItem makeFaceItem(const cv::Mat &frame, const AnalyzedFace &face, int id, int photoSize = 512);
 

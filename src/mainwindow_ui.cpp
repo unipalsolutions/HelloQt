@@ -98,7 +98,10 @@ void MainWindow::updateWorkState()
         fileInfo = QStringLiteral("بث مباشر");
     } else if (video) {
         fileName = QFileInfo(m_videoSource).fileName();
-        fileInfo = m_videoDurationMs > 0 ? QStringLiteral("\u2066%1\u2069").arg(QTime(0, 0).addMSecs(int(m_videoDurationMs)).toString(m_videoDurationMs >= 3600000 ? QStringLiteral("h:mm:ss") : QStringLiteral("m:ss"))) : QStringLiteral("فيديو");
+        if (m_videoDurationMs > 0 && m_videoDurationMs < 1000)
+            fileInfo = QStringLiteral("أقل من ثانية");
+        else
+            fileInfo = m_videoDurationMs > 0 ? QStringLiteral("\u2066%1\u2069").arg(QTime(0, 0).addMSecs(int(m_videoDurationMs)).toString(m_videoDurationMs >= 3600000 ? QStringLiteral("h:mm:ss") : QStringLiteral("m:ss"))) : QStringLiteral("فيديو");
     }
     m_pageTitle->setVisible(fileName.isEmpty());
     m_fileTitle->setVisible(!fileName.isEmpty());
@@ -272,6 +275,14 @@ void MainWindow::updateStatusStrip()
             icon = Icons::Name::Clock;
             if (filePlayerOpen() && !m_player->isPlaying())
                 setStatusAction(Icons::Name::Play, QStringLiteral("تشغيل"), QStringLiteral("متابعة العرض (مسافة)"), [this] { togglePause(); });
+        } else if (!m_videoError.isEmpty()) {
+            // ملف تالف أو غير مدعوم: الرأس يقول ذلك بدل «انتهى التحليل»
+            title = QStringLiteral("تعذر تحليل الفيديو");
+            detail = m_videoError;
+            icon = Icons::Name::Alert;
+            color = Theme::Danger;
+            setStatusAction(Icons::Name::Folder, QStringLiteral("فتح ملف آخر"), QStringLiteral("اختيار فيديو آخر (Ctrl+Shift+O)"),
+                            [this] { openVideo(); });
         } else {
             title = QStringLiteral("انتهى تحليل الفيديو");
             detail = QStringLiteral("أشخاص مختلفون %1 · %2").arg(m_faces.size()).arg(counts());
@@ -296,7 +307,13 @@ void MainWindow::updateStatusStrip()
         }
         break;
     case WorkState::Camera:
-        if (m_videoRunning) {
+        if (m_videoRunning && m_cameraLostAt > 0) {
+            // الاتصال منقطع: العنوان يقول ذلك صراحة بدل «تعمل»
+            title = QStringLiteral("انقطع الاتصال بالكاميرا «%1»").arg(m_cameraName);
+            detail = QStringLiteral("تُعاد المحاولة تلقائياً · أشخاص مختلفون %1").arg(m_faces.size());
+            icon = Icons::Name::Alert;
+            color = Theme::Danger;
+        } else if (m_videoRunning) {
             title = m_videoPaused ? QStringLiteral("الكاميرا «%1» — التحليل متوقف مؤقتاً").arg(m_cameraName)
                                   : QStringLiteral("الكاميرا «%1» تعمل").arg(m_cameraName);
             QStringList parts;
