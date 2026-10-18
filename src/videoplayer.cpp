@@ -58,7 +58,7 @@ QImage VideoPlayer::displayImage(const cv::Mat &frame, const QSize &fit, QImage 
     cv::Mat filtered = filters.isIdentity() ? frame : VideoFilters::apply(frame, filters);
     const double scale = std::min(1.0, double(MaxDisplaySide) / std::max(filtered.cols, filtered.rows));
     if (scale < 1.0)
-        cv::resize(filtered, filtered, cv::Size(), scale, scale, cv::INTER_AREA);
+        filtered = ImageIO::shrink(filtered, cv::Size(std::max(1, cvRound(filtered.cols * scale)), std::max(1, cvRound(filtered.rows * scale))));
     // BGRA بترتيب ذاكرة RGB32 نفسه، فتعرضه الواجهة دون تحويل أو نسخ آخر
     auto wrap = [](const cv::Mat &bgr) {
         auto *holder = new cv::Mat;

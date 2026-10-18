@@ -868,7 +868,7 @@ void VideoWorker::run(const QString &source)
         bool still = false;
         if (filters.skipStill || quick) {
             cv::Mat reduced, gray;
-            cv::resize(frame, reduced, cv::Size(96, std::max(1, 96 * frame.rows / std::max(1, frame.cols))), 0, 0, cv::INTER_AREA);
+            reduced = ImageIO::shrink(frame, cv::Size(96, std::max(1, 96 * frame.rows / std::max(1, frame.cols))));
             cv::cvtColor(reduced, gray, cv::COLOR_BGR2GRAY);
             const bool tracking = std::any_of(tracks.begin(), tracks.end(), [&](const Track &t) {
                 return !t.closed && processed - t.lastSeen <= MaxTrackGap;
@@ -1250,9 +1250,9 @@ void VideoWorker::run(const QString &source)
             if (due) {
                 lastThumbnailMs = positionMs;
                 lastPreview = previewClock.elapsed();
-                cv::Mat thumbnail;
                 const double thumbnailScale = std::min(1.0, double(ThumbnailHeight) / std::max(1, frame.rows));
-                cv::resize(frame, thumbnail, cv::Size(), thumbnailScale, thumbnailScale, cv::INTER_AREA);
+                const cv::Mat thumbnail = ImageIO::shrink(frame, cv::Size(std::max(1, cvRound(frame.cols * thumbnailScale)),
+                                                                          std::max(1, cvRound(frame.rows * thumbnailScale))));
                 emit thumbnailReady(positionMs, ImageIO::toQImage(thumbnail));
             }
         } else if (m_pendingFrames < MaxPendingFrames) {
@@ -1261,7 +1261,7 @@ void VideoWorker::run(const QString &source)
             const double frameScale = std::min(1.0, double(MaxDisplaySide) / std::max(frame.cols, frame.rows));
             cv::Mat display = frame;
             if (frameScale < 1.0)
-                cv::resize(frame, display, cv::Size(), frameScale, frameScale, cv::INTER_AREA);
+                display = ImageIO::shrink(frame, cv::Size(std::max(1, cvRound(frame.cols * frameScale)), std::max(1, cvRound(frame.rows * frameScale))));
             emit frameReady(ImageIO::toQImage(display), current, positionMs, progress);
         }
         const double cost = double(analysisClock.nsecsElapsed()) / 1e6;

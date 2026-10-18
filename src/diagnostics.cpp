@@ -2318,10 +2318,16 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
     QString scale = size;
     scale.replace(QLatin1Char('x'), QLatin1Char(':'));
     QStringList serverArgs{QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-re"), QStringLiteral("-stream_loop"),
-                           QStringLiteral("-1"), QStringLiteral("-i"), videoPath, QStringLiteral("-vf"), QStringLiteral("scale=%1").arg(scale),
-                           QStringLiteral("-r"), QStringLiteral("25")};
+                           QStringLiteral("-1"), QStringLiteral("-i"), videoPath};
+    const QString format = qEnvironmentVariable("MALAMIH_LIVE_FORMAT");
+    if (format != QLatin1String("copy"))
+        serverArgs << QStringLiteral("-vf") << QStringLiteral("scale=%1").arg(scale) << QStringLiteral("-r") << QStringLiteral("25");
+    // MALAMIH_LIVE_FORMAT=copy: الفيديو يُبث كما رُمِّز (ملف مرمَّز مسبقاً كبث كاميرا حقيقية بإطارات B
+    // وCABAC أو H.265)، فلا يزاحم ترميز الخادم البرنامج ولا يكون البث أخف مما ترسله الكاميرا
+    if (format == QLatin1String("copy"))
+        serverArgs << QStringLiteral("-c") << QStringLiteral("copy") << QStringLiteral("-f") << QStringLiteral("mpegts");
     // MALAMIH_LIVE_FORMAT=h264: بث H.264 كأغلب كاميرات الشبكة، وفك ترميزه أثقل كثيراً من MJPEG
-    if (qEnvironmentVariable("MALAMIH_LIVE_FORMAT") == QLatin1String("h264"))
+    else if (format == QLatin1String("h264"))
         serverArgs << QStringLiteral("-c:v") << QStringLiteral("libx264") << QStringLiteral("-preset") << QStringLiteral("ultrafast")
                    << QStringLiteral("-tune") << QStringLiteral("zerolatency") << QStringLiteral("-g") << QStringLiteral("50")
                    << QStringLiteral("-f") << QStringLiteral("mpegts");
@@ -2449,6 +2455,20 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
             << " analyses=" << analyses << " lag_ms=" << qRound(lag) << "\n" << Qt::flush;
     });
     sampler.start(2000);
+    // استجابة الواجهة: مؤقت كل 20 مللي ثانية، وتأخر وصوله زمنُ تجمّد خيط الواجهة (ما يحسه المستخدم تعليقاً)
+    QTimer heartbeat;
+    QElapsedTimer beat;
+    double worstStallMs = 0.0;
+    int stalls = 0;
+    QObject::connect(&heartbeat, &QTimer::timeout, [&] {
+        if (beat.isValid() && clock.isValid() && clock.elapsed() > 3000) {
+            const double stall = beat.nsecsElapsed() / 1e6 - 20.0;
+            worstStallMs = std::max(worstStallMs, stall);
+            stalls += stall > 150.0 ? 1 : 0;
+        }
+        beat.start();
+    });
+    heartbeat.start(20);
     QFutureWatcher<void> watcher;
     QEventLoop loop;
     QObject::connect(&watcher, &QFutureWatcher<void>::finished, &loop, &QEventLoop::quit);
@@ -2456,6 +2476,7 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
     if (!running.isFinished())
         loop.exec();
     sampler.stop();
+    heartbeat.stop();
     const double elapsed = clock.isValid() ? clock.elapsed() / 1000.0 : 0.0;
     const CameraRecorder::Stats stats = recorder.stats();
     recorder.stop();
@@ -2468,6 +2489,7 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
     out << "read_fps=" << stats.received / std::max(0.001, elapsed) << " shown_fps=" << shown / std::max(0.001, elapsed)
         << " analyses_per_s=" << analyses / std::max(0.001, elapsed) << " worst_lag_ms=" << qRound(worstLagMs) << "\n";
     out << "gui_ms_per_frame=" << guiMs / std::max(1, shown.load()) << " gui_worst_ms=" << worstGuiMs << "\n";
+    out << "ui_worst_stall_ms=" << qRound(worstStallMs) << " ui_stalls_over_150ms=" << stalls << "\n";
     out << "record_received=" << stats.received << " record_dropped=" << stats.dropped << " record_written=" << stats.written
         << " repeated=" << std::max<qint64>(0, stats.written - (stats.received - stats.dropped)) << "\n";
     {

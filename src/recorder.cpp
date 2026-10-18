@@ -1,5 +1,6 @@
 #include "recorder.h"
 
+#include "imageio.h"
 #include "theme.h"
 #include "videofilters.h"
 
@@ -543,7 +544,7 @@ bool CameraRecorder::detectMotion(const cv::Mat &frame, Clock::time_point time)
 
     cv::Mat scaled, gray;
     const int width = 96;
-    cv::resize(frame, scaled, cv::Size(width, std::max(1, width * frame.rows / std::max(1, frame.cols))), 0, 0, cv::INTER_AREA);
+    scaled = ImageIO::shrink(frame, cv::Size(width, std::max(1, width * frame.rows / std::max(1, frame.cols))));
     if (scaled.channels() == 3)
         cv::cvtColor(scaled, gray, cv::COLOR_BGR2GRAY);
     else if (scaled.channels() == 4)

@@ -1,5 +1,6 @@
 #include "videofilters.h"
 
+#include "imageio.h"
 #include "imagelab.h"
 
 #include <QMutex>
@@ -39,7 +40,7 @@ void stretchLevels(cv::Mat &image)
 {
     cv::Mat gray, small;
     cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
-    cv::resize(gray, small, cv::Size(160, std::max(1, 160 * gray.rows / std::max(1, gray.cols))), 0, 0, cv::INTER_AREA);
+    small = ImageIO::shrink(gray, cv::Size(160, std::max(1, 160 * gray.rows / std::max(1, gray.cols))));
     int histogram[256] = {};
     for (int y = 0; y < small.rows; ++y)
         for (int x = 0; x < small.cols; ++x)

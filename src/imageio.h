@@ -16,6 +16,10 @@ cv::Mat loadImage(const QString &path);
 // تحسين الصورة وتوضيحها: تكبير الصغيرة، إزالة التشويش، موازنة الإضاءة والتباين، ثم زيادة الحدة
 cv::Mat enhance(const cv::Mat &bgr);
 QImage toQImage(const cv::Mat &bgr);
+// تصغير سريع إلى size: متوسط المساحة بنسبة صحيحة ثم خطي إلى الحجم بالضبط. متوسط المساحة بنسبة كسرية
+// (من 2560 إلى 1920 مثلاً) أبطأ بأربع مرات، وكان مع كل إطار من كاميرات الشبكة عالية الدقة يثقل الجهاز كله.
+// التصغير الكبير جداً (صورة مصغرة للحركة) يأخذ عينة كل بضع بكسلات أولاً ثم يتوسطها، فلا يمر على الإطار كله
+cv::Mat shrink(const cv::Mat &image, cv::Size size);
 QImage cropFace(const cv::Mat &bgr, const cv::Rect2f &box, int maxSize = 512);
 bool openVideo(cv::VideoCapture &capture, const QString &path);
 // ضغط صورتي الوجه في الذاكرة، وقراءتهما سواء كانتا مضغوطتين أم لا

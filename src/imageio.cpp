@@ -124,6 +124,31 @@ QImage toQImage(const cv::Mat &bgr)
     return QImage(bgr.data, bgr.cols, bgr.rows, int(bgr.step), QImage::Format_BGR888).copy();
 }
 
+cv::Mat shrink(const cv::Mat &image, cv::Size size)
+{
+    if (image.empty() || size.width <= 0 || size.height <= 0 || size == image.size())
+        return image;
+    if (size.width > image.cols || size.height > image.rows) {
+        cv::Mat larger;
+        cv::resize(image, larger, size, 0, 0, cv::INTER_LINEAR);
+        return larger;
+    }
+    cv::Mat step = image;
+    int factor = std::min(image.cols / size.width, image.rows / size.height);
+    if (factor >= 8) {
+        // ست عشرة عينة لكل بكسل ناتج تكفي لمتوسط ثابت مع الضجيج
+        cv::resize(image, step, cv::Size(size.width * 4, size.height * 4), 0, 0, cv::INTER_NEAREST);
+        factor = 4;
+    }
+    if (factor >= 2)
+        cv::resize(step, step, cv::Size(step.cols / factor, step.rows / factor), 0, 0, cv::INTER_AREA);
+    if (step.size() == size)
+        return step;
+    cv::Mat result;
+    cv::resize(step, result, size, 0, 0, cv::INTER_LINEAR);
+    return result;
+}
+
 QImage cropFace(const cv::Mat &bgr, const cv::Rect2f &box, int maxSize)
 {
     const float side = std::max(box.width, box.height) * 1.6f;
