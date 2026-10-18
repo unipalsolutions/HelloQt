@@ -458,7 +458,12 @@ void MainWindow::showPersonDetails()
     if (id.isEmpty()) {
         m_personAvatar->setPixmap(QPixmap());
         const qint64 count = m_database.personCount();
-        m_personEmptyText->setText(count > 0 ? QStringLiteral("في القاعدة \u2066%1\u2069 أشخاص. اختر أحدهم من القائمة لعرض بياناته وصوره وسجل ظهوره،\nأو أضف شخصاً جديداً.").arg(count)
+        // صيغة العدد العربية: شخص واحد، شخصان، 3–10 أشخاص، 11 شخصاً فأكثر
+        const QString people = count == 1 ? QStringLiteral("شخص واحد")
+            : count == 2                   ? QStringLiteral("شخصان")
+            : count <= 10                  ? QStringLiteral("\u2066%1\u2069 أشخاص").arg(count)
+                                           : QStringLiteral("\u2066%1\u2069 شخصاً").arg(count);
+        m_personEmptyText->setText(count > 0 ? QStringLiteral("في القاعدة %1. اختر أحدهم من القائمة لعرض بياناته وصوره وسجل ظهوره،\nأو أضف شخصاً جديداً.").arg(people)
                                              : QStringLiteral("القاعدة فارغة. أضف أول شخص مع صورة واضحة لوجهه ليبدأ التعرف عليه."));
         m_photosTab->setText(QStringLiteral("صور الوجه"));
         m_sightingsTab->setText(QStringLiteral("سجل الظهور"));
@@ -480,7 +485,7 @@ void MainWindow::showPersonDetails()
         return QStringLiteral("<span style='white-space:nowrap'><span style='color:#a99a8a'>%1</span>&nbsp;<span style='color:#f4ede4'>%2</span></span>&nbsp;&nbsp;&nbsp; ")
             .arg(key, value.toHtmlEscaped());
     };
-    QString html = QStringLiteral("<div style='font-size:18pt; font-weight:700'>%1</div>").arg(person.name.toHtmlEscaped());
+    QString html = QStringLiteral("<div dir='rtl' style='font-size:18pt; font-weight:700'>%1</div>").arg(person.name.toHtmlEscaped());
     if (!person.tags.isEmpty()) {
         html += QStringLiteral("<div style='margin:2px 0 4px 0'>");
         // تصنيفات المراقبة بلون المراقَبين، والبقية بالأخضر

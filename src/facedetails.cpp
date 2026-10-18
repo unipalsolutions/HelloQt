@@ -176,7 +176,9 @@ void FaceDetailsPanel::showDetails(const Details &d)
         }
         auto *other = new QToolButton(m_content);
         other->setObjectName(QStringLiteral("chip"));
-        other->setText(QStringLiteral("ليس أحدهم؟ اختر شخصاً آخر أو أضف شخصاً جديداً…"));
+        // نص قصير يتسع للوحة الضيقة، والشرح الكامل في التلميح
+        other->setText(QStringLiteral("ليس أحدهم؟ اختر غيره…"));
+        other->setToolTip(QStringLiteral("اختر شخصاً آخر من القاعدة أو أضف شخصاً جديداً"));
         other->setEnabled(d.canAssign);
         connect(other, &QToolButton::clicked, this, [this, faceId] { emit otherPersonRequested(faceId); });
         m_layout->addWidget(other, 0, Qt::AlignLeading);

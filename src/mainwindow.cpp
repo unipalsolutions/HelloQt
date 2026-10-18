@@ -1394,7 +1394,8 @@ void MainWindow::onImageAnalyzed()
     const QString summary = m_faces.isEmpty()
         ? QStringLiteral("لم يُعثر على وجوه في الصورة")
         : QStringLiteral("عدد الوجوه: %1 — تم التعرف على %2").arg(m_faces.size()).arg(known);
-    statusBar()->showMessage(summary);
+    // مؤقتة: العدد الحي في شريط الحالة أعلى الصفحة، وهذه تتقادم بعد الإضافة إلى القاعدة أو تغيير الصفحة
+    statusBar()->showMessage(summary, 10000);
     Toast::show(this, summary, m_faces.isEmpty() ? Toast::Kind::Warning : Toast::Kind::Success);
     setBusy(false);
 }
@@ -2640,10 +2641,14 @@ void MainWindow::addFaceToKnownPerson(int faceId)
 // يختار شخصاً من القاعدة أو ينشئ شخصاً جديداً؛ فارغ عند الإلغاء
 QString MainWindow::choosePerson(const QString &suggestedId)
 {
-    PersonPickerDialog picker(&m_database, suggestedId, this);
-    if (picker.exec() != QDialog::Accepted)
-        return {};
-    QString personId = picker.personId();
+    // القاعدة فارغة: لا شخص يُختار، فيُفتح نموذج الشخص الجديد مباشرة
+    QString personId;
+    if (m_database.personCount() > 0) {
+        PersonPickerDialog picker(&m_database, suggestedId, this);
+        if (picker.exec() != QDialog::Accepted)
+            return {};
+        personId = picker.personId();
+    }
     if (personId.isEmpty()) {
         PersonDialog dialog(Person(), this);
         if (dialog.exec() != QDialog::Accepted)

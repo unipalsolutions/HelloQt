@@ -520,6 +520,8 @@ void StartScreen::refresh()
 
     // آخر كاميرا أولاً ثم بقية الكاميرات المحفوظة
     const QString last = Cameras::lastSource();
+    // «الأخيرة» لكاميرا استُخدمت فعلاً، لا لكاميرا الجهاز الافتراضية في أول تشغيل
+    const bool used = QSettings().contains(QStringLiteral("cameras/last"));
     QList<QPair<QString, QString>> cameras;
     if (!last.isEmpty())
         cameras.append({last, Cameras::displayName(last)});
@@ -530,7 +532,7 @@ void StartScreen::refresh()
     const int cameraCount = std::min(int(cameras.size()), MaxCameras);
     for (int i = 0; i < cameraCount; ++i) {
         const QString source = cameras.at(i).first;
-        const bool isLast = i == 0 && source == last;
+        const bool isLast = used && i == 0 && source == last;
         auto *row = new StartRow(QPixmap(), Icons::Name::Camera, cameras.at(i).second, QString(), this);
         if (isLast) {
             row->setBadge(QStringLiteral("الأخيرة"));

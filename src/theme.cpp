@@ -102,6 +102,9 @@ QPushButton {
 QPushButton:hover { border-color: @borderHover; background: @surfaceHover; }
 QPushButton:default { background: @accent; border-color: @accent; color: white; }
 QPushButton:default:hover { background: @accentHover; }
+/* الزر المعطّل يبدو معطّلاً، فلا يضغطه المستخدم ظاناً أنه يعمل ثم لا يحدث شيء */
+QPushButton:disabled { background: @surface; border-color: @border; color: @muted; }
+QPushButton:default:disabled { background: @accentSoft; border-color: @accentSoft; color: @muted; }
 QCheckBox, QRadioButton { spacing: 8px; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1px solid @borderHover; background: @surfaceHigh; }
 QCheckBox::indicator:hover { border-color: @accent2; }
