@@ -200,6 +200,11 @@ MainWindow::MainWindow(QWidget *parent)
         if (!m_timelineCard->isHidden())
             m_timeline->setAnalyzedRanges(ranges);
     });
+    // الكاميرا: المربعات تلحق الوجوه المتحركة فور كشفها، قبل اكتمال تحليل الإطار
+    connect(m_videoWorker, &VideoWorker::facesMoved, this, [this](const QList<FaceItem> &faces) {
+        if (m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:")))
+            m_view->setFaces(faces);
+    });
     connect(m_videoWorker, &VideoWorker::shotChanged, this, [this](qint64 ms) {
         m_shotChanges.append(ms);
         m_timeline->setShotChanges(m_shotChanges);
@@ -664,6 +669,8 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
     updateResponsiveLayout();
+    if (m_statusHint)
+        m_statusHint->setVisible(m_statusAction->isVisibleTo(m_statusStrip) && width() >= 1480);
 }
 
 // يكيّف الواجهة مع عرض النافذة حتى لا تختفي أجزاء منها على شاشات اللابتوب الصغيرة
@@ -1642,10 +1649,22 @@ QList<FaceItem> MainWindow::analyzedFacesAt(qint64 positionMs) const
     const auto previous = std::prev(next);
     if (positionMs - previous.key() > VideoPlayer::AnalysisToleranceMs)
         return {};
+    // تغيّرت اللقطة بعد آخر إطار محلل: وجوه اللقطة السابقة لا تبقى على المشهد الجديد حتى يصل تحليله
+    for (const qint64 cut : m_shotChanges) {
+        if (cut > previous.key() && cut <= positionMs)
+            return {};
+    }
     QList<FaceItem> faces = previous.value();
-    // بين إطارين محللين: المربع ينتقل خطياً من موضعه في الأول إلى موضعه في الثاني
+    // بين إطارين محللين: المربع ينتقل خطياً من موضعه في الأول إلى موضعه في الثاني. وإن لم يصل تحليل الإطار
+    // التالي بعد (العرض يسبق التحليل قليلاً) يكمل المربع حركته بسرعته بين آخر إطارين، فلا يتخلف عن الوجه
     const bool between = next != m_analyzedFaces.end() && next.key() - previous.key() <= VideoPlayer::AnalysisToleranceMs;
     const double t = between ? double(positionMs - previous.key()) / double(next.key() - previous.key()) : 0.0;
+    const auto earlier = previous == m_analyzedFaces.begin() ? m_analyzedFaces.end() : std::prev(previous);
+    const bool extrapolate = !between && earlier != m_analyzedFaces.end() && positionMs > previous.key()
+        && previous.key() - earlier.key() <= VideoPlayer::AnalysisToleranceMs;
+    const double ahead = extrapolate ? double(std::min<qint64>(positionMs - previous.key(), MaxBoxExtrapolationMs))
+            / double(std::max<qint64>(1, previous.key() - earlier.key()))
+                                     : 0.0;
     QList<FaceItem> result;
     result.reserve(faces.size());
     for (FaceItem &face : faces) {
@@ -1656,6 +1675,15 @@ QList<FaceItem> MainWindow::analyzedFacesAt(qint64 positionMs) const
                 const QRectF a = face.box, b = later.box;
                 face.box = QRectF(a.x() + (b.x() - a.x()) * t, a.y() + (b.y() - a.y()) * t,
                                   a.width() + (b.width() - a.width()) * t, a.height() + (b.height() - a.height()) * t);
+                break;
+            }
+        } else if (extrapolate) {
+            for (const FaceItem &before : earlier.value()) {
+                if (before.id != face.id)
+                    continue;
+                const QRectF a = before.box, b = face.box;
+                face.box = QRectF(b.x() + (b.x() - a.x()) * ahead, b.y() + (b.y() - a.y()) * ahead,
+                                  b.width() + (b.width() - a.width()) * ahead, b.height() + (b.height() - a.height()) * ahead);
                 break;
             }
         }
@@ -1685,7 +1713,7 @@ void MainWindow::onPlayerFrame(const QImage &frame, qint64 positionMs)
     // التحليل يلحق العرض إن سبقه إلى جزء لم يُحلَّل
     if (m_videoRunning)
         m_videoWorker->setDisplayPosition(positionMs, m_player->isPlaying());
-    m_view->setFaces(analyzedFacesAt(positionMs));
+    m_view->setFaces(analyzedFacesAt(positionMs), false);
     updateAnalysisBadge(positionMs);
     if (!m_timelineCard->isHidden())
         m_timeline->setPosition(positionMs);

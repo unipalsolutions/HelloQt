@@ -1030,3 +1030,45 @@ void LiveBadge::paintEvent(QPaintEvent *)
     const QRectF text = rtl ? pill.adjusted(8, 0, -28, 0) : pill.adjusted(28, 0, -8, 0);
     p.drawText(text, Qt::AlignCenter, QStringLiteral("مباشر"));
 }
+
+// ───────────── نص مختصر ─────────────
+
+ElidedLabel::ElidedLabel(QWidget *parent)
+    : QLabel(parent)
+{
+    setTextFormat(Qt::PlainText);
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+}
+
+void ElidedLabel::setFullText(const QString &text)
+{
+    if (text == m_fullText)
+        return;
+    m_fullText = text;
+    setToolTip(text);
+    refresh();
+    updateGeometry();
+}
+
+QSize ElidedLabel::minimumSizeHint() const
+{
+    return {fontMetrics().horizontalAdvance(QStringLiteral("……")), QLabel::minimumSizeHint().height()};
+}
+
+QSize ElidedLabel::sizeHint() const
+{
+    return {fontMetrics().horizontalAdvance(m_fullText) + 2, QLabel::sizeHint().height()};
+}
+
+void ElidedLabel::resizeEvent(QResizeEvent *event)
+{
+    QLabel::resizeEvent(event);
+    refresh();
+}
+
+void ElidedLabel::refresh()
+{
+    const QString shown = fontMetrics().elidedText(m_fullText, Qt::ElideRight, std::max(0, contentsRect().width()));
+    if (shown != text())
+        setText(shown);
+}

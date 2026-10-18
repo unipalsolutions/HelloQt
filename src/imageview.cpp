@@ -72,7 +72,7 @@ void ImageView::setWatched(const QSet<QString> &personIds)
     setFaces(m_faces);
 }
 
-void ImageView::setFaces(const QList<FaceItem> &faces)
+void ImageView::setFaces(const QList<FaceItem> &faces, bool smooth)
 {
     m_faces = faces;
     QList<Box> boxes;
@@ -87,7 +87,8 @@ void ImageView::setFaces(const QList<FaceItem> &faces)
         Box box{face.id, face.box, face.box, label, watched ? Theme::Danger : matchColor(face.match.status), 0.0, watched};
         const auto existing = std::find_if(m_boxes.begin(), m_boxes.end(), [&](const Box &b) { return b.id == face.id; });
         if (existing != m_boxes.end()) {
-            box.current = existing->current;
+            if (smooth)
+                box.current = existing->current;
             box.appear = existing->appear;
         } else {
             box.appear = -0.14 * newCount++;

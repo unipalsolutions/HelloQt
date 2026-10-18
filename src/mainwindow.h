@@ -19,6 +19,7 @@
 #include <functional>
 
 class AnimatedStack;
+class ElidedLabel;
 class StartScreen;
 class QSplitter;
 class QStackedWidget;
@@ -474,7 +475,7 @@ private:
     CollapsibleSection *m_detailsSection = nullptr;
     ProgressRing *m_statusRing = nullptr;
     QLabel *m_statusTitle = nullptr;
-    QLabel *m_statusDetail = nullptr;
+    ElidedLabel *m_statusDetail = nullptr;
     QLabel *m_statusHint = nullptr;
     FancyButton *m_statusAction = nullptr;
     std::function<void()> m_statusActionSlot;

@@ -34,6 +34,15 @@ namespace {
 constexpr size_t MaxQueue = 90;                 // نحو 3 ثوانٍ؛ إن تأخرت الكتابة تُترك أقدم الإطارات
 constexpr qint64 MinFreeBytes = 500ll << 20;    // يتوقف التسجيل قبل أن يمتلئ القرص
 constexpr double MaxGapSeconds = 2.0;           // انقطاع أطول لا يُملأ بإطار متجمد
+// توقف وصول الإطارات أطول من هذا (انقطاع الكاميرا) يبدأ ملفاً جديداً باسم وقت العودة، فيبقى الوقت داخل كل ملف
+// مطابقاً للوقت الفعلي. أما هدوء وضع الحركة فالإطارات تصل فيه ولا يُعد انقطاعاً
+constexpr auto FeedGap = std::chrono::milliseconds(2000);
+// ملفات التسجيل الجارية: «malamih-rec-…mkv»، وبجانب كل منها ملف «.target» فيه اسمه النهائي، فإن انطفأ
+// الجهاز قبل إغلاقه يُستعاد بهذا الاسم عند التشغيل التالي
+const QString WritingPrefix = QStringLiteral("malamih-rec-");
+const QString TargetSuffix = QStringLiteral(".target");
+// نسخة يُعاد بناؤها من تسجيل مستعاد؛ إن بقيت فقد انقطع بناؤها هي أيضاً فتُحذف
+const QString RebuildPrefix = QStringLiteral("malamih-fix-");
 // وضع الحركة فقط
 constexpr auto PreRoll = std::chrono::seconds(2);       // يُحفظ ما قبل الحركة ليظهر من دخل المشهد
 constexpr auto PreRollStep = std::chrono::milliseconds(250); // إطار كل ربع ثانية فقط قبل الحركة، فتبقى الذاكرة صغيرة
@@ -123,6 +132,19 @@ QString safeName(QString name)
     return name.isEmpty() ? QStringLiteral("الكاميرا") : name;
 }
 
+// الملفات التي يكتب إليها مسجّل يعمل الآن، فلا تمسها الاستعادة
+std::mutex &activeMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+QStringList &activeFiles()
+{
+    static QStringList files;
+    return files;
+}
+
 bool moveFile(const QString &from, const QString &to)
 {
     if (QFile::rename(from, to))
@@ -132,6 +154,39 @@ bool moveFile(const QString &from, const QString &to)
         return false;
     QFile::remove(from);
     return true;
+}
+
+// MKV انقطعت كتابته يُشغَّل، لكن بلا مدة ولا فهرس فلا يُعرف طوله ولا يُقفز فيه. تُقرأ إطاراته وتُكتب
+// في ملف مكتمل يحل محله؛ يعيد هل نجح (وإلا يبقى الأصل كما هو). المسار لاتيني (مجلد الكتابة)
+bool rebuildRecording(const QString &path)
+{
+    cv::VideoCapture input;
+    if (!input.open(QDir::toNativeSeparators(path).toStdString(), cv::CAP_FFMPEG))
+        return false;
+    const double reported = input.get(cv::CAP_PROP_FPS);
+    const double fps = reported > 1.0 && reported <= 60.0 ? reported : 25.0;
+    const QString rebuilt = QFileInfo(path).dir().filePath(RebuildPrefix + QFileInfo(path).fileName().mid(WritingPrefix.size()));
+    cv::VideoWriter output;
+    qint64 frames = 0;
+    cv::Mat frame;
+    while (input.read(frame)) {
+        if (frame.empty())
+            continue;
+        if (!output.isOpened()) {
+            const std::string native = QDir::toNativeSeparators(rebuilt).toStdString();
+            if (!output.open(native, cv::CAP_FFMPEG, cv::VideoWriter::fourcc('m', 'p', '4', 'v'), fps, frame.size()))
+                return false;
+        }
+        output.write(frame);
+        ++frames;
+    }
+    input.release();
+    output.release();
+    if (frames == 0 || !QFile::remove(path)) {
+        QFile::remove(rebuilt);
+        return false;
+    }
+    return QFile::rename(rebuilt, path);
 }
 
 } // namespace
@@ -206,6 +261,7 @@ bool CameraRecorder::start(const QString &folder, const QString &cameraName, dou
     m_preRoll.clear();
     m_motionReference.release();
     m_hadMotion = false;
+    m_lastFrame = Clock::time_point();
     m_startedAt = Clock::now();
     m_spaceChecked = m_cleaned = m_startedAt;
     m_waiting = options.motionOnly;
@@ -329,6 +385,12 @@ void CameraRecorder::handle(const Pending &item)
         m_cleaned = item.time;
         removeExpired();
     }
+
+    // عادت الكاميرا بعد انقطاع: ملف جديد يبدأ بوقت العودة بدل وصل ما بعد الانقطاع بما قبله
+    const bool resumed = m_lastFrame != Clock::time_point() && item.time - m_lastFrame > FeedGap;
+    m_lastFrame = item.time;
+    if (resumed && m_writer.isOpened())
+        closeSegment();
 
     if (m_options.schedule.enabled) {
         // يُفحص الجدول مرة في الثانية تقريباً؛ خارج ساعاته يُغلق الملف ولا يُكتب شيء
@@ -472,7 +534,7 @@ void CameraRecorder::write(const cv::Mat &frame, Clock::time_point time)
 
     if (!m_writer.isOpened()) {
         QString error;
-        if (!openSegment(frame.size(), &error)) {
+        if (!openSegment(frame.size(), time, &error)) {
             fail(error);
             return;
         }
@@ -496,21 +558,34 @@ void CameraRecorder::write(const cv::Mat &frame, Clock::time_point time)
     m_liveMs = qint64(double(m_written - 1) * 1000.0 / m_fps);
 }
 
-bool CameraRecorder::openSegment(const cv::Size &size, QString *error)
+bool CameraRecorder::openSegment(const cv::Size &size, Clock::time_point time, QString *error)
 {
-    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH-mm-ss"));
-    QString finalPath = QDir(m_folder).filePath(QStringLiteral("%1 %2.mp4").arg(m_cameraName, stamp));
+    // الاسم بوقت الإطار الأول لا وقت فتح الملف (ثواني ما قبل الحركة، والإطارات المنتظرة في الطابور)
+    const qint64 delayMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - time).count();
+    const QString stamp = QDateTime::currentDateTime().addMSecs(-std::max<qint64>(0, delayMs)).toString(QStringLiteral("yyyy-MM-dd HH-mm-ss"));
+    QString finalPath = QDir(m_folder).filePath(QStringLiteral("%1 %2.mkv").arg(m_cameraName, stamp));
     for (int n = 2; QFile::exists(finalPath); ++n)
-        finalPath = QDir(m_folder).filePath(QStringLiteral("%1 %2 (%3).mp4").arg(m_cameraName, stamp).arg(n));
+        finalPath = QDir(m_folder).filePath(QStringLiteral("%1 %2 (%3).mkv").arg(m_cameraName, stamp).arg(n));
 
-    const QString ascii = QStringLiteral("malamih-rec-%1.mp4").arg(QUuid::createUuid().toString(QUuid::Id128).left(12));
+    const QString ascii = QStringLiteral("%1%2.mkv").arg(WritingPrefix, QUuid::createUuid().toString(QUuid::Id128).left(12));
     const QString writing = QDir(writableFolder(m_folder)).filePath(ascii);
+    {
+        std::lock_guard<std::mutex> lock(activeMutex());
+        activeFiles().append(writing);
+    }
     const std::string native = QDir::toNativeSeparators(writing).toStdString();
     const int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
     if (!m_writer.open(native, cv::CAP_FFMPEG, fourcc, m_fps, size) && !m_writer.open(native, fourcc, m_fps, size)) {
+        std::lock_guard<std::mutex> lock(activeMutex());
+        activeFiles().removeAll(writing);
         if (error)
             *error = QStringLiteral("تعذر إنشاء ملف التسجيل في:\n%1").arg(QDir::toNativeSeparators(m_folder));
         return false;
+    }
+    QSaveFile target(writing + TargetSuffix);
+    if (target.open(QIODevice::WriteOnly)) {
+        target.write(finalPath.toUtf8());
+        target.commit();
     }
     m_size = size;
     m_writingPath = writing;
@@ -533,12 +608,19 @@ void CameraRecorder::closeSegment()
     m_liveMs = -1;
     const QString from = std::exchange(m_writingPath, QString());
     const QString to = std::exchange(m_finalPath, QString());
+    const auto finish = [&from] {
+        QFile::remove(from + TargetSuffix);
+        std::lock_guard<std::mutex> lock(activeMutex());
+        activeFiles().removeAll(from);
+    };
     if (m_written == 0) {
         QFile::remove(from);
+        finish();
         return;
     }
     // إن تعذرت إعادة التسمية يبقى الملف باسمه اللاتيني، ولا يضيع التسجيل
     const QString saved = moveFile(from, to) ? to : from;
+    finish();
     rememberFile(saved);
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -596,6 +678,77 @@ void CameraRecorder::rememberFile(const QString &path)
         paths << absolute;
         writeManifest(paths);
     }
+}
+
+int CameraRecorder::recoverInterrupted()
+{
+    QStringList folders = {QDir::tempPath(), savedFolder(), writableFolder(savedFolder())};
+    folders.removeDuplicates();
+    // ملف تعذرت إعادة تسميته عند إغلاقه بقي باسمه اللاتيني وهو تسجيل محفوظ في القائمة، فلا يُمس
+    QStringList saved;
+    {
+        std::lock_guard<std::mutex> lock(manifestMutex());
+        saved = readManifest();
+    }
+    int recovered = 0;
+    for (const QString &folder : std::as_const(folders)) {
+        const QDir dir(folder);
+        const QStringList names = dir.entryList({WritingPrefix + QLatin1Char('*'), RebuildPrefix + QLatin1Char('*')}, QDir::Files);
+        for (const QString &name : names) {
+            const QString path = dir.filePath(name);
+            {
+                std::lock_guard<std::mutex> lock(activeMutex());
+                if (activeFiles().contains(path) || activeFiles().contains(path.chopped(TargetSuffix.size())))
+                    continue;
+            }
+            if (saved.contains(QFileInfo(path).absoluteFilePath()))
+                continue;
+            if (name.startsWith(RebuildPrefix)) {
+                QFile::remove(path);
+                continue;
+            }
+            if (name.endsWith(TargetSuffix)) {
+                // اسم نهائي بقي بلا ملفه (نُقل قبل أن يُحذف هذا)
+                if (!QFile::exists(path.chopped(TargetSuffix.size())))
+                    QFile::remove(path);
+                continue;
+            }
+            // MP4 لم يُغلق لا يُشغَّل (فهرسه يُكتب عند الإغلاق)، فلا فائدة من إبقائه
+            if (name.endsWith(QStringLiteral(".mp4"))) {
+                QFile::remove(path);
+                continue;
+            }
+            QFile target(path + TargetSuffix);
+            if (!target.open(QIODevice::ReadOnly))
+                continue;
+            QString finalPath = QString::fromUtf8(target.readAll()).trimmed();
+            target.close();
+            if (QFileInfo(path).size() == 0) {
+                QFile::remove(path);
+                QFile::remove(target.fileName());
+                continue;
+            }
+            if (finalPath.isEmpty() || !QDir().mkpath(QFileInfo(finalPath).absolutePath()))
+                continue;
+            const QString base = finalPath.chopped(QFileInfo(finalPath).suffix().size() + 1);
+            for (int n = 2; QFile::exists(finalPath); ++n)
+                finalPath = QStringLiteral("%1 (%2).mkv").arg(base).arg(n);
+            // نهاية التسجيل في قائمة التسجيلات هي آخر تعديل للملف، وإعادة البناء والنسخ إلى قرص آخر يغيّرانه
+            const QDateTime modified = QFileInfo(path).lastModified();
+            rebuildRecording(path);
+            if (!moveFile(path, finalPath))
+                continue;
+            QFile moved(finalPath);
+            if (moved.open(QIODevice::ReadWrite))
+                moved.setFileTime(modified, QFileDevice::FileModificationTime);
+            moved.close();
+            QFile::remove(target.fileName());
+            rememberFile(finalPath);
+            qInfo("استُعيد تسجيل انقطعت كتابته: %s", qUtf8Printable(QDir::toNativeSeparators(finalPath)));
+            ++recovered;
+        }
+    }
+    return recovered;
 }
 
 QString CameraRecorder::fileCameraName(const QString &cameraName)

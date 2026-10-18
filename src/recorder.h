@@ -24,7 +24,8 @@
 // يسجّل بث الكاميرا إلى ملفات MP4: كل إطار يصل من الكاميرا، لا الإطارات التي حُلِّلت فقط، فيستمر
 // التسجيل بسرعته الكاملة ولو كان التحليل أبطأ أو متوقفاً مؤقتاً. معالجات الفيديو (التدوير والإضاءة…)
 // تُطبَّق على المسجَّل كما تظهر، ومربعات الوجوه وأسماؤها اختيارية. التسجيل الطويل يُقسَّم ملفات كل
-// SegmentMinutes دقيقة، فلا يضيع إلا الجزء الأخير إن انطفأ الجهاز فجأة
+// SegmentMinutes دقيقة. الملفات بصيغة MKV التي تبقى صالحة للتشغيل إن انقطعت كتابتها، فإن انطفأ الجهاز
+// فجأة لا يضيع إلا آخر ثانية تقريباً، ويُستعاد الملف الجاري باسمه عند التشغيل التالي (recoverInterrupted)
 class CameraRecorder : public QObject
 {
     Q_OBJECT
@@ -102,6 +103,9 @@ public:
     static bool freeSpace(const QString &folder, qint64 needBytes);
     // كل ملف حفظه البرنامج يُضاف إلى قائمته، فالحذف التلقائي لا يمس ملفات أخرى في المجلد
     static void rememberFile(const QString &path);
+    // تسجيلات انقطعت كتابتها (انطفاء مفاجئ أو توقف البرنامج) تُنقل إلى أسمائها النهائية وتُضاف إلى القائمة،
+    // وتُحذف بقايا الإصدارات السابقة التي لا تُستعاد (MP4 غير مكتمل). يُستدعى عند التشغيل؛ يعيد عدد المستعاد
+    static int recoverInterrupted();
 
     // تسجيلات البرنامج الموجودة (من قائمته) التي تتقاطع مع الفترة، مرتبة بالبداية.
     // البداية من اسم الملف («الكاميرا yyyy-MM-dd HH-mm-ss.mp4») والنهاية آخر تعديل له
@@ -133,7 +137,7 @@ private:
     };
 
     void run();
-    bool openSegment(const cv::Size &size, QString *error);
+    bool openSegment(const cv::Size &size, Clock::time_point time, QString *error);
     void closeSegment();
     void handle(const Pending &item);
     void write(const cv::Mat &frame, Clock::time_point time);
@@ -169,7 +173,8 @@ private:
     QString m_writingPath; // ما تكتب إليه OpenCV (اسم لاتيني)
     QString m_finalPath;   // الاسم النهائي بعد الإغلاق
     Clock::time_point m_segmentStart; // لتقسيم الملفات
-    Clock::time_point m_timeBase;     // زمن الإطار الأول في الملف، بعد طرح فترات الانقطاع
+    Clock::time_point m_timeBase;     // زمن الإطار الأول في الملف، بعد طرح فترات الهدوء في وضع الحركة
+    Clock::time_point m_lastFrame;    // آخر إطار وصل من الكاميرا، لكشف انقطاعها
     qint64 m_written = 0;
     Clock::time_point m_spaceChecked;
     Clock::time_point m_cleaned;

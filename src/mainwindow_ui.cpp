@@ -150,8 +150,9 @@ QWidget *MainWindow::createStatusStrip(QWidget *parent)
     m_statusRing = new ProgressRing(m_statusStrip);
     m_statusTitle = new QLabel(m_statusStrip);
     m_statusTitle->setStyleSheet(QStringLiteral("font-weight: 600;"));
-    m_statusDetail = label(QString(), QStringLiteral("muted"), m_statusStrip);
-    m_statusDetail->setMinimumWidth(10);
+    // التفاصيل تُختصر بـ «…» إن ضاقت النافذة، وتظهر كاملة في التلميح
+    m_statusDetail = new ElidedLabel(m_statusStrip);
+    m_statusDetail->setObjectName(QStringLiteral("muted"));
     m_statusAction = new FancyButton(Icons::Name::Next, QString(), FancyButton::Kind::Secondary, m_statusStrip);
     m_statusAction->setVisible(false);
     connect(m_statusAction, &QAbstractButton::clicked, this, [this] {
@@ -183,7 +184,8 @@ void MainWindow::setStatusAction(Icons::Name icon, const QString &text, const QS
         m_statusAction->setToolTip(tip);
     }
     m_statusAction->setVisible(show);
-    m_statusHint->setVisible(show);
+    // «الخطوة المقترحة:» في النافذة العريضة فقط، فيتسع للتفاصيل على شاشة اللابتوب
+    m_statusHint->setVisible(show && width() >= 1480);
 }
 
 void MainWindow::updateStatusStrip()
@@ -347,8 +349,7 @@ void MainWindow::updateStatusStrip()
     else
         m_statusRing->setIcon(icon, color);
     m_statusTitle->setText(title);
-    m_statusDetail->setText(detail);
-    m_statusDetail->setToolTip(detail);
+    m_statusDetail->setFullText(detail);
 }
 
 // ───────────── قائمة «فتح» وشاشة البداية ─────────────

@@ -60,6 +60,10 @@ constexpr qint64 FollowLagMs = 800;
 constexpr qint64 FollowLeadMs = 300;      // يبدأ التحليل بعد موضع العرض بقليل فتصل نتيجته قبل عرض الإطار
 // أثناء التشغيل على جهاز لا يلحق: أبعد مسافة بين إطارين محللين، دون مهلة عرض النتيجة (600) فلا تختفي المربعات بينهما
 constexpr qint64 FollowMaxSpacingMs = 500;
+// كشف اتجاه الفيديو المائل: عدد الإطارات المفحوصة، وأقل ثقة للوجه فيها، ومجموع الثقة الذي يكفي لإدارته
+constexpr int OrientationProbes = 4;
+constexpr float OrientationScore = 0.6f;
+constexpr double OrientationMinScore = 1.5;
 constexpr int ThumbnailHeight = 120;
 // الكاميرا تعمل أياماً ويمر أمامها آلاف الأشخاص: أقدم من غاب طويلاً يُنسى (ظهوره سُجِّل في القاعدة)
 // فتبقى الذاكرة وسرعة البحث ثابتتين
@@ -259,6 +263,83 @@ private:
     cv::Mat m_hist;
     cv::Mat m_gray;
 };
+
+cv::Mat turned(const cv::Mat &image, int turns)
+{
+    if (turns % 4 == 0)
+        return image;
+    cv::Mat result;
+    cv::rotate(image, result, turns == 1 ? cv::ROTATE_90_CLOCKWISE : turns == 2 ? cv::ROTATE_180 : cv::ROTATE_90_COUNTERCLOCKWISE);
+    return result;
+}
+
+// مستطيل في صورة أُديرت turns ربع دورة مع عقارب الساعة (أبعادها width×height) إلى موضعه في الصورة قبل الإدارة
+QRectF unturned(const QRectF &box, int turns, double width, double height)
+{
+    switch (turns) {
+    case 1:
+        return QRectF(box.y(), width - box.right(), box.height(), box.width());
+    case 2:
+        return QRectF(width - box.right(), height - box.bottom(), box.width(), box.height());
+    case 3:
+        return QRectF(height - box.bottom(), box.x(), box.height(), box.width());
+    default:
+        return box;
+    }
+}
+
+// منطقة نسبية (من 0 إلى 1) من الإطار إلى موضعها بعد إدارته turns ربع دورة مع عقارب الساعة
+QRectF turnedRegion(const QRectF &region, int turns)
+{
+    switch (turns) {
+    case 1:
+        return QRectF(1.0 - region.bottom(), region.x(), region.height(), region.width());
+    case 2:
+        return QRectF(1.0 - region.right(), 1.0 - region.bottom(), region.width(), region.height());
+    case 3:
+        return QRectF(region.y(), 1.0 - region.right(), region.height(), region.width());
+    default:
+        return region;
+    }
+}
+
+// فيديو صُوِّر بالجوال مائلاً أو مقلوباً تظهر وجوهه مستلقية، فلا يكشفها النموذج ولا يتعرف عليها.
+// تُفحص بضعة إطارات موزعة على الجزء المطلوب بالاتجاهات الأربعة، ويُعاد عدد أرباع الدورة التي تعدل
+// الوجوه (0 إن ظهرت معتدلة أو لم يظهر وجه واضح). يغيّر موضع القراءة، فيُعاد بعده
+int uprightTurns(const FaceEngine *engine, cv::VideoCapture &capture, int first, int last, bool fast)
+{
+    if (last - first < 2)
+        return 0;
+    const VideoFilters::Settings filters = VideoFilters::current();
+    std::vector<cv::Mat> frames;
+    for (int i = 0; i < OrientationProbes; ++i) {
+        capture.set(cv::CAP_PROP_POS_FRAMES, double(first + qint64(last - first) * (2 * i + 1) / (2 * OrientationProbes)));
+        cv::Mat frame;
+        if (!capture.read(frame) || frame.empty())
+            continue;
+        frames.push_back(filters.isIdentity() ? frame : VideoFilters::apply(frame, filters));
+    }
+    double scores[4] = {0.0, 0.0, 0.0, 0.0};
+    int uprightFrames = 0;
+    for (const cv::Mat &frame : frames) {
+        const std::vector<DetectedFace> faces = engine->detect(frame, false, OrientationScore, fast);
+        uprightFrames += faces.empty() ? 0 : 1;
+        for (const DetectedFace &face : faces)
+            scores[0] += face.score;
+    }
+    // وجوه معتدلة في أغلب الإطارات المفحوصة: الفيديو معتدل، فلا تُجرَّب الاتجاهات الأخرى (أغلب الفيديوهات)
+    if (uprightFrames * 4 >= int(frames.size()) * 3 && !frames.empty())
+        return 0;
+    for (const cv::Mat &frame : frames) {
+        for (int turns = 1; turns < 4; ++turns) {
+            for (const DetectedFace &face : engine->detect(turned(frame, turns), false, OrientationScore, fast))
+                scores[turns] += face.score;
+        }
+    }
+    const int best = int(std::max_element(scores, scores + 4) - scores);
+    // اتجاه آخر يُعتمد فقط إن ظهرت فيه الوجوه أوضح بكثير، فلا تغيّره وجوه مائلة قليلاً في فيديو معتدل
+    return best != 0 && scores[best] >= OrientationMinScore && scores[best] >= 2.0 * scores[0] ? best : 0;
+}
 
 } // namespace
 
@@ -462,6 +543,15 @@ void VideoWorker::run(const QString &source)
     m_displayMs = -1;
     m_displayPlaying = false;
     const qint64 durationMs = validFps && frameCount > 0 ? qint64(frameCount * 1000.0 / fps) : 0;
+    // الفيديو المائل يُحلَّل بوجوه معتدلة، ثم تُعاد المواضع إلى اتجاه الإطار المعروض (لا في الفحص السريع للأرشيف)
+    int turns = 0;
+    if (!camera && !quick && frameCount > 0) {
+        turns = uprightTurns(m_engine, capture, startFrame, endFrame > startFrame ? endFrame : frameCount, fastAllowed && m_engine->gpuName().isEmpty());
+        if (startMs > 0)
+            capture.set(cv::CAP_PROP_POS_MSEC, double(startMs));
+        else
+            capture.set(cv::CAP_PROP_POS_FRAMES, 0.0);
+    }
     emit started(step, validFps ? fps : 0.0, durationMs);
 
     std::map<int, Identity> identities;
@@ -778,9 +868,13 @@ void VideoWorker::run(const QString &source)
             filteredSize = frame.size();
         }
 
-        // الإطار المحسّن (إن طُلب) هو الذي يُحلَّل ويُعرض، وقد يكون أكبر من الأصلي
-        const cv::Mat work = enhance ? ImageIO::enhance(frame) : frame;
-        const double scale = double(work.cols) / double(frame.cols);
+        // الإطار المحسّن (إن طُلب) هو الذي يُحلَّل ويُعرض، وقد يكون أكبر من الأصلي. وفي الفيديو المائل يُحلَّل
+        // معتدلاً، ومواضع الوجوه فيه تُعاد إلى اتجاه الإطار بـ shown
+        const cv::Mat upright = turned(frame, turns);
+        const cv::Mat work = enhance ? ImageIO::enhance(upright) : upright;
+        const double scale = double(work.cols) / double(upright.cols);
+        const auto shown = [&](const QRectF &box) { return unturned(box, turns, work.cols, work.rows); };
+        region = turnedRegion(region, turns);
         if (scale != workScale) {
             tracks.clear(); // تغيّر مقياس الإحداثيات
             workScale = scale;
@@ -873,6 +967,35 @@ void VideoWorker::run(const QString &source)
             detections[pair.detection].track = int(pair.track);
             detections[pair.detection].iou = pair.iou;
             trackUsed[pair.track] = true;
+        }
+
+        // المواضع على الإطار بعد المعالجات ودون التحسين، مصغراً كما يعرضه VideoPlayer
+        const double displayScale = std::min(1.0, double(MaxDisplaySide) / std::max(frame.cols, frame.rows)) / scale;
+        const auto displayBox = [&](const Detection &detection) {
+            const QRectF box = shown(toRect(detection.face.box));
+            return QRectF(box.topLeft() * displayScale, box.size() * displayScale);
+        };
+
+        // الكاميرا: مواضع الوجوه المتتبَّعة تُرسل فور كشفها، فلا ينتظر المربع حساب البصمات (وهو الأبطأ على
+        // المعالج) ليلحق الوجه المتحرك؛ النتيجة الكاملة تتبعها في frameReady
+        if (camera) {
+            QList<FaceItem> moved;
+            for (const Detection &detection : detections) {
+                if (detection.track < 0)
+                    continue;
+                const Identity &identity = identities[tracks[size_t(detection.track)].identity];
+                if (!identity.confirmed)
+                    continue;
+                FaceItem item;
+                item.id = identity.id;
+                item.box = displayBox(detection);
+                item.quality = detection.quality;
+                item.frames = identity.frames;
+                item.match = identity.match;
+                moved.append(item);
+            }
+            if (!moved.isEmpty())
+                emit facesMoved(moved);
         }
 
         // 2) البصمة تُحسب للوجوه الجديدة، وللمتتبَّعة كل عدة إطارات، أو عند ربط غير مؤكد
@@ -990,8 +1113,6 @@ void VideoWorker::run(const QString &source)
 
         // 5) تحديث الهويات: تجميع البصمات مرجّحة بالجودة، فكلما طال ظهور الوجه زادت دقة التعرف
         QList<FaceItem> current;
-        // المواضع على الإطار بعد المعالجات ودون التحسين، مصغراً كما يعرضه VideoPlayer
-        const double displayScale = std::min(1.0, double(MaxDisplaySide) / std::max(frame.cols, frame.rows)) / scale;
         for (Detection &detection : detections) {
             if (detection.track < 0)
                 continue;
@@ -1036,7 +1157,7 @@ void VideoWorker::run(const QString &source)
                     identity.best = ImageIO::makeFaceItem(work, analyzed, identity.id, TrackPhotoSize);
                     ImageIO::pack(identity.best);
                     identity.bestMs = positionMs;
-                    const QRectF box = toRect(detection.face.box);
+                    const QRectF box = shown(toRect(detection.face.box));
                     identity.sourceBox = QRectF(box.topLeft() / workScale, box.size() / workScale);
                     betterShot = true;
                 }
@@ -1050,8 +1171,7 @@ void VideoWorker::run(const QString &source)
 
             FaceItem item;
             item.id = identity.id;
-            const QRectF box = toRect(detection.face.box);
-            item.box = QRectF(box.topLeft() * displayScale, box.size() * displayScale);
+            item.box = displayBox(detection);
             item.quality = detection.quality;
             item.frames = identity.frames;
             item.match = identity.match;

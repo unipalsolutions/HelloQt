@@ -105,6 +105,8 @@ namespace MainWindowHelpers {
 constexpr qint64 CameraOfflineAlertMs = 2 * 60 * 1000;
 // الكاميرا الموصولة التي انقطعت ولم تعد يُعاد تشغيلها بعد هذه المدة ما لم يفتح المستخدم شيئاً آخر
 constexpr int CameraRestartMs = 30 * 1000;
+// أقصى ما يكمل فيه مربع الوجه حركته المتوقعة حين يسبق العرض تحليل الإطار التالي
+constexpr qint64 MaxBoxExtrapolationMs = 250;
 constexpr int SightingPositionRole = Qt::UserRole + 120;
 
 const QString ImageFilter = QStringLiteral("الصور (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff);;كل الملفات (*)");

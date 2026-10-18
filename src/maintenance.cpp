@@ -117,6 +117,15 @@ bool Maintenance::backupNow(const QString &databaseFile, const QString &folder, 
 
 void Maintenance::start()
 {
+    // تسجيل انقطع بانطفاء مفاجئ يُستعاد فوراً، فيظهر في قائمة التسجيلات من أول تشغيل
+    auto *recovery = new QFutureWatcher<int>(this);
+    connect(recovery, &QFutureWatcher<int>::finished, this, [recovery] {
+        const int recovered = recovery->result();
+        recovery->deleteLater();
+        if (recovered > 0)
+            AppLog::write(QStringLiteral("استُعيد %1 من تسجيلات الكاميرا التي انقطعت كتابتها بإغلاق مفاجئ").arg(recovered));
+    });
+    recovery->setFuture(QtConcurrent::run([] { return CameraRecorder::recoverInterrupted(); }));
     QTimer::singleShot(60 * 1000, this, &Maintenance::run);
     m_timer->start();
 }

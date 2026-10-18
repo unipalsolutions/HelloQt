@@ -83,6 +83,9 @@ signals:
     void thumbnailReady(qint64 positionMs, const QImage &thumbnail);
     // الأجزاء المحللة من الملف حتى الآن [بداية، نهاية) بالمللي ثانية، مرتبة ولا تتداخل
     void analyzedRanges(const QList<QPair<qint64, qint64>> &ranges);
+    // الكاميرا: مواضع الوجوه المتتبَّعة في الإطار الجاري قبل اكتمال تحليله (بلا صورة)، ليلحق المربع الوجه
+    // المتحرك دون انتظار البصمات؛ يتبعها frameReady للإطار نفسه
+    void facesMoved(const QList<FaceItem> &faces);
     void trackUpdated(const FaceItem &track);
     // تغيّرت اللقطة عند هذا الموضع (قطع في المونتاج أو تبدّل الكاميرا)، للملفات فقط
     void shotChanged(qint64 positionMs);

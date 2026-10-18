@@ -18,7 +18,8 @@ public:
     explicit ImageView(QWidget *parent = nullptr);
 
     void setImage(const QImage &image, bool animate = false);
-    void setFaces(const QList<FaceItem> &faces);
+    // smooth = false: المربع يقفز إلى موضعه الجديد مباشرة دون انتقال (المواضع محسوبة لوقت الإطار المعروض)
+    void setFaces(const QList<FaceItem> &faces, bool smooth = true);
     void setSelectedFace(int id);
     void setBusy(bool busy, const QString &text = QString());
     void clear();

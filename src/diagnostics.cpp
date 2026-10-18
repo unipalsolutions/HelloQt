@@ -1559,7 +1559,7 @@ int recordTest(const QString &directory, QTextStream &out)
     };
     QString error;
 
-    // 1) تسجيل متصل: 3 ثوانٍ بسرعة 10 إطارات، ثم انقطاع 4 ثوانٍ لا يُملأ، ثم ثانية
+    // 1) تسجيل متصل: 3 ثوانٍ بسرعة 10 إطارات، ثم انقطاع 4 ثوانٍ، ثم ثانية في ملف ثانٍ يبدأ اسمه بوقت العودة
     CameraRecorder continuous;
     const bool started = continuous.start(folder, QStringLiteral("كاميرا الاختبار"), 10.0, {}, &error);
     feed(continuous, 30, 100, [&] { return movingFrame(cv::Size(641, 481)); });
@@ -1569,12 +1569,25 @@ int recordTest(const QString &directory, QTextStream &out)
     continuous.stop();
     const QStringList continuousFiles = continuous.files();
     cv::Size size;
-    const int continuousFrames = continuousFiles.size() == 1 ? frameCount(continuousFiles.first(), &size, nullptr) : -1;
-    const bool continuousOk = started && continuousFiles.size() == 1 && continuousFrames >= 34 && continuousFrames <= 48
-        && size == cv::Size(640, 480) && QFileInfo(continuousFiles.first()).fileName().startsWith(QStringLiteral("كاميرا الاختبار"));
+    const int continuousFrames = continuousFiles.size() == 2 ? frameCount(continuousFiles.first(), &size, nullptr) : -1;
+    const int resumedFrames = continuousFiles.size() == 2 ? frameCount(continuousFiles.last(), nullptr, nullptr) : -1;
+    // الفرق بين وقتي الملفين في اسميهما هو الوقت الفعلي: 3 ثوانٍ ثم 4 انقطاع
+    qint64 resumedAfterMs = -1;
+    if (continuousFiles.size() == 2) {
+        static const QRegularExpression stampPattern(QStringLiteral("(\\d{4}-\\d{2}-\\d{2} \\d{2}-\\d{2}-\\d{2})"));
+        const auto stamp = [](const QString &path) {
+            return QDateTime::fromString(stampPattern.match(QFileInfo(path).fileName()).captured(1), QStringLiteral("yyyy-MM-dd HH-mm-ss"));
+        };
+        resumedAfterMs = stamp(continuousFiles.first()).msecsTo(stamp(continuousFiles.last()));
+    }
+    const bool continuousOk = started && continuousFiles.size() == 2 && continuousFrames >= 26 && continuousFrames <= 34
+        && resumedFrames >= 7 && resumedFrames <= 14 && resumedAfterMs >= 6000 && resumedAfterMs <= 9000
+        && size == cv::Size(640, 480) && QFileInfo(continuousFiles.first()).fileName().startsWith(QStringLiteral("كاميرا الاختبار"))
+        && continuousFiles.first().endsWith(QStringLiteral(".mkv"));
     const bool positionOk = live.path == (continuousFiles.isEmpty() ? QString() : continuousFiles.first()) && live.ms >= 2000
         && live.ms <= 3200 && continuous.position().ms < 0;
-    out << "continuous_frames=" << continuousFrames << "\ncontinuous_size=" << size.width << "x" << size.height
+    out << "continuous_frames=" << continuousFrames << "\nresumed_frames=" << resumedFrames << "\nresumed_after_ms=" << resumedAfterMs
+        << "\ncontinuous_size=" << size.width << "x" << size.height
         << "\nlive_position_ms=" << live.ms << "\ncontinuous=" << continuousOk << "\nposition=" << positionOk << "\n";
 
     // 2) عند الحركة فقط: مشهد ساكن لا يُسجَّل، ثم حركة ثانية تُسجَّل مع ثانيتين قبلها وما بعدها
@@ -1639,8 +1652,53 @@ int recordTest(const QString &directory, QTextStream &out)
     CameraRecorder::setRetentionDays(previousRetention);
     const bool retentionOk = keptWithoutRetention == 0 && removed == 1 && !QFile::exists(oldRecording) && QFile::exists(otherFile)
         && !continuousFiles.isEmpty() && QFile::exists(continuousFiles.first());
-    out << "retention_removed=" << removed << "\nretention=" << retentionOk << "\n" << error;
-    return continuousOk && positionOk && motionOk && overlayOk && retentionOk ? 0 : 1;
+    out << "retention_removed=" << removed << "\nretention=" << retentionOk << "\n";
+
+    // 5) الانطفاء المفاجئ: ملف جارٍ قُطع في منتصفه يبقى صالحاً للتشغيل، ويُستعاد باسمه النهائي عند التشغيل التالي،
+    //    وبقايا MP4 غير مكتمل من الإصدارات السابقة تُحذف
+    bool recoveryOk = false;
+    int truncatedFrames = -1;
+    if (!continuousFiles.isEmpty()) {
+        const QString orphan = QDir(QDir::tempPath()).filePath(QStringLiteral("malamih-rec-diagtest.mkv"));
+        const QString legacy = QDir(QDir::tempPath()).filePath(QStringLiteral("malamih-rec-diagtest.mp4"));
+        const QString target = QDir(folder).filePath(QStringLiteral("انطفاء 2026-01-02 03-04-05.mkv"));
+        QFile source(continuousFiles.first());
+        source.open(QIODevice::ReadOnly);
+        const QByteArray whole = source.readAll();
+        QFile cut(orphan);
+        cut.open(QIODevice::WriteOnly);
+        cut.write(whole.left(whole.size() * 2 / 3));
+        cut.close();
+        QFile marker(orphan + QStringLiteral(".target"));
+        marker.open(QIODevice::WriteOnly);
+        marker.write(target.toUtf8());
+        marker.close();
+        QFile old(legacy);
+        old.open(QIODevice::WriteOnly);
+        old.write("mdat");
+        old.close();
+        const QString previousFolder = CameraRecorder::savedFolder();
+        CameraRecorder::setSavedFolder(folder);
+        const int recovered = CameraRecorder::recoverInterrupted();
+        CameraRecorder::setSavedFolder(previousFolder);
+        truncatedFrames = frameCount(target, nullptr, nullptr);
+        // أُعيد بناؤه فعاد له طول معروف كسائر التسجيلات
+        cv::VideoCapture rebuilt;
+        ImageIO::openVideo(rebuilt, target);
+        const int reportedFrames = int(rebuilt.get(cv::CAP_PROP_FRAME_COUNT));
+        rebuilt.release();
+        out << "recovered_count=" << recovered << "\nrecovered_reported_frames=" << reportedFrames << "\n";
+        const QList<CameraRecorder::RecordingFile> listed = CameraRecorder::recordings(QDateTime::fromString(QStringLiteral("2026-01-02"), Qt::ISODate),
+                                                                                       QDateTime::currentDateTime().addDays(1));
+        const bool remembered = std::any_of(listed.begin(), listed.end(), [&](const CameraRecorder::RecordingFile &f) {
+            return QFileInfo(f.path) == QFileInfo(target);
+        });
+        // قد يوجد ملف آخر انقطع فعلاً في مجلد الملفات المؤقتة، فيُستعاد معه
+        recoveryOk = recovered >= 1 && truncatedFrames >= 10 && std::abs(reportedFrames - truncatedFrames) <= 1 && remembered && !QFile::exists(orphan) && !QFile::exists(legacy)
+            && !QFile::exists(orphan + QStringLiteral(".target"));
+    }
+    out << "recovered_frames=" << truncatedFrames << "\nrecovery=" << recoveryOk << "\n" << error;
+    return continuousOk && positionOk && motionOk && overlayOk && retentionOk && recoveryOk ? 0 : 1;
 }
 
 

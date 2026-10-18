@@ -3,6 +3,7 @@
 #include "icons.h"
 
 #include <QComboBox>
+#include <QLabel>
 #include <QSlider>
 #include <QWidget>
 
@@ -279,6 +280,27 @@ protected:
 private:
     QHBoxLayout *m_layout;
     bool m_atEnd;
+};
+
+// نص في سطر واحد يُختصر بـ «…» حين يضيق مكانه بدل أن يُقص، والنص كاملاً في التلميح
+class ElidedLabel : public QLabel
+{
+    Q_OBJECT
+
+public:
+    explicit ElidedLabel(QWidget *parent = nullptr);
+
+    void setFullText(const QString &text);
+    QString fullText() const { return m_fullText; }
+    QSize minimumSizeHint() const override;
+    QSize sizeHint() const override;
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
+
+private:
+    void refresh();
+    QString m_fullText;
 };
 
 // شارة «مباشر» بنقطة حمراء تنبض، للبث الحي من الكاميرا
