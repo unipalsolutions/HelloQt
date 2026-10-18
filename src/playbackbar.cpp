@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QRegularExpression>
+#include <QRegularExpressionValidator>
 #include <QSettings>
 #include <QSlider>
 #include <QStandardPaths>
@@ -84,6 +85,9 @@ PlaybackBar::PlaybackBar(QWidget *parent)
     m_goTo->setAlignment(Qt::AlignCenter);
     m_goTo->setToolTip(QStringLiteral("الموضع الحالي. انقر واكتب وقتاً ثم Enter للانتقال إليه: 1:23 أو 01:02:03 أو 83 (ثانية) — Ctrl+G"));
     m_goTo->installEventFilter(this);
+    // لا يُقبل في الحقل إلا ما يكوّن وقتاً: أرقام لاتينية أو عربية وفواصلها، فلا تُكتب فيه حروف بالخطأ
+    m_goTo->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("[0-9\u0660-\u0669\u06F0-\u06F9:.,\u060C\u061B\u066B ]*")), m_goTo));
     m_length = new QLabel(transport);
     m_length->setObjectName(QStringLiteral("muted"));
 

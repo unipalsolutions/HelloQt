@@ -99,7 +99,13 @@ QVariant PersonListModel::data(const QModelIndex &index, int role) const
     case CardRole::Title:
         return person.name;
     case CardRole::Subtitle: {
-        QString subtitle = QStringLiteral("%1 صورة").arg(person.photoCount);
+        // صيغة العدد العربية: صورة واحدة، صورتان، 3–10 صور، 11 صورة فأكثر (ولا صور)
+        const int photos = person.photoCount;
+        QString subtitle = photos == 0 ? QStringLiteral("بلا صور")
+            : photos == 1              ? QStringLiteral("صورة واحدة")
+            : photos == 2              ? QStringLiteral("صورتان")
+            : photos <= 10             ? QStringLiteral("\u2066%1\u2069 صور").arg(photos)
+                                       : QStringLiteral("\u2066%1\u2069 صورة").arg(photos);
         if (!person.nationalId.isEmpty())
             subtitle = QStringLiteral("رقم الهوية %1 · ").arg(person.nationalId) + subtitle;
         if (FaceDatabase::isWatched(person.tags))

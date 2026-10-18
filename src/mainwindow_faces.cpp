@@ -590,7 +590,7 @@ void MainWindow::showFaceDetails()
     d.status = statusDescription(face.match.status);
     d.color = matchColor(face.match.status);
     d.watched = face.match.status == MatchStatus::Confirmed && m_watched.contains(face.match.personId);
-    d.score = qRound(face.match.score * 100);
+    d.score = std::clamp(qRound(face.match.score * 100), 0, 100);
     d.quality = qRound(face.quality * 100);
     d.video = m_videoMode;
     d.canSeek = fileVideo;

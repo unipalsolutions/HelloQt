@@ -125,9 +125,13 @@ void FaceDetailsPanel::showDetails(const Details &d)
         titles->addWidget(watched);
     }
     // صياغة قصيرة كي لا تُقص النسبة في اللوحة الضيقة، والكاملة في التلميح
-    auto *scores = new QLabel(QStringLiteral("تشابه %1% · جودة %2%").arg(d.score).arg(d.quality), m_content);
+    // بلا مرشحين (القاعدة فارغة مثلاً) لا معنى لنسبة تشابه صفرية، فتُعرض الجودة وحدها
+    const bool compared = !d.candidates.isEmpty();
+    auto *scores = new QLabel(compared ? QStringLiteral("تشابه %1% · جودة %2%").arg(d.score).arg(d.quality)
+                                       : QStringLiteral("جودة %1%").arg(d.quality), m_content);
     scores->setObjectName(QStringLiteral("muted"));
-    scores->setToolTip(QStringLiteral("التشابه %1% · جودة الوجه %2%").arg(d.score).arg(d.quality));
+    scores->setToolTip(compared ? QStringLiteral("التشابه %1% · جودة الوجه %2%").arg(d.score).arg(d.quality)
+                                : QStringLiteral("جودة الوجه %1% · لا أحد في القاعدة يُقارن به").arg(d.quality));
     titles->addWidget(scores);
     if (d.quality < 35) {
         auto *low = new QLabel(QStringLiteral("جودة الوجه منخفضة: النتيجة أقل موثوقية"), m_content);
