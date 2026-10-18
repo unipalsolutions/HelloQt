@@ -202,8 +202,24 @@ MainWindow::MainWindow(QWidget *parent)
     });
     // الكاميرا: المربعات تلحق الوجوه المتحركة فور كشفها، قبل اكتمال تحليل الإطار
     connect(m_videoWorker, &VideoWorker::facesMoved, this, [this](const QList<FaceItem> &faces) {
-        if (m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:")))
+        if (m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:")) && !cameraBoxesHeld())
             m_view->setFaces(faces);
+    });
+    // تبدّل المشهد في البث: العرض يسبق التحليل، فتُمسح المربعات فوراً ولا تُرسم نتائج إطارات المشهد السابق
+    // حتى يبلغ التحليل عدد التبدّلات نفسه (أو تمضي مهلة إن فاته تبدّل بين إطارين حللهما)
+    connect(m_player, &VideoPlayer::liveSceneCut, this, [this] {
+        if (!m_videoRunning)
+            return;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now >= m_boxesHeldUntil)
+            m_workerCuts = m_displayCuts;
+        ++m_displayCuts;
+        m_boxesHeldUntil = now + SceneCutHoldMs;
+        m_view->setFaces({}, false);
+    });
+    connect(m_videoWorker, &VideoWorker::cameraSceneCut, this, [this] {
+        // التحليل لا يسبق العرض، فتبدّل زائد عنده لا يقابله شيء ويُتجاهل
+        m_workerCuts = std::min(m_workerCuts + 1, m_displayCuts);
     });
     connect(m_videoWorker, &VideoWorker::shotChanged, this, [this](qint64 ms) {
         m_shotChanges.append(ms);
@@ -724,7 +740,7 @@ QWidget *MainWindow::createRecognitionPage()
     m_stopButton->setToolTip(QStringLiteral("إيقاف التحليل (Esc)"));
     m_recordButton = new FancyButton(Icons::Name::Record, QStringLiteral("تسجيل"), FancyButton::Kind::Secondary, page);
     m_recordButton->setCheckable(true);
-    m_recordButton->setToolTip(QStringLiteral("تسجيل بث الكاميرا إلى ملف فيديو MP4 (Ctrl+R)، بكل إطاراته وبعد معالجات الفيديو،\n"
+    m_recordButton->setToolTip(QStringLiteral("تسجيل بث الكاميرا إلى ملف فيديو (Ctrl+R)، بكل إطاراته وبعد معالجات الفيديو،\n"
                                               "ويستمر التسجيل أثناء الإيقاف المؤقت للتحليل. يُفتح التسجيل لاحقاً ويُحلَّل كأي فيديو"));
     m_recordButton->setVisible(false);
     connect(m_recordButton, &QAbstractButton::clicked, this, &MainWindow::toggleRecording);
@@ -983,6 +999,7 @@ QWidget *MainWindow::createRecognitionPage()
 
     // شريط تنبيه المراقبة: يظهر عندما يُتعرَّف على شخص من قائمة المراقبة
     m_alertBar = new QFrame(page);
+    m_alertBar->setProperty("toastAvoid", true);
     m_alertBar->setObjectName(QStringLiteral("alertBar"));
     m_alertBar->setStyleSheet(QStringLiteral("#alertBar { background: %2; border: 2px solid %1; border-radius: 12px; }")
                                   .arg(Theme::Danger.name(), Theme::mix(Theme::Surface, Theme::Danger, 0.18).name()));
@@ -1473,6 +1490,9 @@ void MainWindow::startVideo(const QString &source)
     m_pauseButton->setText(QStringLiteral("إيقاف مؤقت"));
     m_cameraRetryTimer->stop();
     m_cameraLostAt = 0;
+    m_boxesHeldUntil = 0;
+    m_displayCuts = 0;
+    m_workerCuts = 0;
     m_cameraOfflineAlerted = false;
     if (camera)
         AppLog::write(QStringLiteral("تشغيل الكاميرا «%1»").arg(m_cameraName));
@@ -1557,7 +1577,8 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
             m_view->setBusy(false);
             m_view->setImage(frame);
         }
-        m_view->setFaces(faces);
+        if (!cameraBoxesHeld())
+            m_view->setFaces(faces);
         noteCameraFaces(frame, faces);
     } else {
         m_analyzedFaces.insert(positionMs, faces);
@@ -1639,6 +1660,11 @@ void MainWindow::updateAnalysisBadge(qint64 positionMs)
     const auto next = m_analyzedFaces.upperBound(positionMs);
     const qint64 lagMs = next == m_analyzedFaces.begin() ? -1 : positionMs - std::prev(next).key();
     m_view->setStatusBadge(VideoPlayer::analysisLagText(lagMs, m_videoWorker->followsDisplay(), m_player->isPlaying()));
+}
+
+bool MainWindow::cameraBoxesHeld() const
+{
+    return m_workerCuts < m_displayCuts && QDateTime::currentMSecsSinceEpoch() < m_boxesHeldUntil;
 }
 
 QList<FaceItem> MainWindow::analyzedFacesAt(qint64 positionMs) const
@@ -1902,11 +1928,7 @@ void MainWindow::showFaceContextMenu(const QPoint &pos)
         if (!m_videoMode)
             menu.addAction(Icons::icon(Icons::Name::ZoomIn, Theme::Text, 18), QStringLiteral("تكبير على الوجه في الصورة"), this,
                            [this, id] { m_view->zoomToFace(id); });
-        menu.addAction(Icons::icon(Icons::Name::UserPlus, Theme::Text, 18), QStringLiteral("إضافة إلى قاعدة البيانات…"), this, [this, id] {
-            const int row = m_faceRows.value(id, -1);
-            if (row >= 0)
-                addFaceToDatabase(m_faces.at(row));
-        })->setEnabled(m_ready);
+        addEnrollActions(&menu, id);
         if (m_videoMode && !m_videoSource.startsWith(QStringLiteral("camera:")))
             menu.addAction(Icons::icon(Icons::Name::Collect, Theme::Text, 18), QStringLiteral("تعزيز صور الشخص من الفيديو…"), this,
                            [this, id] { harvestFromFace(id); });
@@ -2276,6 +2298,12 @@ void MainWindow::addRecentFile(const QString &path)
     while (files.size() > 12)
         files.removeLast();
     settings.setValue(QStringLiteral("recentFiles"), files);
+    // وقت الفتح لكل ملف، فشاشة البداية تعرض متى فُتح لا متى عُدّل
+    QVariantMap opened = settings.value(QStringLiteral("recentOpened")).toMap();
+    opened.insert(absolute, QDateTime::currentDateTime());
+    for (auto it = opened.begin(); it != opened.end();)
+        it = files.contains(it.key()) ? std::next(it) : opened.erase(it);
+    settings.setValue(QStringLiteral("recentOpened"), opened);
 }
 
 void MainWindow::showRecentMenu()
@@ -2306,6 +2334,7 @@ void MainWindow::fillRecentMenu(QMenu *menu)
         menu->addSeparator();
         menu->addAction(Icons::icon(Icons::Name::Trash, Theme::Text, 18), QStringLiteral("مسح القائمة"), this, [this] {
             QSettings().remove(QStringLiteral("recentFiles"));
+            QSettings().remove(QStringLiteral("recentOpened"));
             if (m_startScreen->isVisible())
                 m_startScreen->refresh();
         });
@@ -2375,13 +2404,7 @@ void MainWindow::showViewMenu(const QPoint &pos)
         selectFace(faceId);
         menu.addAction(Icons::icon(Icons::Name::ZoomIn, Theme::Text, 18), QStringLiteral("تكبير على هذا الوجه"), this,
                        [this, faceId] { m_view->zoomToFace(faceId); });
-        menu.addAction(Icons::icon(Icons::Name::UserPlus, Theme::Text, 18), QStringLiteral("إضافة الوجه إلى قاعدة البيانات…"), this,
-                       [this, faceId] {
-                           const int row = m_faceRows.value(faceId, -1);
-                           if (row >= 0)
-                               addFaceToDatabase(m_faces.at(row));
-                       })
-            ->setEnabled(m_ready);
+        addEnrollActions(&menu, faceId);
         menu.addSeparator();
     }
     if (m_view->zoom() > 1.0)
@@ -2476,10 +2499,15 @@ void MainWindow::openArchiveScan()
     auto *dialog = new ArchiveScanDialog(&m_engine, &m_database, threshold(), m_lastDirectory, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     m_archiveDialog = dialog;
-    connect(dialog, &ArchiveScanDialog::openRequested, this, [this](const QString &path) {
+    // نافذة حاجبة حتى لا تتغير الصفحة خلفها، وفتح نتيجة يخفيها ليظهر الملف (والمسح الجاري يستمر،
+    // وزر الأرشيف يعيدها)
+    dialog->setWindowModality(Qt::ApplicationModal);
+    connect(dialog, &ArchiveScanDialog::openRequested, this, [this, dialog](const QString &path) {
+        if (!m_openVideoButton->isEnabled())
+            return;
+        dialog->hide();
         m_navGroup->button(0)->click();
-        if (m_openVideoButton->isEnabled())
-            openFile(path);
+        openFile(path);
     });
     connect(dialog, &QDialog::finished, this, [this, dialog] {
         if (!dialog->lastDirectory().isEmpty())
@@ -2558,7 +2586,43 @@ void MainWindow::addSelectedFaceToDatabase()
     const int row = m_faceList->currentRow();
     if (row < 0 || row >= m_faces.size())
         return;
-    addFaceToDatabase(m_faces.at(row));
+    if (m_faces.at(row).match.status == MatchStatus::Confirmed)
+        addFaceToKnownPerson(m_faces.at(row).id);
+    else
+        addFaceToDatabase(m_faces.at(row));
+}
+
+void MainWindow::addEnrollActions(QMenu *menu, int faceId)
+{
+    const int faceRow = m_faceRows.value(faceId, -1);
+    const bool known = faceRow >= 0 && faceRow < m_faces.size() && m_faces.at(faceRow).match.status == MatchStatus::Confirmed;
+    if (known) {
+        // الوجه معروف: تُضاف صورته إلى ملفه مباشرة، ويبقى اختيار شخص آخر لمن يصحح
+        menu->addAction(Icons::icon(Icons::Name::UserPlus, Theme::Text, 18),
+                        QStringLiteral("إضافة الصورة إلى ملف %1").arg(m_faces.at(faceRow).match.name), this,
+                        [this, faceId] { addFaceToKnownPerson(faceId); })
+            ->setEnabled(m_ready);
+    }
+    menu->addAction(Icons::icon(known ? Icons::Name::Edit : Icons::Name::UserPlus, Theme::Text, 18),
+                    known ? QStringLiteral("إضافة إلى شخص آخر…") : QStringLiteral("إضافة الوجه إلى قاعدة البيانات…"), this,
+                    [this, faceId] {
+                        const int row = m_faceRows.value(faceId, -1);
+                        if (row >= 0 && row < m_faces.size())
+                            addFaceToDatabase(m_faces.at(row));
+                    })
+        ->setEnabled(m_ready);
+}
+
+void MainWindow::addFaceToKnownPerson(int faceId)
+{
+    const int row = m_faceRows.value(faceId, -1);
+    if (row < 0 || row >= m_faces.size())
+        return;
+    const FaceItem face = m_faces.at(row);
+    if (enrollFace(face.match.personId, face))
+        Toast::show(this, QStringLiteral("أضيفت الصورة إلى ملف %1").arg(face.match.name));
+    else
+        Toast::show(this, QStringLiteral("تعذرت إضافة الصورة"), Toast::Kind::Warning);
 }
 
 // يختار شخصاً من القاعدة أو ينشئ شخصاً جديداً؛ فارغ عند الإلغاء

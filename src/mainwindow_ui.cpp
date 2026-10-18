@@ -328,9 +328,7 @@ void MainWindow::updateStatusStrip()
             if (m_videoPaused)
                 setStatusAction(Icons::Name::Play, QStringLiteral("استئناف"), QStringLiteral("متابعة التحليل (مسافة)"),
                                 [this] { togglePause(); });
-            else if (!m_recorder->isRecording())
-                setStatusAction(Icons::Name::Record, QStringLiteral("بدء التسجيل"), QStringLiteral("تسجيل البث إلى ملف (Ctrl+R)"),
-                                [this] { toggleRecording(); });
+            // زر التسجيل في الشريط العائم فوق الصورة، فلا يُكرر هنا
         } else {
             title = QStringLiteral("الكاميرا «%1» متوقفة").arg(m_cameraName.isEmpty() ? Cameras::displayName(m_videoSource) : m_cameraName);
             detail = QStringLiteral("أشخاص مختلفون %1 · %2").arg(m_faces.size()).arg(counts());

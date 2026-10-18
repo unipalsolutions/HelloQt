@@ -210,7 +210,7 @@ void MainWindow::setupFacePanel(QWidget *side, QVBoxLayout *sideLayout)
     detailsScroll->setWidgetResizable(true);
     detailsScroll->setFrameShape(QFrame::NoFrame);
     detailsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    detailsScroll->setMinimumHeight(110);
+    detailsScroll->setMinimumHeight(80);
     detailsScroll->setStyleSheet(QStringLiteral("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"));
     // القائمة والتفاصيل في مقسم حتى يكبّر المستخدم أيهما شاء
     auto *sideSplitter = new QSplitter(Qt::Vertical, side);
@@ -270,6 +270,9 @@ void MainWindow::setFaceView(bool grid, int scalePercent)
     m_faceList->setUniformItemSizes(true);
     m_faceList->doItemsLayout();
     m_faceList->viewport()->update();
+    // بطاقة كاملة واحدة على الأقل، فلا تُقص النسبة حين يضيق المكان (كظهور شريط التنبيه)
+    const int cardHeight = m_faceDelegate->sizeHint(QStyleOptionViewItem(), QModelIndex()).height();
+    m_faceList->setMinimumHeight(std::max(90, cardHeight + 2 * m_faceList->frameWidth() + 4));
     QSettings settings(settingsPath(), QSettings::IniFormat);
     settings.setValue(QStringLiteral("faces/grid"), grid);
     settings.setValue(QStringLiteral("faces/size"), scalePercent);
@@ -557,12 +560,21 @@ void MainWindow::showFaceDetails()
     m_viewShotButton->setVisible(fileVideo);
     m_viewShotButton->setEnabled(row >= 0 && row < m_faces.size());
     if (row < 0 || row >= m_faces.size()) {
+        m_enrollFaceButton->setText(QStringLiteral("إضافة للقاعدة"));
         m_faceDetails->showMessage(QStringLiteral("اختر وجهاً من القائمة أو اضغط عليه في الصورة لعرض تفاصيله."));
         m_view->setSelectedFace(-1);
         return;
     }
 
     const FaceItem &face = m_faces.at(row);
+    // للوجه المعروف يضيف الزر صورته إلى ملفه مباشرة؛ الاسم يُختصر حتى لا يعرّض اللوحة
+    const bool known = face.match.status == MatchStatus::Confirmed;
+    const QString shortName = face.match.name.size() > 16 ? face.match.name.left(15) + QStringLiteral("…") : face.match.name;
+    m_enrollFaceButton->setText(known ? QStringLiteral("إضافة لملف %1").arg(shortName) : QStringLiteral("إضافة للقاعدة"));
+    m_enrollFaceButton->setToolTip(known ? QStringLiteral("إضافة صورة هذا الوجه إلى ملف %1 في القاعدة\n"
+                                                          "لإضافته إلى شخص آخر: زر الفأرة الأيمن على الوجه في الصورة")
+                                                .arg(face.match.name)
+                                         : QStringLiteral("إضافة الوجه المحدد إلى شخص في قاعدة البيانات، أو إلى شخص جديد"));
     m_view->setSelectedFace(face.id);
     m_timeline->setSelectedLane(face.id);
 

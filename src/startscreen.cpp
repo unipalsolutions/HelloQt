@@ -457,6 +457,7 @@ void StartScreen::refresh()
     clearList(m_cameraLayout);
 
     const QStringList files = QSettings().value(QStringLiteral("recentFiles")).toStringList();
+    const QVariantMap opened = QSettings().value(QStringLiteral("recentOpened")).toMap();
     int shown = 0;
     QStringList seen;
     for (const QString &file : files) {
@@ -467,10 +468,11 @@ void StartScreen::refresh()
             continue;
         seen.append(info.absoluteFilePath());
         const bool video = VideoSuffixes.contains(info.suffix().toLower());
+        const QDateTime openedAt = opened.value(info.absoluteFilePath(), info.lastModified()).toDateTime();
         // ⁨…⁩ حتى لا يقلب اسم الملف اللاتيني ترتيب السطر
         auto *row = new StartRow(video ? QPixmap() : thumbnail(info), video ? Icons::Name::Video : Icons::Name::Image,
                                  QStringLiteral("⁨%1⁩").arg(info.fileName()),
-                                 QStringLiteral("%1 · ⁨%2⁩").arg(ago(info.lastModified()), info.dir().dirName()), this);
+                                 QStringLiteral("%1 · ⁨%2⁩").arg(ago(openedAt), info.dir().dirName()), this);
         row->setToolTip(QDir::toNativeSeparators(info.absoluteFilePath()));
         row->setEnabled(m_ready);
         connect(row, &QAbstractButton::clicked, this, [this, file] { emit fileRequested(file); });

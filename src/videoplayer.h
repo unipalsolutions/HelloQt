@@ -68,6 +68,8 @@ public:
 signals:
     void frameReady(const QImage &frame, qint64 positionMs);
     void reachedEnd();
+    // البث المباشر: تبدّل المشهد في الإطار المعروض، قبل أن يصل تحليله
+    void liveSceneCut();
 
 private:
     void runFile(cv::VideoCapture &capture);

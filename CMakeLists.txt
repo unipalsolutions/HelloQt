@@ -93,6 +93,7 @@ qt_add_executable(Malamih
     src/videoplayer.h
     src/videoplayer.cpp
     src/videoworker.h
+    src/scenecut.h
     src/videoworker.cpp
     src/shotviewer.h
     src/shotviewer.cpp

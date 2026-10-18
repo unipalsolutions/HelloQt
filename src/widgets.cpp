@@ -462,7 +462,18 @@ void Toast::show(QWidget *host, const QString &text, Kind kind)
     s_current = toast;
 
     // في وسط الأعلى تحت الترويسة، بعيداً عن أدوات التشغيل والعدّاد أسفل الصورة، وتنزل من الأعلى
-    const QPoint end((host->width() - toast->width()) / 2, std::min(86, host->height() / 5));
+    QPoint end((host->width() - toast->width()) / 2, std::min(86, host->height() / 5));
+    // يُرتَّب ما أُظهر للتو (كشريط التنبيه) قبل حساب موضعه
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    // لا يغطي شريطاً ظاهراً عليه الخاصية toastAvoid (كشريط تنبيه المراقبة)، فينزل تحته
+    const QList<QWidget *> children = host->findChildren<QWidget *>();
+    for (QWidget *child : children) {
+        if (!child->property("toastAvoid").toBool() || !child->isVisible())
+            continue;
+        const QRect area(child->mapTo(host, QPoint(0, 0)), child->size());
+        if (area.top() < end.y() + toast->height() && area.bottom() > end.y())
+            end.setY(area.bottom() + 10);
+    }
     toast->move(end - QPoint(0, 24));
     auto *effect = new QGraphicsOpacityEffect(toast);
     effect->setOpacity(0.0);

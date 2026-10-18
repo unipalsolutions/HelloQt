@@ -2,6 +2,7 @@
 
 #include "cameras.h"
 #include "imageio.h"
+#include "scenecut.h"
 #include "videofilters.h"
 
 #include <QElapsedTimer>
@@ -282,10 +283,15 @@ void VideoPlayer::runLive()
     clock.start();
     quint64 seen = 0;
     cv::Mat frame;
+    SceneCutDetector sceneCuts;
     while (!m_stop) {
         if (!m_slot->wait(seen, frame, 100))
             continue;
-        if (m_playing)
-            deliver(frame, clock.elapsed(), false);
+        if (!m_playing)
+            continue;
+        // مربعات المشهد السابق لا تبقى على المشهد الجديد حتى يصل تحليله
+        if (frame.channels() == 3 && sceneCuts.update(frame))
+            emit liveSceneCut();
+        deliver(frame, clock.elapsed(), false);
     }
 }

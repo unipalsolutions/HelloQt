@@ -170,6 +170,7 @@ private:
     void onPlayerFrame(const QImage &frame, qint64 positionMs);
     // وجوه الموضع المعروض من نتائج التحليل المحفوظة، بين أقرب إطارين محللين
     QList<FaceItem> analyzedFacesAt(qint64 positionMs) const;
+    bool cameraBoxesHeld() const;
     bool hasAnalysisNear(qint64 positionMs) const;
     // شارة على الإطار حين يُعرض موضع لم يصله التحليل، فلا يُظن أن البرنامج لم يجد وجوهاً
     void updateAnalysisBadge(qint64 positionMs);
@@ -201,6 +202,8 @@ private:
     void addRecentFile(const QString &path);
     void showRecentMenu();
     void addSelectedFaceToDatabase();
+    void addFaceToKnownPerson(int faceId);
+    void addEnrollActions(QMenu *menu, int faceId);
     void addFaceToDatabase(FaceItem face); // نسخة لأن الحوار يعيد بناء m_faces أثناء انتظاره
     void onIdentitiesMerged(int keepId, int removedId);
     void showFaceContextMenu(const QPoint &pos);
@@ -312,6 +315,9 @@ private:
     bool m_ready = false;
     QDateTime m_previousCrash;
     qint64 m_cameraLostAt = 0;      // بداية انقطاع الكاميرا الجارية
+    qint64 m_boxesHeldUntil = 0;    // بعد تبدّل المشهد المعروض: نتائج المشهد السابق لا تُرسم حتى هذا الوقت
+    int m_displayCuts = 0;          // تبدّلات المشهد في البث المعروض
+    int m_workerCuts = 0;           // ما بلغه التحليل منها
     QString m_videoError;           // سبب توقف تحليل ملف الفيديو، فارغ إن انتهى طبيعياً
     bool m_cameraOfflineAlerted = false;
     QTimer *m_cameraRetryTimer = nullptr; // إعادة تشغيل الكاميرا الموصولة إن انقطعت ولم تعد

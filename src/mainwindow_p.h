@@ -107,6 +107,8 @@ constexpr qint64 CameraOfflineAlertMs = 2 * 60 * 1000;
 constexpr int CameraRestartMs = 30 * 1000;
 // أقصى ما يكمل فيه مربع الوجه حركته المتوقعة حين يسبق العرض تحليل الإطار التالي
 constexpr qint64 MaxBoxExtrapolationMs = 250;
+// تبدّل المشهد في البث: أطول انتظار لتحليل المشهد الجديد
+constexpr qint64 SceneCutHoldMs = 1500;
 constexpr int SightingPositionRole = Qt::UserRole + 120;
 
 const QString ImageFilter = QStringLiteral("الصور (*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff);;كل الملفات (*)");

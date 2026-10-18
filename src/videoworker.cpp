@@ -4,6 +4,7 @@
 #include "faceengine.h"
 #include "imageio.h"
 #include "performance.h"
+#include "scenecut.h"
 #include "videofilters.h"
 
 #include <QElapsedTimer>
@@ -28,6 +29,9 @@ constexpr int MinTrackHits = 3;           // لا يُعتمد الوجه قبل
 constexpr int EmbedInterval = 5;          // إعادة حساب بصمة الوجه المتتبَّع كل عدة إطارات فقط
 constexpr int QuickEmbedInterval = 20;    // في الفحص السريع: بصمة الوجه المتتبَّع نحو كل 5 ثوانٍ فقط
 constexpr float BetterShotMargin = 0.08f; // لقطة أوضح من أفضل لقطة سابقة تُحلَّل فوراً
+// الكاميرا: وجه يطابق شخصاً في القاعدة يُعتمد بعد ظهورين بدل MinTrackHits، فمن يمر سريعاً (لقطة قصيرة أو
+// تحليل بطيء) يُعرف وينبَّه عليه قبل أن يغيب؛ والكشف الخاطئ لا يطابق شخصاً في القاعدة
+constexpr int KnownTrackHits = 2;
 // وجه في موضع وجه سابق لكن بصمته بعيدة عنه: شخص آخر (تبدّل اللقطة في حوار مثلاً) فلا يُلحق بمساره
 constexpr float TrackBreakSimilarity = 0.22f;
 // وجه جديد يُربط بهوية سابقة إذا شابهها بهذا القدر؛ الحد أقل للوجوه الرديئة لأن تشابه
@@ -219,50 +223,6 @@ quint64 pairKey(int a, int b)
 {
     return (quint64(quint32(std::min(a, b))) << 32) | quint32(std::max(a, b));
 }
-
-// تبدّل اللقطة (قطع المشهد) يُعرف من تغيّر توزيع الألوان والإضاءة فجأة بين إطارين محللين
-class SceneCutDetector
-{
-public:
-    bool update(const cv::Mat &frame)
-    {
-        cv::Mat scaled;
-        cv::resize(frame, scaled, cv::Size(64, 36), 0, 0, cv::INTER_AREA);
-        cv::Mat hsv;
-        cv::cvtColor(scaled, hsv, cv::COLOR_BGR2HSV);
-        const int channels[] = {0, 1};
-        const int sizes[] = {16, 8};
-        const float hueRange[] = {0.0f, 180.0f};
-        const float satRange[] = {0.0f, 256.0f};
-        const float *ranges[] = {hueRange, satRange};
-        cv::Mat hist;
-        cv::calcHist(&hsv, 1, channels, cv::Mat(), hist, 2, sizes, ranges);
-        cv::normalize(hist, hist, 1.0, 0.0, cv::NORM_L1);
-        cv::Mat gray;
-        cv::cvtColor(scaled, gray, cv::COLOR_BGR2GRAY);
-
-        bool cut = false;
-        if (!m_hist.empty()) {
-            const double colors = cv::compareHist(m_hist, hist, cv::HISTCMP_BHATTACHARYYA);
-            const double pixels = cv::norm(gray, m_gray, cv::NORM_L1) / double(gray.total());
-            cut = colors > 0.5 || (colors > 0.3 && pixels > 35.0);
-        }
-        m_hist = hist;
-        m_gray = gray;
-        return cut;
-    }
-
-    // بعد القفز إلى موضع آخر: الإطار التالي ليس استمراراً لما قبله
-    void reset()
-    {
-        m_hist.release();
-        m_gray.release();
-    }
-
-private:
-    cv::Mat m_hist;
-    cv::Mat m_gray;
-};
 
 cv::Mat turned(const cv::Mat &image, int turns)
 {
@@ -883,6 +843,8 @@ void VideoWorker::run(const QString &source)
             tracks.clear(); // لقطة جديدة: لا يُفترض أن الوجه في الموضع نفسه هو الشخص نفسه
             if (!camera && processed > 1)
                 emit shotChanged(positionMs);
+            else if (camera)
+                emit cameraSceneCut();
         }
 
         // 1) كشف الوجوه داخل منطقة التحليل فقط، وربطها بالمسارات المفتوحة حسب تداخل الموضع
@@ -1160,6 +1122,17 @@ void VideoWorker::run(const QString &source)
                     const QRectF box = shown(toRect(detection.face.box));
                     identity.sourceBox = QRectF(box.topLeft() / workScale, box.size() / workScale);
                     betterShot = true;
+                }
+            }
+            if (camera && !identity.confirmed && gallery && !detection.embedding.empty() && track.hits >= KnownTrackHits) {
+                const MatchResult known = FaceDatabase::identify(*gallery, identity.mean, threshold);
+                if (known.status == MatchStatus::Confirmed) {
+                    identity.confirmed = true;
+                    firstConfirmation = true;
+                    identity.match = known;
+                    identity.identifiedMean = identity.mean;
+                    identity.matchStale = false;
+                    identity.forceIdentify = false;
                 }
             }
             if (!identity.confirmed)
