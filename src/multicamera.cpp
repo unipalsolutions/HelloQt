@@ -516,7 +516,9 @@ void MultiCameraWindow::render(Feed &feed, const cv::Mat &frame)
 {
     if (frame.empty())
         return;
-    const QSize area = feed.view->size();
+    // بنقاط الشاشة الفعلية، فلا يُمدّ الإطار ويغبش على شاشة مكبّرة (125%، 150%)
+    const double ratio = feed.view->devicePixelRatioF();
+    const QSize area = (QSizeF(feed.view->size()) * ratio).toSize();
     const double scale = std::min(area.width() / double(frame.cols), area.height() / double(frame.rows));
     if (scale <= 0.0)
         return;
@@ -534,16 +536,16 @@ void MultiCameraWindow::render(Feed &feed, const cv::Mat &frame)
         const double sx = double(image.width()) / feed.facesSize.width();
         const double sy = double(image.height()) / feed.facesSize.height();
         QFont font = painter.font();
-        font.setPixelSize(std::max(11, image.height() / 28));
+        font.setPixelSize(std::max(int(std::lround(11 * ratio)), image.height() / 28));
         font.setBold(true);
         painter.setFont(font);
         for (const Face &face : std::as_const(feed.faces)) {
             const QRectF box(face.box.x() * sx, face.box.y() * sy, face.box.width() * sx, face.box.height() * sy);
             const bool watched = face.match.status == MatchStatus::Confirmed && m_watched.contains(face.match.personId);
             const QColor color = watched ? Theme::Watched : matchColor(face.match.status);
-            painter.setPen(QPen(color, 2));
+            painter.setPen(QPen(color, 2 * ratio));
             painter.setBrush(Qt::NoBrush);
-            painter.drawRoundedRect(box, 4, 4);
+            painter.drawRoundedRect(box, 4 * ratio, 4 * ratio);
             const QString label = matchLabel(face.match);
             const QRectF text = painter.boundingRect(QRectF(), Qt::AlignCenter, label).adjusted(-5, -2, 5, 2);
             const QRectF tag(box.left(), std::max(0.0, box.top() - text.height() - 2), text.width(), text.height());
@@ -552,6 +554,7 @@ void MultiCameraWindow::render(Feed &feed, const cv::Mat &frame)
             painter.drawText(tag, Qt::AlignCenter, label);
         }
     }
+    image.setDevicePixelRatio(ratio);
     feed.view->setPixmap(QPixmap::fromImage(image));
 }
 

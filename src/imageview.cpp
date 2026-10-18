@@ -188,7 +188,8 @@ QRectF ImageView::fitRect(const QImage &image) const
 
 QSize ImageView::fitSize() const
 {
-    return m_image.isNull() || m_zoom > 1.0 ? QSize() : imageRect().size().toSize();
+    // بنقاط الشاشة الفعلية: على شاشة مكبّرة (125%، 150%) يُرسم الإطار بدقتها لا بدقة أقل ثم يُمدّ
+    return m_image.isNull() || m_zoom > 1.0 ? QSize() : (imageRect().size() * devicePixelRatioF()).toSize();
 }
 
 QRectF ImageView::imageRect() const
@@ -468,11 +469,13 @@ void ImageView::paintEvent(QPaintEvent *)
     p.setClipPath(clip);
     if (fade >= 1.0 && m_zoom <= 1.0) {
         // بلا تكبير ولا انتقال: نسخة مصغّرة مرة واحدة لكل إطار وحجم نافذة
-        const QSize size = target.size().toSize();
+        const double ratio = devicePixelRatioF();
+        const QSize size = (target.size() * ratio).toSize();
         if (m_scaled.size() != size || m_scaledKey != m_image.cacheKey()) {
             m_scaled = m_image.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
             m_scaledKey = m_image.cacheKey();
         }
+        m_scaled.setDevicePixelRatio(ratio);
         p.drawImage(target.topLeft(), m_scaled);
     } else {
         p.drawImage(zoomed, m_image);

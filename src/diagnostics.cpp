@@ -2268,7 +2268,7 @@ int bench(const QString &videoPath, int seconds, QTextStream &out)
 }
 
 // خيارات التسجيل في الاختبار الحي، مع السرعة الكاملة عند طلبها من البيئة
-CameraRecorder::Options recordOptionsFromEnv()
+static CameraRecorder::Options recordOptionsFromEnv()
 {
     CameraRecorder::Options options;
     options.fullRate = qEnvironmentVariableIsSet("MALAMIH_LIVE_FULLRATE");
