@@ -75,6 +75,9 @@ signals:
     void reachedEnd();
     // البث المباشر: تبدّل المشهد في الإطار المعروض، قبل أن يصل تحليله
     void liveSceneCut();
+    // الملف: تبدّل اللقطة في الإطار المعروض عند positionMs؛ يصل قبل الإطار نفسه، فلا تبقى عليه مربعات اللقطة
+    // السابقة حين يقع التبدّل بين إطارين حللهما التحليل
+    void fileSceneCut(qint64 positionMs);
 
 private:
     void runFile(cv::VideoCapture &capture);

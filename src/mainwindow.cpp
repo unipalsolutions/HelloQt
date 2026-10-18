@@ -192,6 +192,10 @@ MainWindow::MainWindow(QWidget *parent)
     });
     m_player = new VideoPlayer(this);
     connect(m_player, &VideoPlayer::frameReady, this, &MainWindow::onPlayerFrame);
+    connect(m_player, &VideoPlayer::fileSceneCut, this, [this](qint64 ms) {
+        if (!m_displayShotChanges.contains(ms))
+            m_displayShotChanges.append(ms);
+    });
     connect(m_player, &VideoPlayer::reachedEnd, this, [this] {
         updatePauseButton();
         checkAutoNext();
@@ -1449,6 +1453,7 @@ void MainWindow::startVideo(const QString &source)
     if (camera && m_videoFullscreen)
         toggleVideoFullscreen();
     m_shotChanges.clear();
+    m_displayShotChanges.clear();
     m_markers = camera ? QMap<qint64, QString>() : VideoMarkers::load(source);
     m_timeline->setMarkers(m_markers);
     updateVideoNavigation();
@@ -1686,10 +1691,14 @@ QList<FaceItem> MainWindow::analyzedFacesAt(qint64 positionMs) const
     const auto previous = std::prev(next);
     if (positionMs - previous.key() > VideoPlayer::AnalysisToleranceMs)
         return {};
-    // تغيّرت اللقطة بعد آخر إطار محلل: وجوه اللقطة السابقة لا تبقى على المشهد الجديد حتى يصل تحليله
-    for (const qint64 cut : m_shotChanges) {
-        if (cut > previous.key() && cut <= positionMs)
-            return {};
+    // تغيّرت اللقطة بعد آخر إطار محلل: وجوه اللقطة السابقة لا تبقى على المشهد الجديد حتى يصل تحليله.
+    // التحليل لا يرى التبدّل إلا في إطار يحلله، فقد يقع قبله بإطارات معروضة (أو في آخر الملف بعد آخر إطار
+    // حلله)، فتُعتمد تبدّلات العرض أيضاً
+    for (const QList<qint64> *cuts : {&m_shotChanges, &m_displayShotChanges}) {
+        for (const qint64 cut : *cuts) {
+            if (cut > previous.key() && cut <= positionMs)
+                return {};
+        }
     }
     QList<FaceItem> faces = previous.value();
     // بين إطارين محللين: المربع ينتقل خطياً من موضعه في الأول إلى موضعه في الثاني. وإن لم يصل تحليل الإطار

@@ -464,6 +464,7 @@ private:
     SegmentedControl *m_laneFilter = nullptr;          // تصفية مسارات الخط الزمني حسب الحالة
     QMap<qint64, QString> m_markers;            // علامات الفيديو الحالي وملاحظاتها
     QList<qint64> m_shotChanges;                // مواضع تغيّر اللقطة التي وجدها التحليل
+    QList<qint64> m_displayShotChanges;         // مواضع تغيّر اللقطة التي وجدها العرض في الإطارات المعروضة
     QStringList m_videoSiblings;                // فيديوهات مجلد الفيديو الحالي بالترتيب الطبيعي
     QString m_pendingVideo;                     // فيديو يُفتح بعد توقف التحليل الجاري
     bool m_videoFullscreen = false;

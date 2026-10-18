@@ -230,6 +230,7 @@ void VideoPlayer::runFile(cv::VideoCapture &capture)
     double anchorMs = 0.0; // موضع الإطار التالي لحظة anchor
     int lateGrabs = 0;
     cv::Mat frame;
+    SceneCutDetector sceneCuts;
     auto elapsedMs = [&] { return std::chrono::duration<double, std::milli>(Clock::now() - anchor).count(); };
 
     while (!m_stop) {
@@ -249,7 +250,11 @@ void VideoPlayer::runFile(cv::VideoCapture &capture)
             // القفز برقم الإطار لا بالزمن، فيصل إلى الإطار نفسه الذي حلله التحليل عند هذا الموضع
             next = qint64(std::floor(double(seekMs) / interval + 1e-6));
             capture.set(cv::CAP_PROP_POS_FRAMES, double(next));
+            // بعد القفز يُقارن بالإطار الجديد لا بإطار من موضع آخر
+            sceneCuts.reset();
             if (capture.read(frame)) {
+                if (frame.channels() == 3)
+                    sceneCuts.update(frame);
                 deliver(frame, qint64(double(next) * interval), true);
                 ++next;
             }
@@ -299,6 +304,8 @@ void VideoPlayer::runFile(cv::VideoCapture &capture)
             emit reachedEnd();
             continue;
         }
+        if (frame.channels() == 3 && sceneCuts.update(frame))
+            emit fileSceneCut(qint64(nextMs));
         deliver(frame, qint64(nextMs), false);
         ++next;
     }

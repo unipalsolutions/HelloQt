@@ -404,6 +404,7 @@ void MainWindow::closeCurrentFile()
     m_view->setStatusBadge(QString());
     m_markers.clear();
     m_shotChanges.clear();
+    m_displayShotChanges.clear();
     refreshFaceList();
     m_view->setFaces({});
     m_view->setRegion(QRectF());
