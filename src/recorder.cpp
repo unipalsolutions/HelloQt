@@ -34,6 +34,15 @@ namespace {
 constexpr size_t MaxQueue = 90;                 // نحو 3 ثوانٍ؛ إن تأخرت الكتابة تُترك أقدم الإطارات
 constexpr qint64 MinFreeBytes = 500ll << 20;    // يتوقف التسجيل قبل أن يمتلئ القرص
 constexpr double MaxGapSeconds = 2.0;           // انقطاع أطول لا يُملأ بإطار متجمد
+// جهاز لا يلحق بترميز كل إطارات الكاميرا: تُترك الإطارات حين يمتلئ الطابور ويُكرر ما قبلها لملء الوقت، فيظهر
+// التسجيل متجمداً ثم يقفز، والتكرار نفسه ترميز إضافي يزيد التأخر. فإن تجاوز الترميز هذه النسبة من الوقت يُسجَّل
+// بجزء صحيح من سرعة الكاميرا (النصف، الثلث…) في ملف جديد، فتبقى الحركة منتظمة بسرعة أقل. وإن خف الحمل بعد ذلك
+// (انتهى برنامج آخر مثلاً) ترتفع السرعة بالقياس نفسه، فهي تتبع قدرة الجهاز في كل وقت لا قيمة ثابتة
+constexpr double EncodeBudget = 0.7;
+constexpr double EncodeHeadroom = 0.8;
+constexpr int EncodeSamples = 50;               // إطارات تُقاس قبل الحكم على سرعة الترميز
+constexpr double MinRecordFps = 5.0;
+constexpr auto RaiseAfter = std::chrono::seconds(60); // أقل مدة بين تغيير السرعة ورفعها، فلا تتكاثر الملفات
 // توقف وصول الإطارات أطول من هذا (انقطاع الكاميرا) يبدأ ملفاً جديداً باسم وقت العودة، فيبقى الوقت داخل كل ملف
 // مطابقاً للوقت الفعلي. أما هدوء وضع الحركة فالإطارات تصل فيه ولا يُعد انقطاعاً
 constexpr auto FeedGap = std::chrono::milliseconds(2000);
@@ -246,7 +255,10 @@ bool CameraRecorder::start(const QString &folder, const QString &cameraName, dou
     }
     m_folder = folder;
     m_cameraName = safeName(cameraName);
-    m_fps = fps > 1.0 && fps <= 60.0 ? fps : 25.0;
+    m_fps = m_cameraFps = fps > 1.0 && fps <= 60.0 ? fps : 25.0;
+    m_encodeMs = 0.0;
+    m_encodeSamples = 0;
+    m_rateChanged = Clock::now();
     m_options = options;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -258,6 +270,7 @@ bool CameraRecorder::start(const QString &folder, const QString &cameraName, dou
     }
     m_liveMs = -1;
     m_activity = 0;
+    m_received = m_dropped = m_writtenTotal = 0;
     m_preRoll.clear();
     m_motionReference.release();
     m_hadMotion = false;
@@ -309,6 +322,11 @@ CameraRecorder::Position CameraRecorder::position() const
     return result;
 }
 
+CameraRecorder::Stats CameraRecorder::stats() const
+{
+    return {m_received.load(), m_dropped.load(), m_writtenTotal.load()};
+}
+
 void CameraRecorder::push(const cv::Mat &frame)
 {
     if (!m_recording || frame.empty())
@@ -317,8 +335,11 @@ void CameraRecorder::push(const cv::Mat &frame)
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stop)
             return;
-        if (m_queue.size() >= MaxQueue)
+        ++m_received;
+        if (m_queue.size() >= MaxQueue) {
             m_queue.pop_front();
+            ++m_dropped;
+        }
         // الإطار لا يُنسخ: خيط القراءة يقرأ كل إطار في ذاكرة جديدة، والمعالجات لا تكتب في الأصل
         m_queue.push_back({frame, Clock::now()});
     }
@@ -552,10 +573,31 @@ void CameraRecorder::write(const cv::Mat &frame, Clock::time_point time)
         target = m_written + 1;
     }
     while (m_written < target) {
+        const Clock::time_point began = Clock::now();
         m_writer.write(frame);
+        const double ms = std::chrono::duration<double, std::milli>(Clock::now() - began).count();
+        m_encodeMs = m_encodeSamples++ == 0 ? ms : m_encodeMs * 0.95 + ms * 0.05;
         ++m_written;
+        ++m_writtenTotal;
     }
     m_liveMs = qint64(double(m_written - 1) * 1000.0 / m_fps);
+
+    if (m_encodeSamples < EncodeSamples)
+        return;
+    // السرعة التي يتسع لها الجهاز الآن، بهامش تحت الحد فلا تتأرجح (ومعها ملف جديد) إن تغير زمن الترميز قليلاً
+    const int divisor = std::max(1, int(std::ceil(m_encodeMs * m_cameraFps / (EncodeHeadroom * EncodeBudget * 1000.0))));
+    const double fitting = std::max(std::min(MinRecordFps, m_cameraFps), m_cameraFps / divisor);
+    const bool lower = m_encodeMs * m_fps > EncodeBudget * 1000.0 && fitting < m_fps - 0.01;
+    const bool raise = fitting > m_fps + 0.01 && time - m_rateChanged >= RaiseAfter;
+    if (m_encodeMs * m_fps > EncodeBudget * 1000.0)
+        m_encodeSamples = 0; // يُعاد القياس بعد كل حكم بالخفض، أما الرفع فينتظر مرور المدة فقط
+    if (!lower && !raise)
+        return;
+    qWarning("زمن ترميز الإطار %.0f ms: يُسجَّل بسرعة %.1f إطاراً في الثانية (الكاميرا %.1f)", m_encodeMs, fitting, m_cameraFps);
+    m_fps = fitting;
+    m_rateChanged = time;
+    m_encodeSamples = 0;
+    closeSegment();
 }
 
 bool CameraRecorder::openSegment(const cv::Size &size, Clock::time_point time, QString *error)

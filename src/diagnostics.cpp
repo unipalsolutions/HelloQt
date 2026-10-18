@@ -2266,6 +2266,229 @@ int bench(const QString &videoPath, int seconds, QTextStream &out)
     return switched && (!hasVideo || analyzed > 0) ? 0 : 1;
 }
 
+// البث الحي كما في الواجهة: كاميرا شبكة حقيقية (ffmpeg بسرعة 25 إطاراً/ث) مع العرض والتحليل والتسجيل معاً.
+// يُقاس تأخر القراءة عن الكاميرا، وإطارات التسجيل المتروكة، والوجوه المعتمدة والمعروفة أثناء البث، ثم
+// مدة الملف المسجَّل ووجوهه عند تحليله بعد ذلك. MALAMIH_LIVE_FFMPEG_CPUS يفصل أنوية الخادم عن البرنامج
+int liveTest(const QString &videoPath, int seconds, const QString &size, const QString &enrollImage, QTextStream &out)
+{
+    const QString ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+    if (ffmpeg.isEmpty()) {
+        out << "error=ffmpeg not found\n";
+        return 1;
+    }
+    FaceEngine engine;
+    if (!loadEngine(engine, out))
+        return 1;
+    const QString work = QDir::temp().filePath(QStringLiteral("malamih-live"));
+    QDir(work).removeRecursively();
+    FaceDatabase database;
+    QString error;
+    if (!database.open(QDir(work).filePath(QStringLiteral("db")), &error)) {
+        out << "error=" << error << "\n";
+        return 1;
+    }
+    QString knownId;
+    if (enrollImage != QLatin1String("-")) {
+        const cv::Mat image = ImageIO::loadImage(enrollImage);
+        std::vector<AnalyzedFace> faces = engine.analyze(image, true);
+        if (faces.empty()) {
+            out << "error=no face in " << enrollImage << "\n";
+            return 1;
+        }
+        const auto largest = std::max_element(faces.begin(), faces.end(), [](const AnalyzedFace &a, const AnalyzedFace &b) {
+            return a.detection.box.area() < b.detection.box.area();
+        });
+        Person person;
+        person.name = QStringLiteral("شخص معروف");
+        knownId = database.addPerson(person);
+        const FaceItem item = ImageIO::makeFaceItem(image, *largest, 1);
+        database.addPhoto(knownId, ImageIO::faceCrop(item), engine.enrollmentEmbeddings(largest->aligned), largest->quality);
+    }
+
+    const QString url = QStringLiteral("http://127.0.0.1:8094/live");
+    QString scale = size;
+    scale.replace(QLatin1Char('x'), QLatin1Char(':'));
+    QStringList serverArgs{QStringLiteral("-loglevel"), QStringLiteral("error"), QStringLiteral("-re"), QStringLiteral("-stream_loop"),
+                           QStringLiteral("-1"), QStringLiteral("-i"), videoPath, QStringLiteral("-vf"), QStringLiteral("scale=%1").arg(scale),
+                           QStringLiteral("-r"), QStringLiteral("25")};
+    // MALAMIH_LIVE_FORMAT=h264: بث H.264 كأغلب كاميرات الشبكة، وفك ترميزه أثقل كثيراً من MJPEG
+    if (qEnvironmentVariable("MALAMIH_LIVE_FORMAT") == QLatin1String("h264"))
+        serverArgs << QStringLiteral("-c:v") << QStringLiteral("libx264") << QStringLiteral("-preset") << QStringLiteral("ultrafast")
+                   << QStringLiteral("-tune") << QStringLiteral("zerolatency") << QStringLiteral("-g") << QStringLiteral("50")
+                   << QStringLiteral("-f") << QStringLiteral("mpegts");
+    else
+        serverArgs << QStringLiteral("-q:v") << QStringLiteral("5") << QStringLiteral("-f") << QStringLiteral("mjpeg");
+    serverArgs << QStringLiteral("-listen") << QStringLiteral("1") << url;
+    QString program = ffmpeg;
+    const QString cpus = qEnvironmentVariable("MALAMIH_LIVE_FFMPEG_CPUS");
+    if (!cpus.isEmpty() && !QStandardPaths::findExecutable(QStringLiteral("taskset")).isEmpty()) {
+        serverArgs.prepend(ffmpeg);
+        serverArgs.prepend(cpus);
+        serverArgs.prepend(QStringLiteral("-c"));
+        program = QStringLiteral("taskset");
+    }
+    QProcess server;
+    server.setStandardOutputFile(QProcess::nullDevice());
+    server.setStandardErrorFile(QProcess::nullDevice());
+    server.start(program, serverArgs);
+    server.waitForStarted();
+    QThread::msleep(1200);
+
+    Cameras::Camera stream;
+    stream.id = Cameras::newId();
+    stream.name = QStringLiteral("بث الاختبار");
+    stream.kind = Cameras::Kind::Network;
+    stream.brand = QStringLiteral("custom");
+    stream.path = url;
+    const QList<Cameras::Camera> userCameras = Cameras::load();
+    Cameras::save(userCameras + QList<Cameras::Camera>{stream});
+
+    CameraRecorder recorder;
+    const QString recordFolder = QDir(work).filePath(QStringLiteral("تسجيلات"));
+    VideoWorker worker(&engine);
+    worker.setGallery(database.gallery());
+    worker.setThreshold(0.30f);
+    worker.setRecorder(&recorder);
+    worker.setDeliverFrames(false);
+    worker.setAdaptive(true);
+    auto slot = std::make_shared<Cameras::FrameSlot>();
+    worker.setLiveFrames(slot);
+    VideoPlayer player;
+    QObject context;
+    std::atomic<int> shown{0};
+    QObject::connect(&player, &VideoPlayer::frameReady, &context, [&](const QImage &, qint64) {
+        ++shown;
+        player.frameShown();
+    });
+    player.openLive(slot);
+
+    QElapsedTimer clock;
+    std::atomic<int> analyses{0};
+    std::atomic<qint64> firstFaceMs{-1};
+    std::atomic<qint64> firstKnownMs{-1};
+    std::mutex idsMutex;
+    QSet<int> confirmed;
+    QSet<int> known;
+    bool recordingStarted = false;
+    QObject::connect(&worker, &VideoWorker::started, [&](int, double fps, qint64) {
+        clock.start();
+        QString startError;
+        recordingStarted = recorder.start(recordFolder, stream.name, fps, CameraRecorder::Options(), &startError);
+        if (!recordingStarted)
+            out << "record_error=" << startError << "\n";
+    });
+    QObject::connect(&worker, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &, qint64, double) {
+        ++analyses;
+        worker.frameShown();
+        if (clock.isValid() && clock.elapsed() >= seconds * 1000LL)
+            worker.requestStop();
+    });
+    QObject::connect(&worker, &VideoWorker::trackUpdated, [&](const FaceItem &face) {
+        std::lock_guard<std::mutex> lock(idsMutex);
+        if (firstFaceMs < 0)
+            firstFaceMs = clock.elapsed();
+        confirmed.insert(face.id);
+        if (!knownId.isEmpty() && face.match.status == MatchStatus::Confirmed && face.match.personId == knownId) {
+            if (firstKnownMs < 0)
+                firstKnownMs = clock.elapsed();
+            known.insert(face.id);
+        }
+    });
+    QString workerError;
+    QObject::connect(&worker, &VideoWorker::finished, [&](const QString &message) { workerError = message; });
+    QFuture<void> running = QtConcurrent::run([&] { worker.process(stream.source()); });
+    // التحقق من التأخر: المتوقع من الكاميرا حتى الآن مقابل ما قرأه البرنامج، كل ثانيتين
+    QTimer sampler;
+    // الخادم يدفع ثانية أو اثنتين دفعة واحدة عند الاتصال، فالتأخر يُقاس بزيادته عن أقل قيمة رُصدت
+    double worstLagMs = 0.0;
+    double leastLagMs = 1e9;
+    QObject::connect(&sampler, &QTimer::timeout, [&] {
+        if (!clock.isValid() || !recordingStarted)
+            return;
+        const double expected = clock.elapsed() * 25.0 / 1000.0;
+        const double behind = (expected - double(recorder.stats().received)) * 40.0;
+        leastLagMs = std::min(leastLagMs, behind);
+        const double lag = behind - leastLagMs;
+        worstLagMs = std::max(worstLagMs, lag);
+        out << "t=" << clock.elapsed() / 1000 << " read=" << recorder.stats().received << " shown=" << shown
+            << " analyses=" << analyses << " lag_ms=" << qRound(lag) << "\n" << Qt::flush;
+    });
+    sampler.start(2000);
+    QFutureWatcher<void> watcher;
+    QEventLoop loop;
+    QObject::connect(&watcher, &QFutureWatcher<void>::finished, &loop, &QEventLoop::quit);
+    watcher.setFuture(running);
+    if (!running.isFinished())
+        loop.exec();
+    sampler.stop();
+    const double elapsed = clock.isValid() ? clock.elapsed() / 1000.0 : 0.0;
+    const CameraRecorder::Stats stats = recorder.stats();
+    recorder.stop();
+    player.close();
+    server.kill();
+    server.waitForFinished(5000);
+    Cameras::save(userCameras);
+
+    out << "elapsed_s=" << elapsed << " error=" << workerError << "\n";
+    out << "read_fps=" << stats.received / std::max(0.001, elapsed) << " shown_fps=" << shown / std::max(0.001, elapsed)
+        << " analyses_per_s=" << analyses / std::max(0.001, elapsed) << " worst_lag_ms=" << qRound(worstLagMs) << "\n";
+    out << "record_received=" << stats.received << " record_dropped=" << stats.dropped << " record_written=" << stats.written
+        << " repeated=" << std::max<qint64>(0, stats.written - (stats.received - stats.dropped)) << "\n";
+    {
+        std::lock_guard<std::mutex> lock(idsMutex);
+        out << "live_faces=" << confirmed.size() << " live_known=" << known.size() << " first_face_ms=" << firstFaceMs
+            << " first_known_ms=" << firstKnownMs << "\n";
+    }
+
+    // الملف المسجَّل: مدته مقابل مدة البث، ووجوهه عند تحليله
+    const QStringList files = recorder.files();
+    double recordedSeconds = 0.0;
+    double recordedFps = 0.0; // سرعة الملف الأخير
+    QString longest;          // يُحلَّل أطول الملفات (قد يسبقه ملف قصير قبل خفض سرعة التسجيل)
+    double longestSeconds = -1.0;
+    for (const QString &file : files) {
+        cv::VideoCapture capture;
+        if (ImageIO::openVideo(capture, file)) {
+            const double fps = capture.get(cv::CAP_PROP_FPS);
+            const double frames = capture.get(cv::CAP_PROP_FRAME_COUNT);
+            if (fps > 0) {
+                recordedSeconds += frames / fps;
+                if (frames / fps > longestSeconds) {
+                    longestSeconds = frames / fps;
+                    longest = file;
+                }
+            }
+            recordedFps = fps;
+        }
+    }
+    out << "recorded_files=" << files.size() << " recorded_s=" << recordedSeconds << " recorded_fps=" << recordedFps << "\n"
+        << Qt::flush;
+    int fileFaces = 0;
+    int fileKnown = 0;
+    if (!files.isEmpty()) {
+        VideoWorker again(&engine);
+        again.setGallery(database.gallery());
+        again.setThreshold(0.30f);
+        QSet<int> ids;
+        QSet<int> knownIds;
+        QObject::connect(&again, &VideoWorker::frameReady, [&](const QImage &, const QList<FaceItem> &, qint64, double) {
+            again.frameShown();
+        });
+        QObject::connect(&again, &VideoWorker::trackUpdated, [&](const FaceItem &face) {
+            ids.insert(face.id);
+            if (!knownId.isEmpty() && face.match.status == MatchStatus::Confirmed && face.match.personId == knownId)
+                knownIds.insert(face.id);
+        });
+        again.process(longest.isEmpty() ? files.first() : longest);
+        fileFaces = int(ids.size());
+        fileKnown = int(knownIds.size());
+    }
+    out << "file_faces=" << fileFaces << " file_known=" << fileKnown << "\n";
+    QDir(work).removeRecursively();
+    const bool knownOk = knownId.isEmpty() || (firstKnownMs >= 0 && fileKnown > 0);
+    return recordingStarted && !files.isEmpty() && !confirmed.isEmpty() && fileFaces > 0 && knownOk ? 0 : 1;
+}
+
 int run(const QStringList &args)
 {
     if (args.size() < 2)
@@ -2280,7 +2503,7 @@ int run(const QStringList &args)
         && command != QLatin1String("--watch-test") && command != QLatin1String("--daily-report-test")
         && command != QLatin1String("--gpu-test") && command != QLatin1String("--rules-test")
         && command != QLatin1String("--bench") && command != QLatin1String("--player-test")
-        && command != QLatin1String("--archive-test"))
+        && command != QLatin1String("--archive-test") && command != QLatin1String("--live-test"))
         return -1;
 
     QFile output(args.last());
@@ -2322,6 +2545,9 @@ int run(const QStringList &args)
     // Malamih --camera-test <فيديو يُبث كأنه كاميرا شبكة، أو -> <ملف النتائج>
     if (command == QLatin1String("--camera-test") && args.size() == 4)
         return cameraTest(args.at(2), out);
+    // Malamih --live-test <فيديو يُبث كأنه كاميرا> <ثوانٍ> <أبعاد البث مثل 1280x720> <صورة شخص معروف أو -> <ملف النتائج>
+    if (command == QLatin1String("--live-test") && args.size() == 7)
+        return liveTest(args.at(2), std::max(5, args.at(3).toInt()), args.at(4), args.at(5), out);
     // Malamih --record-test <مجلد مؤقت> <ملف النتائج>
     if (command == QLatin1String("--record-test") && args.size() == 4)
         return recordTest(args.at(2), out);

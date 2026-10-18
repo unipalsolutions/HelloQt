@@ -78,6 +78,15 @@ public:
     // ملفات التسجيل الأخير التي حُفظت
     QStringList files() const;
     Position position() const;
+    // إحصاءات التسجيل الجاري: إطارات وصلت من الكاميرا، وأخرى تُركت لأن الكتابة تأخرت عنها، وما كُتب في
+    // الملفات (ومنه المكرر لملء الوقت حين تبطئ الكاميرا)
+    struct Stats
+    {
+        qint64 received = 0;
+        qint64 dropped = 0;
+        qint64 written = 0;
+    };
+    Stats stats() const;
 
     // من خيط قراءة الكاميرا؛ لا ينتظر، ولا يفعل شيئاً إن لم يكن التسجيل جارياً
     void push(const cv::Mat &frame);
@@ -148,7 +157,8 @@ private:
 
     QString m_folder;
     QString m_cameraName;
-    double m_fps = 25.0;
+    double m_fps = 25.0;        // سرعة الكتابة في الملف؛ أقل من سرعة الكاميرا إن لم يلحق الترميز بها
+    double m_cameraFps = 25.0;
     Options m_options;
     std::atomic<bool> m_recording{false};
     std::atomic<bool> m_waiting{false};
@@ -166,6 +176,9 @@ private:
     QList<OverlayBox> m_overlay;          // يحميه m_mutex
     Clock::time_point m_overlayTime;      // يحميه m_mutex
     std::atomic<Clock::rep> m_activity{0}; // آخر ظهور وجه (زمن Clock) يُعد حركة
+    std::atomic<qint64> m_received{0};
+    std::atomic<qint64> m_dropped{0};
+    std::atomic<qint64> m_writtenTotal{0};
 
     // يخص خيط الكتابة وحده
     cv::VideoWriter m_writer;
@@ -176,6 +189,9 @@ private:
     Clock::time_point m_timeBase;     // زمن الإطار الأول في الملف، بعد طرح فترات الهدوء في وضع الحركة
     Clock::time_point m_lastFrame;    // آخر إطار وصل من الكاميرا، لكشف انقطاعها
     qint64 m_written = 0;
+    double m_encodeMs = 0.0; // متوسط زمن ترميز الإطار
+    int m_encodeSamples = 0;
+    Clock::time_point m_rateChanged; // آخر تغيير لسرعة التسجيل
     Clock::time_point m_spaceChecked;
     Clock::time_point m_cleaned;
     Clock::time_point m_scheduleChecked;

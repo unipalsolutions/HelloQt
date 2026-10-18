@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <deque>
 #include <map>
 #include <memory>
 #include <set>
@@ -32,6 +33,9 @@ constexpr float BetterShotMargin = 0.08f; // لقطة أوضح من أفضل ل�
 // الكاميرا: وجه يطابق شخصاً في القاعدة يُعتمد بعد ظهورين بدل MinTrackHits، فمن يمر سريعاً (لقطة قصيرة أو
 // تحليل بطيء) يُعرف وينبَّه عليه قبل أن يغيب؛ والكشف الخاطئ لا يطابق شخصاً في القاعدة
 constexpr int KnownTrackHits = 2;
+// الكاميرا على جهاز بطيء: بين تحليلين ثانية أو أكثر يتحرك فيها المار كثيراً فلا يتداخل موضعاه ويبدأ كل
+// ظهور مساراً جديداً لا يبلغ MinTrackHits؛ فتُعد ظهورات الهوية نفسها (المربوطة بالبصمة) في هذه المدة
+constexpr qint64 CameraConfirmWindowMs = 10000;
 // وجه في موضع وجه سابق لكن بصمته بعيدة عنه: شخص آخر (تبدّل اللقطة في حوار مثلاً) فلا يُلحق بمساره
 constexpr float TrackBreakSimilarity = 0.22f;
 // وجه جديد يُربط بهوية سابقة إذا شابهها بهذا القدر؛ الحد أقل للوجوه الرديئة لأن تشابه
@@ -92,6 +96,7 @@ struct Identity
     int lastSeen = 0;
     qint64 firstSeenMs = -1;
     qint64 lastSeenMs = -1;
+    std::deque<qint64> recentMs; // الكاميرا: أوقات آخر ظهورات الهوية (MinTrackHits على الأكثر)
     bool confirmed = false;
     bool mergeChecked = false; // لم تتغير منذ آخر محاولة دمج
     FaceItem best; // أوضح لقطة، مضغوطة في الذاكرة
@@ -1091,9 +1096,18 @@ void VideoWorker::run(const QString &source)
             addAppearance(identity, positionMs);
             identity.changed = true;
 
+            int recentSightings = 0;
+            if (camera) {
+                identity.recentMs.push_back(positionMs);
+                if (int(identity.recentMs.size()) > MinTrackHits)
+                    identity.recentMs.pop_front();
+                for (const qint64 ms : identity.recentMs)
+                    recentSightings += positionMs - ms <= CameraConfirmWindowMs ? 1 : 0;
+            }
             bool firstConfirmation = false;
-            if (!identity.confirmed && track.hits >= MinTrackHits
-                && track.hits * 2 >= processed - track.firstSeen + 1) {
+            if (!identity.confirmed
+                && ((track.hits >= MinTrackHits && track.hits * 2 >= processed - track.firstSeen + 1)
+                    || recentSightings >= MinTrackHits)) {
                 identity.confirmed = true;
                 firstConfirmation = true;
             }
@@ -1124,7 +1138,8 @@ void VideoWorker::run(const QString &source)
                     betterShot = true;
                 }
             }
-            if (camera && !identity.confirmed && gallery && !detection.embedding.empty() && track.hits >= KnownTrackHits) {
+            if (camera && !identity.confirmed && gallery && !detection.embedding.empty()
+                && std::max(track.hits, recentSightings) >= KnownTrackHits) {
                 const MatchResult known = FaceDatabase::identify(*gallery, identity.mean, threshold);
                 if (known.status == MatchStatus::Confirmed) {
                     identity.confirmed = true;
