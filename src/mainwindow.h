@@ -167,7 +167,7 @@ private:
     void onFrameReady(const QImage &frame, const QList<FaceItem> &faces, qint64 positionMs, double progress);
     void onTrackUpdated(const FaceItem &track);
     void onVideoFinished(const QString &error);
-    void onPlayerFrame(const QImage &frame, qint64 positionMs);
+    void onPlayerFrame(const QImage &frame, qint64 positionMs, const QImage &fitted);
     // وجوه الموضع المعروض من نتائج التحليل المحفوظة، بين أقرب إطارين محللين
     QList<FaceItem> analyzedFacesAt(qint64 positionMs) const;
     bool cameraBoxesHeld() const;

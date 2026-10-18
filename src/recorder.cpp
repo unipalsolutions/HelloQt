@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QImage>
 #include <QPainter>
 #include <QSaveFile>
@@ -154,6 +155,20 @@ QStringList &activeFiles()
     return files;
 }
 
+// آخر سرعة تسجيل لحق بها الجهاز لكل كاميرا (نسبةً من سرعتها)، فيبدأ تسجيلها التالي بها مباشرة بدل ملف قصير
+// بالسرعة الكاملة قبل الخفض. في الذاكرة فقط، فكل تشغيل للبرنامج يقيس الجهاز من جديد
+std::mutex &rateMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+QHash<QString, double> &learnedRates()
+{
+    static QHash<QString, double> rates;
+    return rates;
+}
+
 bool moveFile(const QString &from, const QString &to)
 {
     if (QFile::rename(from, to))
@@ -256,6 +271,12 @@ bool CameraRecorder::start(const QString &folder, const QString &cameraName, dou
     m_folder = folder;
     m_cameraName = safeName(cameraName);
     m_fps = m_cameraFps = fps > 1.0 && fps <= 60.0 ? fps : 25.0;
+    {
+        std::lock_guard<std::mutex> lock(rateMutex());
+        const double ratio = learnedRates().value(m_cameraName, 1.0);
+        if (ratio < 1.0)
+            m_fps = std::max(std::min(MinRecordFps, m_cameraFps), m_cameraFps * ratio);
+    }
     m_encodeMs = 0.0;
     m_encodeSamples = 0;
     m_rateChanged = Clock::now();
@@ -596,6 +617,10 @@ void CameraRecorder::write(const cv::Mat &frame, Clock::time_point time)
     qWarning("زمن ترميز الإطار %.0f ms: يُسجَّل بسرعة %.1f إطاراً في الثانية (الكاميرا %.1f)", m_encodeMs, fitting, m_cameraFps);
     m_fps = fitting;
     m_rateChanged = time;
+    {
+        std::lock_guard<std::mutex> lock(rateMutex());
+        learnedRates().insert(m_cameraName, m_fps / m_cameraFps);
+    }
     m_encodeSamples = 0;
     closeSegment();
 }

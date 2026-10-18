@@ -17,7 +17,10 @@ class ImageView : public QWidget
 public:
     explicit ImageView(QWidget *parent = nullptr);
 
-    void setImage(const QImage &image, bool animate = false);
+    // fitted: الصورة نفسها مصغّرة سلفاً إلى fitSize() (من خيط العرض)، فلا يصغّرها الرسم
+    void setImage(const QImage &image, bool animate = false, const QImage &fitted = QImage());
+    // حجم رسم الصورة الحالية في اللوحة بلا تكبير؛ فارغ إن كانت مكبّرة أو لا صورة
+    QSize fitSize() const;
     // smooth = false: المربع يقفز إلى موضعه الجديد مباشرة دون انتقال (المواضع محسوبة لوقت الإطار المعروض)
     void setFaces(const QList<FaceItem> &faces, bool smooth = true);
     void setSelectedFace(int id);

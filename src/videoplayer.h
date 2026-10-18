@@ -2,6 +2,7 @@
 
 #include <QImage>
 #include <QObject>
+#include <QSize>
 #include <QString>
 
 #include <atomic>
@@ -62,11 +63,15 @@ public:
     // و following أن التحليل يقفز إليه، و playing أن العرض يتقدم
     static QString analysisLagText(qint64 lagMs, bool following, bool playing);
 
-    // تحويل إطار للعرض: المعالجات ثم التصغير، بصورة تشير إلى بيانات الإطار دون نسخها
-    static QImage displayImage(const cv::Mat &frame);
+    // تحويل إطار للعرض: المعالجات ثم التصغير، بصورة تشير إلى بيانات الإطار دون نسخها. ومع fit تُكتب في fitted
+    // نسخة بهذا الحجم أيضاً، وهو حجم رسمها في اللوحة، فلا يصغّرها خيط الواجهة
+    static QImage displayImage(const cv::Mat &frame, const QSize &fit = QSize(), QImage *fitted = nullptr);
+    // حجم رسم الإطار في اللوحة (ImageView::fitSize)؛ تصل الإطارات التالية مصغّرة إليه. حجم فارغ يوقف ذلك
+    void setFitSize(const QSize &size);
 
 signals:
-    void frameReady(const QImage &frame, qint64 positionMs);
+    // fitted: الإطار نفسه بحجم setFitSize إن طُلب، وإلا صورة فارغة
+    void frameReady(const QImage &frame, qint64 positionMs, const QImage &fitted);
     void reachedEnd();
     // البث المباشر: تبدّل المشهد في الإطار المعروض، قبل أن يصل تحليله
     void liveSceneCut();
@@ -84,6 +89,7 @@ private:
     std::atomic<int> m_pending{0};
     std::atomic<qint64> m_position{0};
     std::atomic<double> m_rate{1.0};
+    std::atomic<quint32> m_fitSize{0}; // العرض في النصف الأعلى والارتفاع في الأدنى
     bool m_live = false;
     QString m_path;
     std::shared_ptr<Cameras::FrameSlot> m_slot;

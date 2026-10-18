@@ -1736,13 +1736,15 @@ QList<FaceItem> MainWindow::analyzedFacesAt(qint64 positionMs) const
     return result;
 }
 
-void MainWindow::onPlayerFrame(const QImage &frame, qint64 positionMs)
+void MainWindow::onPlayerFrame(const QImage &frame, qint64 positionMs, const QImage &fitted)
 {
     m_player->frameShown();
     if (!m_videoMode || !m_player->isOpen())
         return;
     m_view->setBusy(false);
-    m_view->setImage(frame);
+    m_view->setImage(frame, false, fitted);
+    // الإطارات التالية تصل مصغّرة إلى حجم اللوحة الحالي (يتبع تغيير حجم النافذة والتكبير)
+    m_player->setFitSize(m_view->fitSize());
     if (m_player->isLive())
         return;
     m_videoPositionMs = positionMs;

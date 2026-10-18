@@ -23,6 +23,7 @@
 #include "videomarkers.h"
 #include "videoplayer.h"
 #include "videoworker.h"
+#include "imageview.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -2356,8 +2357,23 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
     VideoPlayer player;
     QObject context;
     std::atomic<int> shown{0};
-    QObject::connect(&player, &VideoPlayer::frameReady, &context, [&](const QImage &, qint64) {
+    // العرض كما في الواجهة: لوحة بحجم شائع، ويُقاس زمن خيط الواجهة في وضع الإطار ورسمه
+    ImageView view;
+    view.resize(960, 540);
+    view.show();
+    double guiMs = 0.0;
+    double worstGuiMs = 0.0;
+    QObject::connect(&player, &VideoPlayer::frameReady, &context, [&](const QImage &frame, qint64, const QImage &fitted) {
         ++shown;
+        QElapsedTimer gui;
+        gui.start();
+        view.setImage(frame, false, fitted);
+        if (qEnvironmentVariableIsEmpty("MALAMIH_GUI_SCALE"))
+            player.setFitSize(view.fitSize());
+        view.repaint();
+        const double ms = gui.nsecsElapsed() / 1e6;
+        guiMs += ms;
+        worstGuiMs = shown > 25 ? std::max(worstGuiMs, ms) : worstGuiMs;
         player.frameShown();
     });
     player.openLive(slot);
@@ -2402,9 +2418,20 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
     // الخادم يدفع ثانية أو اثنتين دفعة واحدة عند الاتصال، فالتأخر يُقاس بزيادته عن أقل قيمة رُصدت
     double worstLagMs = 0.0;
     double leastLagMs = 1e9;
+    // إعادة بدء التسجيل في منتصف البث (كإيقافه وتشغيله من الواجهة): يبدأ بالسرعة التي تعلّمها من الجهاز
+    const int restartSeconds = qEnvironmentVariableIntValue("MALAMIH_LIVE_RESTART_S");
+    QStringList earlierFiles;
     QObject::connect(&sampler, &QTimer::timeout, [&] {
         if (!clock.isValid() || !recordingStarted)
             return;
+        if (restartSeconds > 0 && earlierFiles.isEmpty() && clock.elapsed() >= restartSeconds * 1000LL) {
+            recorder.stop();
+            earlierFiles = recorder.files();
+            QString restartError;
+            if (!recorder.start(recordFolder, stream.name, 25.0, CameraRecorder::Options(), &restartError))
+                out << "record_error=" << restartError << "\n";
+            out << "restarted\n";
+        }
         const double expected = clock.elapsed() * 25.0 / 1000.0;
         const double behind = (expected - double(recorder.stats().received)) * 40.0;
         leastLagMs = std::min(leastLagMs, behind);
@@ -2432,6 +2459,7 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
     out << "elapsed_s=" << elapsed << " error=" << workerError << "\n";
     out << "read_fps=" << stats.received / std::max(0.001, elapsed) << " shown_fps=" << shown / std::max(0.001, elapsed)
         << " analyses_per_s=" << analyses / std::max(0.001, elapsed) << " worst_lag_ms=" << qRound(worstLagMs) << "\n";
+    out << "gui_ms_per_frame=" << guiMs / std::max(1, shown.load()) << " gui_worst_ms=" << worstGuiMs << "\n";
     out << "record_received=" << stats.received << " record_dropped=" << stats.dropped << " record_written=" << stats.written
         << " repeated=" << std::max<qint64>(0, stats.written - (stats.received - stats.dropped)) << "\n";
     {
@@ -2441,7 +2469,7 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
     }
 
     // الملف المسجَّل: مدته مقابل مدة البث، ووجوهه عند تحليله
-    const QStringList files = recorder.files();
+    const QStringList files = earlierFiles + recorder.files();
     double recordedSeconds = 0.0;
     double recordedFps = 0.0; // سرعة الملف الأخير
     QString longest;          // يُحلَّل أطول الملفات (قد يسبقه ملف قصير قبل خفض سرعة التسجيل)
@@ -2459,6 +2487,7 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
                 }
             }
             recordedFps = fps;
+            out << "file " << QFileInfo(file).fileName() << " s=" << (fps > 0 ? frames / fps : 0.0) << " fps=" << fps << "\n";
         }
     }
     out << "recorded_files=" << files.size() << " recorded_s=" << recordedSeconds << " recorded_fps=" << recordedFps << "\n"

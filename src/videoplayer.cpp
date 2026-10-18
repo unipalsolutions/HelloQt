@@ -50,7 +50,7 @@ QString VideoPlayer::analysisLagText(qint64 lagMs, bool following, bool playing)
     return text;
 }
 
-QImage VideoPlayer::displayImage(const cv::Mat &frame)
+QImage VideoPlayer::displayImage(const cv::Mat &frame, const QSize &fit, QImage *fitted)
 {
     if (frame.empty())
         return {};
@@ -60,10 +60,34 @@ QImage VideoPlayer::displayImage(const cv::Mat &frame)
     if (scale < 1.0)
         cv::resize(filtered, filtered, cv::Size(), scale, scale, cv::INTER_AREA);
     // BGRA بترتيب ذاكرة RGB32 نفسه، فتعرضه الواجهة دون تحويل أو نسخ آخر
-    auto *holder = new cv::Mat;
-    cv::cvtColor(filtered, *holder, cv::COLOR_BGR2BGRA);
-    return QImage(holder->data, holder->cols, holder->rows, int(holder->step), QImage::Format_RGB32,
-                  [](void *data) { delete static_cast<cv::Mat *>(data); }, holder);
+    auto wrap = [](const cv::Mat &bgr) {
+        auto *holder = new cv::Mat;
+        cv::cvtColor(bgr, *holder, cv::COLOR_BGR2BGRA);
+        return QImage(holder->data, holder->cols, holder->rows, int(holder->step), QImage::Format_RGB32,
+                      [](void *data) { delete static_cast<cv::Mat *>(data); }, holder);
+    };
+    if (fitted) {
+        *fitted = QImage();
+        if (fit.width() > 0 && fit.height() > 0 && fit != QSize(filtered.cols, filtered.rows)) {
+            // متوسط المساحة بنسبة صحيحة (سريع، ويمنع التشوه كالتصغير الناعم في الواجهة) ثم خطي إلى الحجم بالضبط؛
+            // متوسط المساحة بنسبة كسرية أبطأ من تصغير الواجهة نفسه بثلاث مرات
+            const int factor = std::min(filtered.cols / fit.width(), filtered.rows / fit.height());
+            cv::Mat resized = filtered;
+            if (factor >= 2)
+                cv::resize(filtered, resized, cv::Size(filtered.cols / factor, filtered.rows / factor), 0, 0, cv::INTER_AREA);
+            if (resized.cols != fit.width() || resized.rows != fit.height())
+                cv::resize(resized, resized, cv::Size(fit.width(), fit.height()), 0, 0, cv::INTER_LINEAR);
+            *fitted = wrap(resized);
+        }
+    }
+    return wrap(filtered);
+}
+
+void VideoPlayer::setFitSize(const QSize &size)
+{
+    // أحجام معقولة فقط؛ غيرها (تكبير شديد أو لوحة مخفية) يُترك تصغيره للواجهة
+    const bool valid = size.width() > 0 && size.height() > 0 && size.width() <= 4096 && size.height() <= 4096;
+    m_fitSize = valid ? quint32(size.width()) << 16 | quint32(size.height()) : 0;
 }
 
 bool VideoPlayer::openFile(const QString &path, qint64 startMs)
@@ -190,7 +214,10 @@ void VideoPlayer::deliver(const cv::Mat &frame, qint64 positionMs, bool force)
         return;
     ++m_pending;
     m_position = positionMs;
-    emit frameReady(displayImage(frame), positionMs);
+    const quint32 fit = m_fitSize;
+    QImage fitted;
+    const QImage image = displayImage(frame, QSize(int(fit >> 16), int(fit & 0xffff)), &fitted);
+    emit frameReady(image, positionMs, fitted);
 }
 
 void VideoPlayer::runFile(cv::VideoCapture &capture)

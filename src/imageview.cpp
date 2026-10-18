@@ -39,7 +39,7 @@ ImageView::ImageView(QWidget *parent)
     startTicking();
 }
 
-void ImageView::setImage(const QImage &image, bool animate)
+void ImageView::setImage(const QImage &image, bool animate, const QImage &fitted)
 {
     if (animate && !m_image.isNull()) {
         m_previous = m_image;
@@ -59,7 +59,9 @@ void ImageView::setImage(const QImage &image, bool animate)
     // صيغة يرسمها Qt مباشرة؛ إطارات BGR888 كانت تُحوَّل في كل رسم
     m_image = image.format() == QImage::Format_ARGB32_Premultiplied || image.format() == QImage::Format_RGB32
         ? image : image.convertToFormat(image.hasAlphaChannel() ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32);
-    m_scaled = QImage();
+    // يُستعمل في الرسم إن طابق حجمه حجم الرسم، وإلا يُصغَّر هنا كالمعتاد
+    m_scaled = fitted;
+    m_scaledKey = fitted.isNull() ? 0 : m_image.cacheKey();
     startTicking();
     update();
 }
@@ -182,6 +184,11 @@ QRectF ImageView::fitRect(const QImage &image) const
     QSizeF size = image.size();
     size.scale(QSizeF(this->size()).shrunkBy(QMarginsF(12, 12, 12, 12)), Qt::KeepAspectRatio);
     return QRectF(QPointF((width() - size.width()) / 2.0, (height() - size.height()) / 2.0), size);
+}
+
+QSize ImageView::fitSize() const
+{
+    return m_image.isNull() || m_zoom > 1.0 ? QSize() : imageRect().size().toSize();
 }
 
 QRectF ImageView::imageRect() const
