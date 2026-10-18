@@ -437,5 +437,5 @@ void PersonCardDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, 
 
 QSize PersonCardDelegate::sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const
 {
-    return QSize(240, 74);
+    return QSize(180, 74); // العرض يتبع القائمة؛ 240 كان يفرض تمريراً أفقياً في اللوحة الضيقة
 }

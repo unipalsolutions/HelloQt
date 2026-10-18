@@ -1524,6 +1524,11 @@ int recordTest(const QString &directory, QTextStream &out)
 {
     const QString folder = QDir(directory).filePath(QStringLiteral("تسجيلات الاختبار"));
     QDir(folder).removeRecursively();
+    // قائمة التسجيلات وإعداداتها في مجلد اختبار منفصل: لا تظهر ملفات الاختبار في تسجيلات المستخدم،
+    // ولا يحذف فحص مدة الحفظ تسجيلاته أو لقطاته القديمة
+    QStandardPaths::setTestModeEnabled(true);
+    QFile::remove(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/recordings.txt"));
+    CameraRecorder::setSavedFolder(folder);
     const int previousRetention = CameraRecorder::retentionDays();
     CameraRecorder::setRetentionDays(0);
     std::mt19937 random(7);

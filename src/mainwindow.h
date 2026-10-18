@@ -406,6 +406,7 @@ private:
     QList<QLabel *> m_subtitles;
     QLabel *m_photosHint = nullptr;
     int m_layoutMode = -1;
+    bool m_tightHeight = false;
     QButtonGroup *m_navGroup = nullptr;
     QLabel *m_personCountLabel = nullptr;
     QLabel *m_photoCountLabel = nullptr;

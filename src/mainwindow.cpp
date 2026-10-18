@@ -699,6 +699,15 @@ void MainWindow::updateResponsiveLayout()
     const int mode = w >= 1480 ? 0 : (w >= 1120 ? 1 : 2);
     const bool shortScreen = height() < 820;
     const int key = mode * 2 + (shortScreen ? 1 : 0);
+    // على الشاشات القصيرة جداً (1024×600) يُطوى الخط الزمني حتى يبقى للفيديو ارتفاع يُرى فيه،
+    // ويعود كما اختاره المستخدم حين تتسع النافذة
+    const bool tight = height() < 700;
+    if (m_timelineCard && tight != m_tightHeight) {
+        m_tightHeight = tight;
+        auto *timeline = static_cast<CollapsibleSection *>(m_timelineCard);
+        timeline->setExpanded(tight ? false : timeline->savedExpanded(), false, false);
+        m_playbackBar->setToolsSuppressed(tight);
+    }
     if (key == m_layoutMode)
         return;
     m_layoutMode = key;
@@ -1132,7 +1141,8 @@ QWidget *MainWindow::createRecognitionPage()
     // محتوى اللوحة يُمرَّر عمودياً على الشاشات القصيرة جداً بدل أن تتداخل أجزاؤه
     auto *side = card(page);
     m_sideCard = side;
-    side->setMinimumWidth(240);
+    // تتسع لتبويبات الحالة الخمسة دون اختصار (الفيديو على الشاشات القصيرة يحدّه ارتفاعه لا عرضه)
+    side->setMinimumWidth(290);
     auto *sideOuter = new QVBoxLayout(side);
     sideOuter->setContentsMargins(0, 0, 0, 0);
     auto *sideScroll = new QScrollArea(side);
@@ -2288,7 +2298,7 @@ void MainWindow::selectFace(int id)
 
 void MainWindow::addRecentFile(const QString &path)
 {
-    if (path.isEmpty() || QFileInfo(path).fileName() == QStringLiteral("malamih-clipboard.png"))
+    if (path.isEmpty() || MatchPage::isTemporaryImage(path))
         return;
     QSettings settings;
     QStringList files = settings.value(QStringLiteral("recentFiles")).toStringList();
@@ -2352,7 +2362,7 @@ void MainWindow::setVideoSettingsVisible(bool)
 void MainWindow::updateFolderNavigation()
 {
     const QFileInfo info(m_currentImagePath);
-    if (m_currentImagePath.isEmpty() || info.fileName() == QStringLiteral("malamih-clipboard.png")) {
+    if (m_currentImagePath.isEmpty() || MatchPage::isTemporaryImage(m_currentImagePath)) {
         m_folderImages.clear();
         m_folderPath.clear();
         m_folderIndex = -1;

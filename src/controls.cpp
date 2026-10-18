@@ -140,11 +140,27 @@ QRectF SegmentedControl::segmentRect(int index) const
 {
     // الأجزاء من اليمين إلى اليسار في الواجهة العربية
     const QRectF inner = QRectF(rect()).adjusted(3, 3, -3, -3);
+    // الممتد أجزاؤه متساوية، فإن ضاق عنها أخذ كل جزء عرض نصه ووُزّع الباقي بالتساوي،
+    // فلا يُختصر نص قصير لأن جاره أطول منه
+    const bool equal = m_expanding && inner.width() >= sizeHint().width() - 6;
     double total = 0.0;
     QList<double> widths;
     for (int i = 0; i < count(); ++i) {
-        widths << (m_expanding ? 1.0 : double(itemWidth(i)));
+        widths << (equal ? 1.0 : double(itemWidth(i)));
         total += widths.last();
+    }
+    if (m_expanding && !equal) {
+        double text = 0.0;
+        for (int i = 0; i < count(); ++i) {
+            widths[i] = fontMetrics().horizontalAdvance(m_items.at(i)) * 1.06 + 4; // الجزء المحدد بخط أعرض
+            text += widths.at(i);
+        }
+        const double pad = std::max(0.0, (inner.width() - text) / count());
+        total = 0.0;
+        for (double &w : widths) {
+            w += pad;
+            total += w;
+        }
     }
     double start = 0.0;
     for (int i = 0; i < index; ++i)
@@ -203,7 +219,7 @@ void SegmentedControl::paintEvent(QPaintEvent *)
         // اتجاه النص من اتجاه العنصر، فتبقى «2×» كما هي في شريط لاتيني الاتجاه
         QTextOption option(Qt::AlignCenter);
         option.setTextDirection(layoutDirection());
-        p.drawText(r, fontMetrics().elidedText(m_items.at(i), Qt::ElideRight, int(r.width()) - 4), option);
+        p.drawText(r, QFontMetrics(f).elidedText(m_items.at(i), Qt::ElideRight, int(r.width()) - 2), option);
     }
 }
 
@@ -654,11 +670,18 @@ void CollapsibleSection::setFlat(bool flat)
     update();
 }
 
-void CollapsibleSection::setExpanded(bool expanded, bool animated)
+bool CollapsibleSection::savedExpanded() const
+{
+    if (m_settingsKey.isEmpty())
+        return m_expanded;
+    return QSettings(AppSettings::settingsPath(), QSettings::IniFormat).value(m_settingsKey, true).toBool();
+}
+
+void CollapsibleSection::setExpanded(bool expanded, bool animated, bool remember)
 {
     const bool changed = expanded != m_expanded;
     m_expanded = expanded;
-    if (!m_settingsKey.isEmpty() && changed)
+    if (!m_settingsKey.isEmpty() && changed && remember)
         QSettings(AppSettings::settingsPath(), QSettings::IniFormat).setValue(m_settingsKey, expanded);
     if (expanded)
         m_content->setVisible(true);

@@ -15,12 +15,14 @@
 #include <QIcon>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QLibraryInfo>
 #include <QLockFile>
 #include <QScreen>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QRegularExpression>
 #include <QStyle>
+#include <QTranslator>
 
 namespace {
 
@@ -121,6 +123,16 @@ int main(int argc, char *argv[])
     appIcon.addFile(QStringLiteral(":/resources/app-512.png"));
     QApplication::setWindowIcon(appIcon);
     migrateLegacyData();
+    // نصوص Qt الجاهزة (قائمة الزر الأيمن في الحقول ونافذة اختيار الملفات) بالعربية
+    QTranslator qtTranslator;
+    const QStringList translationDirs = {QCoreApplication::applicationDirPath() + QStringLiteral("/translations"),
+                                         QLibraryInfo::path(QLibraryInfo::TranslationsPath)};
+    for (const QString &dir : translationDirs) {
+        if (qtTranslator.load(QStringLiteral("qtbase_ar"), dir) || qtTranslator.load(QStringLiteral("qt_ar"), dir)) {
+            QCoreApplication::installTranslator(&qtTranslator);
+            break;
+        }
+    }
     QApplication::setLayoutDirection(Qt::RightToLeft);
     Theme::apply(app);
     app.installEventFilter(new FitToScreen(&app));
@@ -191,7 +203,7 @@ int main(int argc, char *argv[])
         // فُتح مع ويندوز: يبقى بجانب الساعة، ويظهر بالنقر على أيقونته
         window.setGeometry(QStyle::alignedRect(Qt::RightToLeft, Qt::AlignCenter, QSize(1320, 820).boundedTo(available.size()), available));
     } else if (window.restoreWindowGeometry()) {
-        // حجم النافذة وموضعها كما تركهما المستخدم آخر مرة؛ restoreGeometry يعيدها داخل الشاشة إن تغيرت
+        // حجم النافذة وموضعها كما تركهما المستخدم آخر مرة، مقصوران على الشاشة الحالية
         window.show();
     } else if (available.width() < 1400 || available.height() < 860) {
         // شاشات اللابتوب: النافذة تملأ الشاشة والواجهة تصغّر نفسها لتظهر كل أجزائها

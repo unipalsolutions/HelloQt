@@ -48,6 +48,8 @@ public:
     void searchImage(const QString &path);
     // مسار مؤقت لحفظ نسخة محسّنة من صورة
     static QString enhancedPath(const QString &source);
+    // صورة كتبها البرنامج في مجلده المؤقت (محسّنة أو من الحافظة)، لا ملف للمستخدم
+    static bool isTemporaryImage(const QString &path);
 
 signals:
     void openPersonRequested(const QString &personId);

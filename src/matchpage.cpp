@@ -689,9 +689,20 @@ void MatchPage::enhance(int slot)
         load(slot, path);
 }
 
+static QString temporaryFolder()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/Malamih");
+}
+
+bool MatchPage::isTemporaryImage(const QString &path)
+{
+    const QFileInfo info(path);
+    return info.fileName() == QStringLiteral("malamih-clipboard.png") || info.absolutePath() == QFileInfo(temporaryFolder()).absoluteFilePath();
+}
+
 QString MatchPage::enhancedPath(const QString &source)
 {
-    const QString folder = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/Malamih");
+    const QString folder = temporaryFolder();
     QDir().mkpath(folder);
     return QStringLiteral("%1/%2_محسنة_%3.png").arg(folder, QFileInfo(source).completeBaseName(),
                                                     QUuid::createUuid().toString(QUuid::Id128).left(6));

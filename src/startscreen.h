@@ -52,6 +52,7 @@ private:
     QLabel *m_cameraCount = nullptr;
     QLabel *m_status = nullptr;
     QLabel *m_logo = nullptr;
+    QLabel *m_hero = nullptr;
     QVBoxLayout *m_outer = nullptr;
     QList<QSpacerItem *> m_gaps;
     bool m_ready = false;

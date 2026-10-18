@@ -40,7 +40,11 @@ void MainWindow::setupFacePanel(QWidget *side, QVBoxLayout *sideLayout)
     // العنوان والعدد، وبجانبهما العرض قائمة أو شبكة
     auto *sideHeader = new QHBoxLayout;
     sideHeader->setSpacing(4);
-    sideHeader->addWidget(label(QStringLiteral("الوجوه المكتشفة"), QStringLiteral("sectionTitle"), side));
+    // العنوان يُختصر في اللوحة الضيقة (شاشة 1024) بدل أن يدفع ما تحته خارجها
+    auto *sideTitle = new ElidedLabel(side);
+    sideTitle->setObjectName(QStringLiteral("sectionTitle"));
+    sideTitle->setFullText(QStringLiteral("الوجوه المكتشفة"));
+    sideHeader->addWidget(sideTitle, 1);
     sideHeader->addStretch();
     auto *viewGroup = new QButtonGroup(this);
     auto viewButton = [&](Icons::Name icon, const QString &tip) {
@@ -74,8 +78,9 @@ void MainWindow::setupFacePanel(QWidget *side, QVBoxLayout *sideLayout)
     connect(m_faceSort, &QComboBox::currentIndexChanged, this, &MainWindow::sortFaces);
     auto *searchRow = new QHBoxLayout;
     searchRow->setSpacing(6);
-    searchRow->addWidget(m_faceFilter, 3);
-    searchRow->addWidget(m_faceSort, 2);
+    m_faceFilter->setMinimumWidth(90);
+    searchRow->addWidget(m_faceFilter, 1);
+    searchRow->addWidget(m_faceSort, 1);
     sideLayout->addLayout(searchRow);
 
     // تبويبات الحالة بعدّاداتها: أزرار متلاصقة تنزلق بينها الكبسولة

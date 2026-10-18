@@ -171,7 +171,9 @@ public:
     // عناصر في سطر العنوان (مثل أزرار الخط الزمني)، لا تطوي القسم عند النقر عليها
     void addHeaderWidget(QWidget *widget, int stretch = 0);
     bool isExpanded() const { return m_expanded; }
-    void setExpanded(bool expanded, bool animated = true);
+    // remember=false: طيّ مؤقت تفرضه الشاشة القصيرة، لا يغيّر اختيار المستخدم المحفوظ
+    void setExpanded(bool expanded, bool animated = true, bool remember = true);
+    bool savedExpanded() const;
     void setTitle(const QString &title);
     // بلا إطار: للأقسام داخل بطاقة قائمة بالفعل
     void setFlat(bool flat);

@@ -15,7 +15,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QTextOption>
 #include <QVBoxLayout>
 #include <QVariantAnimation>
@@ -170,6 +172,25 @@ private:
 };
 
 // صف في قائمة: صورة مصغرة أو أيقونة، والاسم وتحته سطر خافت، وشارة اختيارية
+// تمرير يطلب ارتفاع أسطره كاملاً حين يتسع المكان؛ QScrollArea يحفظ حجم محتواه لحظة إضافته وهو فارغ
+class ListScroll : public QScrollArea
+{
+public:
+    using QScrollArea::QScrollArea;
+    QSize sizeHint() const override
+    {
+        // الأسطر المضافة للتو مخفية حتى تظهر لوحتها، فيُجمع ارتفاعها مباشرة
+        int height = 0;
+        if (QLayout *rows = widget() ? widget()->layout() : nullptr) {
+            for (int i = 0; i < rows->count(); ++i) {
+                if (QWidget *row = rows->itemAt(i)->widget())
+                    height += std::max(row->sizeHint().height(), row->minimumHeight()); // الأسطر ثابتة الارتفاع بلا sizeHint
+            }
+        }
+        return QSize(QScrollArea::sizeHint().width(), std::max(height, 48));
+    }
+};
+
 class StartRow : public HoverButton
 {
 public:
@@ -336,9 +357,9 @@ StartScreen::StartScreen(QWidget *parent)
     m_logo->setAlignment(Qt::AlignCenter);
     m_logo->setContentsMargins(0, 0, 0, 8);
     layout->addWidget(m_logo);
-    auto *title = makeLabel(QStringLiteral("ابدأ من هنا"), QStringLiteral("startHero"), column);
-    title->setAlignment(Qt::AlignCenter);
-    layout->addWidget(title);
+    m_hero = makeLabel(QStringLiteral("ابدأ من هنا"), QStringLiteral("startHero"), column);
+    m_hero->setAlignment(Qt::AlignCenter);
+    layout->addWidget(m_hero);
     layout->addSpacing(4);
     m_status = makeLabel(QString(), QStringLiteral("subtitle"), column);
     m_status->setAlignment(Qt::AlignCenter);
@@ -436,10 +457,21 @@ QWidget *StartScreen::panel(Icons::Name icon, const QString &title, QVBoxLayout 
     header->addWidget(*count);
     header->addStretch();
     layout->addLayout(header);
-    *list = new QVBoxLayout;
+    // الأسطر داخل منطقة تمرير: على الشاشات القصيرة تُمرَّر بدل أن تتراكب
+    auto *rows = new QWidget;
+    rows->setAttribute(Qt::WA_TranslucentBackground);
+    *list = new QVBoxLayout(rows);
+    (*list)->setContentsMargins(0, 0, 0, 0);
     (*list)->setSpacing(0);
-    layout->addLayout(*list);
-    layout->addStretch();
+    (*list)->setAlignment(Qt::AlignTop);
+    auto *scroll = new ListScroll(frame);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setStyleSheet(QStringLiteral("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"));
+    scroll->setMinimumHeight(48);
+    scroll->setWidget(rows);
+    layout->addWidget(scroll, 1);
     return frame;
 }
 
@@ -458,13 +490,15 @@ void StartScreen::refresh()
 
     const QStringList files = QSettings().value(QStringLiteral("recentFiles")).toStringList();
     const QVariantMap opened = QSettings().value(QStringLiteral("recentOpened")).toMap();
+    const QString temporaryFolder = QFileInfo(QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/Malamih")).absoluteFilePath();
     int shown = 0;
     QStringList seen;
     for (const QString &file : files) {
         if (shown >= MaxRecent)
             break;
         const QFileInfo info(file);
-        if (!info.exists() || seen.contains(info.absoluteFilePath()))
+        // صورة محسّنة في مجلد البرنامج المؤقت حفظتها نسخة سابقة
+        if (!info.exists() || seen.contains(info.absoluteFilePath()) || info.absolutePath() == temporaryFolder)
             continue;
         seen.append(info.absoluteFilePath());
         const bool video = VideoSuffixes.contains(info.suffix().toLower());
@@ -510,6 +544,10 @@ void StartScreen::refresh()
     m_cameraCount->setVisible(cameraCount > 0);
     if (cameras.isEmpty())
         m_cameraLayout->addWidget(makeLabel(QStringLiteral("لا كاميرات محفوظة بعد"), QStringLiteral("muted"), this));
+    for (QVBoxLayout *list : {m_recentLayout, m_cameraLayout}) {
+        if (QWidget *scroll = list->parentWidget()->parentWidget()->parentWidget())
+            scroll->updateGeometry();
+    }
 }
 
 void StartScreen::setReady(bool ready)
@@ -536,6 +574,10 @@ void StartScreen::resizeEvent(QResizeEvent *event)
     QWidget::resizeEvent(event);
     // على الشاشات القصيرة يُخفى الشعار وتقصر البطاقات والفراغات حتى تبقى القوائم كاملة
     m_logo->setVisible(height() >= 690);
+    // وعلى القصيرة جداً (1024×600) يُخفى العنوان وسطره، والحالة ظاهرة في الشريط العلوي
+    const bool tight = height() < 520;
+    m_hero->setVisible(!tight);
+    m_status->setVisible(!tight);
     const bool compact = height() < 615;
     for (QAbstractButton *button : std::as_const(m_tiles))
         static_cast<StartTile *>(button)->setCompact(compact);

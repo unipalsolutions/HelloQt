@@ -49,6 +49,8 @@ QLineEdit, QSpinBox, QPlainTextEdit, QComboBox, QAbstractSpinBox {
 QLineEdit:hover, QAbstractSpinBox:hover, QPlainTextEdit:hover, QComboBox:hover { border-color: @borderHover; }
 QLineEdit:focus, QAbstractSpinBox:focus, QPlainTextEdit:focus, QComboBox:focus { border: 1px solid @accent2; }
 QAbstractSpinBox#timeRange { padding: 5px 10px; min-width: 74px; }
+/* سهم التقويم يُرسم فوق مساحة النص، فيتسع الحقل للتاريخ كاملاً (2026/10/18) وللسهم */
+QDateEdit { min-width: 112px; }
 QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { width: 0; border: none; }
 QLineEdit#timeField {
     background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 4px 8px;

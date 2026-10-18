@@ -50,6 +50,8 @@ public:
     void focusGoTo();
     bool toolsVisible() const;
     void setToolsVisible(bool visible);
+    // الشاشات القصيرة جداً تطوي السطر الثاني دون أن يتغير اختيار المستخدم؛ «…» يفتحه متى شاء
+    void setToolsSuppressed(bool suppressed);
 
     // «1:23» أو «01:02:03.5» أو «83» ثانية، بالأرقام العربية أو اللاتينية؛ سالب إن لم يُفهم
     static qint64 parseTime(const QString &text);
@@ -96,6 +98,7 @@ private:
     FancyButton *m_analyzeRange = nullptr;
     FancyButton *m_more = nullptr;
     QWidget *m_tools = nullptr; // السطر الثاني المطوي
+    bool m_toolsPreferred = false;
     QComboBox *m_jump = nullptr;
     SegmentedControl *m_speed = nullptr;
     QComboBox *m_event = nullptr;

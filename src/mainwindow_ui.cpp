@@ -7,6 +7,7 @@
 #include "videoaudio.h"
 
 #include <QFileInfo>
+#include <QScreen>
 #include <QSplitter>
 #include <QTime>
 #include <QStackedWidget>
@@ -91,7 +92,13 @@ void MainWindow::updateWorkState()
     QString fileName;
     QString fileInfo;
     if (image) {
-        fileName = QFileInfo(m_currentImagePath).fileName();
+        const QFileInfo info(m_currentImagePath);
+        if (info.fileName() == QStringLiteral("malamih-clipboard.png"))
+            fileName = QStringLiteral("صورة من الحافظة");
+        else if (MatchPage::isTemporaryImage(m_currentImagePath))
+            fileName = QStringLiteral("صورة محسّنة");
+        else
+            fileName = info.fileName();
         fileInfo = QStringLiteral("صورة");
     } else if (camera) {
         fileName = m_cameraName.isEmpty() ? QStringLiteral("الكاميرا") : m_cameraName;
@@ -453,6 +460,31 @@ void MainWindow::saveLayout() const
 
 bool MainWindow::restoreWindowGeometry()
 {
-    const QByteArray geometry = QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("layout/geometry")).toByteArray();
-    return !geometry.isEmpty() && restoreGeometry(geometry);
+    const QByteArray saved = QSettings(settingsPath(), QSettings::IniFormat).value(QStringLiteral("layout/geometry")).toByteArray();
+    if (saved.isEmpty() || !restoreGeometry(saved))
+        return false;
+    if (isFullScreen())
+        return true;
+    // حُفظ الحجم على شاشة أكبر: لا تخرج النافذة عن الشاشة الحالية
+    QScreen *target = QGuiApplication::screenAt(geometry().center());
+    if (!target)
+        target = QGuiApplication::primaryScreen();
+    const QRect available = target->availableGeometry();
+    // المكبّرة تُحفظ بحجم شاشتها القديمة
+    if (isMaximized()) {
+        setGeometry(available);
+        return true;
+    }
+    // شريط العنوان لا يدخل في geometry، ولا يُعرف ارتفاعه قبل أن تظهر النافذة
+    const int titleBar = frameGeometry().height() > geometry().height() ? frameGeometry().height() - geometry().height() : 32;
+    QRect client = geometry();
+    if (client.width() > available.width() || client.height() + titleBar > available.height()) {
+        setGeometry(available);
+        setWindowState(windowState() | Qt::WindowMaximized);
+        return true;
+    }
+    client.moveLeft(qBound(available.left(), client.left(), available.right() - client.width() + 1));
+    client.moveTop(qBound(available.top() + titleBar, client.top(), available.bottom() - client.height() + 1));
+    setGeometry(client);
+    return true;
 }

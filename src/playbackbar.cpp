@@ -325,11 +325,20 @@ bool PlaybackBar::eventFilter(QObject *watched, QEvent *event)
 
 bool PlaybackBar::toolsVisible() const
 {
-    return m_more->isChecked();
+    return m_toolsPreferred;
+}
+
+void PlaybackBar::setToolsSuppressed(bool suppressed)
+{
+    const bool visible = !suppressed && m_toolsPreferred;
+    m_tools->setVisible(visible);
+    const QSignalBlocker blocker(m_more);
+    m_more->setChecked(visible);
 }
 
 void PlaybackBar::setToolsVisible(bool visible)
 {
+    m_toolsPreferred = visible;
     m_tools->setVisible(visible);
     if (m_more->isChecked() != visible) {
         const QSignalBlocker blocker(m_more);

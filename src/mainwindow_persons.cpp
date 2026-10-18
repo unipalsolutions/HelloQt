@@ -75,6 +75,7 @@ QWidget *MainWindow::createDatabasePage()
     m_personList->setItemDelegate(new PersonCardDelegate(m_personList));
     m_personList->setUniformItemSizes(true);
     m_personList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_personList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_personList->setMouseTracking(true);
     connect(m_personList->selectionModel(), &QItemSelectionModel::currentChanged, this, &MainWindow::showPersonDetails);
     connect(m_personList, &QListView::doubleClicked, this, &MainWindow::editPerson);
@@ -83,7 +84,18 @@ QWidget *MainWindow::createDatabasePage()
 
     // تفاصيل الشخص
     auto *detailsCard = card(page);
-    auto *detailsLayout = new QVBoxLayout(detailsCard);
+    // الملف كله يُمرَّر على الشاشات القصيرة، فتبقى للصور مساحة صف كامل على الأقل
+    auto *detailsOuter = new QVBoxLayout(detailsCard);
+    detailsOuter->setContentsMargins(0, 0, 0, 0);
+    auto *detailsScroll = new QScrollArea(detailsCard);
+    detailsScroll->setWidgetResizable(true);
+    detailsScroll->setFrameShape(QFrame::NoFrame);
+    detailsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    detailsScroll->setStyleSheet(QStringLiteral("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }"));
+    auto *detailsContent = new QWidget(detailsScroll);
+    detailsScroll->setWidget(detailsContent);
+    detailsOuter->addWidget(detailsScroll);
+    auto *detailsLayout = new QVBoxLayout(detailsContent);
     detailsLayout->setContentsMargins(22, 20, 22, 18);
     detailsLayout->setSpacing(14);
 
@@ -285,6 +297,7 @@ QWidget *MainWindow::createDatabasePage()
         m_coverButton->setVisible(false);
         m_removePhotoButton->setVisible(false);
     });
+    m_profileStack->setMinimumHeight(200);
     detailsLayout->addWidget(m_profileStack, 1);
 
     auto *splitter = new QSplitter(Qt::Horizontal, page);
@@ -462,8 +475,9 @@ void MainWindow::showPersonDetails()
                                   ? Icons::icon(Icons::Name::Users, Theme::Muted, 96).pixmap(96, 96)
                                   : circularPixmap(m_database.photo(person.coverPhoto, 192), 96));
 
+    // القيمة لا تنكسر على سطرين، فيلتف المعلَم كاملاً إلى السطر التالي
     auto chip = [](const QString &key, const QString &value) {
-        return QStringLiteral("<span style='color:#a99a8a'>%1</span> <span style='color:#f4ede4'>%2</span>&nbsp;&nbsp;&nbsp; ")
+        return QStringLiteral("<span style='white-space:nowrap'><span style='color:#a99a8a'>%1</span>&nbsp;<span style='color:#f4ede4'>%2</span></span>&nbsp;&nbsp;&nbsp; ")
             .arg(key, value.toHtmlEscaped());
     };
     QString html = QStringLiteral("<div style='font-size:18pt; font-weight:700'>%1</div>").arg(person.name.toHtmlEscaped());
@@ -491,7 +505,7 @@ void MainWindow::showPersonDetails()
         html += chip(QStringLiteral("العنوان:"), person.address);
     html += chip(QStringLiteral("أُضيف:"), person.created.toString(QStringLiteral("yyyy/MM/dd")));
     if (person.lastSeen.isValid())
-        html += chip(QStringLiteral("آخر ظهور:"), QStringLiteral("%1 (%2)")
+        html += chip(QStringLiteral("آخر ظهور:"), QStringLiteral("⁦%1⁩ (%2)")
                                                        .arg(person.lastSeen.toString(QStringLiteral("yyyy/MM/dd hh:mm")),
                                                             ImageIO::timesText(person.seenCount)));
     html += QStringLiteral("</div>");

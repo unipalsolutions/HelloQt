@@ -63,7 +63,7 @@ jobs:
           New-Item -ItemType Directory dist\Malamih | Out-Null
           Copy-Item build\Malamih.exe, build\*.dll dist\Malamih\
           Copy-Item build\models dist\Malamih\models -Recurse
-          windeployqt --release --no-translations --no-compiler-runtime dist\Malamih\Malamih.exe
+          windeployqt --release --translations ar --no-compiler-runtime dist\Malamih\Malamih.exe
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
           $crt = Get-ChildItem "$env:VCToolsRedistDir\x64" -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
           if (-not $crt) { throw "MSVC runtime not found under $env:VCToolsRedistDir" }
