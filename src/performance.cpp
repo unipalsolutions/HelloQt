@@ -97,13 +97,54 @@ void forceCpu()
     cpuForced = true;
 }
 
+Detection detection()
+{
+    const QSettings settings(settingsFile(), QSettings::IniFormat);
+    const QVariant value = settings.value(QStringLiteral("detection"));
+    if (value.isValid())
+        return Detection(std::clamp(value.toInt(), 0, 2));
+    // الإعداد القديم fastDetection (صح/خطأ) من نسخ سابقة
+    const QVariant old = settings.value(QStringLiteral("fastDetection"));
+    if (old.isValid())
+        return old.toBool() ? Detection::Fast : Detection::Accurate;
+    return Detection::Auto;
+}
+
+void setDetection(Detection mode)
+{
+    QSettings settings(settingsFile(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("detection"), int(mode));
+    settings.remove(QStringLiteral("fastDetection"));
+}
+
+QString describe(Detection mode)
+{
+    switch (mode) {
+    case Detection::Fast:
+        return QStringLiteral("سريع: نموذج خفيف أسرع بنحو ثلاث مرات، وقد يفوته الوجه البعيد أو المائل");
+    case Detection::Accurate:
+        return QStringLiteral("دقيق: النموذج الكامل مع فحص أجزاء الإطار الكبير بدقتها الأصلية، يلتقط الوجوه البعيدة "
+                              "والمائلة أكثر، والتحليل أبطأ على الجهاز الضعيف");
+    case Detection::Auto:
+        break;
+    }
+    return QStringLiteral("تلقائي: %1 في هذا الجهاز (%2 خيوط)")
+        .arg(QThread::idealThreadCount() <= FastDetectionCores ? QStringLiteral("سريع") : QStringLiteral("دقيق"))
+        .arg(QThread::idealThreadCount());
+}
+
 bool fastDetection()
 {
     if (fastForced >= 0)
         return fastForced == 1;
-    const QVariant value = QSettings(settingsFile(), QSettings::IniFormat).value(QStringLiteral("fastDetection"));
-    if (value.isValid())
-        return value.toBool();
+    switch (detection()) {
+    case Detection::Fast:
+        return true;
+    case Detection::Accurate:
+        return false;
+    case Detection::Auto:
+        break;
+    }
     return QThread::idealThreadCount() <= FastDetectionCores;
 }
 

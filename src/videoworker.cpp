@@ -61,6 +61,10 @@ constexpr double IdleAnalysisRate = 2.0;  // عند خلو المشهد من ا�
 constexpr int IdleAfter = 20;             // إطارات محللة متتالية بلا وجوه قبل خفض المعدل
 constexpr double StillDifference = 1.6;   // متوسط تغيّر البكسل (من 255) الذي يُعد دونه الإطار ساكناً
 constexpr int MaxStillSkips = 50;
+constexpr int DetectionSide = 640;        // الدقة التي يُصغَّر إليها الإطار كاملاً للكشف
+constexpr int SmallFaceSide = 24;         // وجه أصغر من هذا بعد التصغير لا يُلتقط بثبات في الإطار كاملاً
+constexpr int TileOverlap = 96;           // تداخل أجزاء المسح حتى يقع كل وجه بعيد كاملاً في جزء منها
+constexpr int MaxFaceRegions = 6;         // أقصى عدد وجوه صغيرة متتبَّعة يُبحث حولها في التحليل الواحد
 constexpr double MinAnalysisRate = 4.0;   // أقل معدل يصل إليه التكيّف مع الجهاز البطيء (إطارات محللة لكل ثانية)
 // العرض سبق التحليل بأكثر من هذا إلى جزء لم يُحلَّل: يقفز التحليل إلى موضع العرض لتظهر المربعات عليه،
 // ويعود إلى ما تخطاه بعد ذلك
@@ -530,6 +534,7 @@ void VideoWorker::run(const QString &source)
     cv::Size filteredSize;
     cv::Mat stillReference; // آخر إطار فُحص فعلاً، مصغراً ورمادياً
     int stillSkips = 0;
+    int tileTurn = 0; // جزء الإطار الذي يُمسح بدقته الأصلية في التحليل التالي
     cv::Mat frame;
 
     GalleryPtr gallery;
@@ -886,7 +891,37 @@ void VideoWorker::run(const QString &source)
         std::vector<Detection> detections;
         const double minFace = filters.minFaceSize * scale;
         const bool fastDetection = fastAllowed && m_engine->gpuName().isEmpty();
-        for (DetectedFace face : still ? std::vector<DetectedFace>() : m_engine->detect(cropped ? work(area) : work, false, 0.45f, fastDetection)) {
+        const cv::Mat scene = cropped ? work(area) : work;
+        std::vector<cv::Rect> regions;
+        const int sceneSide = std::max(scene.cols, scene.rows);
+        const double fullScale = double(DetectionSide) / std::max(1, sceneSide);
+        if (!still && !fastDetection && fullScale < 0.7) {
+            // في الكشف الدقيق: الإطار الكبير يُصغَّر للكشف فتختفي فيه الوجوه البعيدة (كمشهد شارع)، فيُفحص معه
+            // في كل تحليل جزء واحد منه بدقته الأصلية بالتناوب، ويُمسح الإطار كله خلال بضعة تحليلات
+            const int side = std::max(800, sceneSide / 3);
+            const int stride = side - TileOverlap;
+            const int columns = std::max(1, (scene.cols - TileOverlap + stride - 1) / stride);
+            const int rows = std::max(1, (scene.rows - TileOverlap + stride - 1) / stride);
+            const int tile = tileTurn++ % (columns * rows);
+            regions.emplace_back(std::min((tile % columns) * stride, std::max(0, scene.cols - side)),
+                                 std::min((tile / columns) * stride, std::max(0, scene.rows - side)), side, side);
+
+            // والوجه الصغير الذي التُقط يُبحث عنه حول موضعه الأخير في كل تحليل حتى لا يضيع بين دورات المسح
+            std::vector<const Track *> faint;
+            for (const Track &t : tracks) {
+                if (!t.closed && processed - t.lastSeen <= MaxTrackGap
+                    && std::min(t.box.width(), t.box.height()) * fullScale < SmallFaceSide)
+                    faint.push_back(&t);
+            }
+            std::sort(faint.begin(), faint.end(), [](const Track *a, const Track *b) { return a->lastSeen > b->lastSeen; });
+            for (size_t i = 0; i < faint.size() && i < size_t(MaxFaceRegions); ++i) {
+                const QRectF &box = faint[i]->box;
+                const int around = int(std::max(128.0, 4.0 * std::max(box.width(), box.height())));
+                const QPointF center = box.center() - QPointF(area.x, area.y);
+                regions.emplace_back(int(center.x()) - around / 2, int(center.y()) - around / 2, around, around);
+            }
+        }
+        for (DetectedFace face : still ? std::vector<DetectedFace>() : m_engine->detect(scene, regions, 0.45f, fastDetection)) {
             if (minFace > 0 && std::min(face.box.width, face.box.height) < minFace)
                 continue;
             face.box.x += float(area.x);

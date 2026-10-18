@@ -911,6 +911,34 @@ bool insideFrame(const DetectedFace &f, const cv::Rect2f &frame)
 
 } // namespace
 
+std::vector<DetectedFace> FaceEngine::detect(const cv::Mat &bgr, const std::vector<cv::Rect> &regions, float threshold,
+                                             bool fast) const
+{
+    std::vector<DetectedFace> all = detect(bgr, false, threshold, fast);
+    if (!isLoaded() || bgr.empty() || regions.empty())
+        return all;
+    const cv::Rect bounds(0, 0, bgr.cols, bgr.rows);
+    for (const cv::Rect &wanted : regions) {
+        const cv::Rect region = wanted & bounds;
+        if (region.width < 32 || region.height < 32)
+            continue;
+        // الجزء يُفحص بدقته الأصلية أو أعلى (والصغير منه يُكبَّر)، فلا يُصغَّر الوجه البعيد حتى يختفي
+        const int input = std::clamp(std::max(region.width, region.height), 256, 640);
+        const cv::Rect2f inside(0.0f, 0.0f, float(region.width), float(region.height));
+        for (DetectedFace face : d->detectAt(bgr(region), input, threshold, fast)) {
+            // المقطوع عند حافة الجزء يلتقطه جزء مجاور متداخل معه أو الإطار كاملاً
+            if (!insideFrame(face, inside))
+                continue;
+            face.box.x += float(region.x);
+            face.box.y += float(region.y);
+            for (cv::Point2f &p : face.landmarks)
+                p += cv::Point2f(float(region.x), float(region.y));
+            all.push_back(face);
+        }
+    }
+    return nms(std::move(all), 0.4f);
+}
+
 std::vector<AnalyzedFace> FaceEngine::analyzeRobust(const cv::Mat &bgr) const
 {
     if (!isLoaded() || bgr.empty())

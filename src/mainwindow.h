@@ -428,6 +428,7 @@ private:
     ToggleSwitch *m_enhanceSwitch = nullptr;
     Stepper *m_frameStepSpin = nullptr;
     SegmentedControl *m_performanceCombo = nullptr;
+    SegmentedControl *m_detectionCombo = nullptr;
     FancyButton *m_enhanceImageButton = nullptr;
     FancyButton *m_folderScanButton = nullptr;
     QPointer<ArchiveScanDialog> m_archiveDialog;

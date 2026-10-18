@@ -971,6 +971,29 @@ QWidget *MainWindow::createRecognitionPage()
     resources->contentLayout()->addWidget(m_performanceCombo);
     resources->contentLayout()->addWidget(performanceHint);
     resources->contentLayout()->addLayout(gpuRow);
+
+    m_detectionCombo = new SegmentedControl({QStringLiteral("تلقائي"), QStringLiteral("سريع"), QStringLiteral("دقيق")}, resourcesBody);
+    m_detectionCombo->setExpanding(true);
+    m_detectionCombo->setCurrentIndex(int(Performance::detection()));
+    for (int i = 0; i < 3; ++i)
+        m_detectionCombo->setItemToolTip(i, Performance::describe(Performance::Detection(i)));
+    auto *detectionHint = hint(resourcesBody, QString());
+    auto describeDetection = [this, detectionHint] {
+        detectionHint->setText(Performance::describe(Performance::Detection(m_detectionCombo->currentIndex()))
+                               + QStringLiteral(" · إن لم تُلتقط الوجوه البعيدة أو المائلة اختر «دقيق»."));
+    };
+    describeDetection();
+    connect(m_detectionCombo, &SegmentedControl::currentChanged, this, [this, describeDetection](int index) {
+        Performance::setDetection(Performance::Detection(index));
+        describeDetection();
+        // الدقة تُقرأ عند بدء التحليل، فالجاري يكمل بالدقة السابقة
+        statusBar()->showMessage(QStringLiteral("دقة الكشف الجديدة تُطبَّق من التحليل التالي أو عند إعادة تشغيل الكاميرا، "
+                                                "أو بزر «إعادة التحليل بهذه الإعدادات»"),
+                                 8000);
+    });
+    resources->contentLayout()->addWidget(label(QStringLiteral("دقة كشف الوجوه"), QStringLiteral("muted"), resourcesBody));
+    resources->contentLayout()->addWidget(m_detectionCombo);
+    resources->contentLayout()->addWidget(detectionHint);
     drawer->addWidget(resources);
 
     // القسم الرابع: تسجيل الكاميرا، للكاميرا فقط

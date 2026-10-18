@@ -53,6 +53,9 @@ public:
     // thorough: كشف متعدد المقاييس مع تحسين الإضاءة وتقسيم الصور الكبيرة (أدق وأبطأ)
     // fast: نموذج الكشف الخفيف إن وُجد (أسرع بنحو ثلاث مرات على المعالج، ويفوته بعض الوجوه الصغيرة جداً)
     std::vector<DetectedFace> detect(const cv::Mat &bgr, bool thorough, float threshold = 0.45f, bool fast = false) const;
+    // كشف الإطار كاملاً ثم مناطق منه بدقتها الأصلية أو أعلى، للوجوه البعيدة التي تختفي حين يُصغَّر الإطار الكبير
+    std::vector<DetectedFace> detect(const cv::Mat &bgr, const std::vector<cv::Rect> &regions, float threshold,
+                                     bool fast) const;
     // هل حُمّل نموذج الكشف الخفيف (يعمل على المعالج دائماً)
     bool hasFastDetector() const;
     cv::Mat align(const cv::Mat &bgr, const DetectedFace &face) const;

@@ -181,7 +181,9 @@ void MainWindow::jumpToEvent(int direction)
             return;
         }
         addAppearances(m_faces.at(row));
-        what = QStringLiteral("ظهور %1").arg(matchLabel(m_faces.at(row).match));
+        // بلا اسم تُقرأ «ظهور غير معروف» كأنها عن كل المجهولين، فيُقال «هذا الوجه»
+        what = m_faces.at(row).match.personId.isEmpty() ? QStringLiteral("ظهور آخر لهذا الوجه")
+                                                         : QStringLiteral("ظهور «%1»").arg(matchLabel(m_faces.at(row).match));
         break;
     }
     case PlaybackBar::Event::Known:
