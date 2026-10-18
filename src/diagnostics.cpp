@@ -2267,6 +2267,14 @@ int bench(const QString &videoPath, int seconds, QTextStream &out)
     return switched && (!hasVideo || analyzed > 0) ? 0 : 1;
 }
 
+// خيارات التسجيل في الاختبار الحي، مع السرعة الكاملة عند طلبها من البيئة
+CameraRecorder::Options recordOptionsFromEnv()
+{
+    CameraRecorder::Options options;
+    options.fullRate = qEnvironmentVariableIsSet("MALAMIH_LIVE_FULLRATE");
+    return options;
+}
+
 // البث الحي كما في الواجهة: كاميرا شبكة حقيقية (ffmpeg بسرعة 25 إطاراً/ث) مع العرض والتحليل والتسجيل معاً.
 // يُقاس تأخر القراءة عن الكاميرا، وإطارات التسجيل المتروكة، والوجوه المعتمدة والمعروفة أثناء البث، ثم
 // مدة الملف المسجَّل ووجوهه عند تحليله بعد ذلك. MALAMIH_LIVE_FFMPEG_CPUS يفصل أنوية الخادم عن البرنامج
@@ -2389,7 +2397,7 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
     QObject::connect(&worker, &VideoWorker::started, [&](int, double fps, qint64) {
         clock.start();
         QString startError;
-        recordingStarted = recorder.start(recordFolder, stream.name, fps, CameraRecorder::Options(), &startError);
+        recordingStarted = recorder.start(recordFolder, stream.name, fps, recordOptionsFromEnv(), &startError);
         if (!recordingStarted)
             out << "record_error=" << startError << "\n";
     });
@@ -2428,7 +2436,7 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
             recorder.stop();
             earlierFiles = recorder.files();
             QString restartError;
-            if (!recorder.start(recordFolder, stream.name, 25.0, CameraRecorder::Options(), &restartError))
+            if (!recorder.start(recordFolder, stream.name, 25.0, recordOptionsFromEnv(), &restartError))
                 out << "record_error=" << restartError << "\n";
             out << "restarted\n";
         }

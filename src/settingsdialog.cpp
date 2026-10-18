@@ -151,11 +151,20 @@ QWidget *SettingsDialog::recordingPage()
     m_motionOnly->setChecked(options.motionOnly);
     m_overlay = new QCheckBox(QStringLiteral("رسم مربعات الوجوه وأسمائها في التسجيل"), page);
     m_overlay->setChecked(options.overlay);
+    m_recordRate = new QComboBox(page);
+    m_recordRate->addItem(QStringLiteral("تلقائية حسب قدرة الجهاز (مستحسن)"), false);
+    m_recordRate->addItem(QStringLiteral("سرعة الكاميرا كاملة دائماً"), true);
+    m_recordRate->setCurrentIndex(options.fullRate ? 1 : 0);
     m_retention = daysCombo({0, 3, 7, 14, 30, 90}, CameraRecorder::retentionDays(), QStringLiteral("لا تُحذف"), page);
     form->addRow(QStringLiteral("مجلد التسجيلات"), folderRow(m_recordFolder, QStringLiteral("مجلد تسجيلات الكاميرا"), page));
     form->addRow(QString(), m_autoRecord);
     form->addRow(QString(), m_motionOnly);
     form->addRow(QString(), m_overlay);
+    form->addRow(QStringLiteral("سرعة التسجيل"), m_recordRate);
+    form->addRow(QString(), note(QStringLiteral("التلقائية تسجّل بسرعة الكاميرا كاملة ما دام الجهاز يلحق بها، وإن لم يلحق تحفظ صورة من كل "
+                                               "صورتين أو ثلاث فيبقى التسجيل منتظماً بلا تجمد. «كاملة دائماً» قد يتقطع بها التسجيل على "
+                                               "الأجهزة الضعيفة. العرض والتعرف على الوجوه لا يتأثران بهذا."),
+                                          page));
     form->addRow(QStringLiteral("حذف التسجيلات ولقطات الظهور"), m_retention);
     form->addRow(QString(), note(QStringLiteral("لا يُحذف إلا ما سجّله البرنامج. ومع الحذف التلقائي تُحذف الأقدم أيضاً حين يقترب القرص "
                                                "من الامتلاء بدل أن يتوقف التسجيل. ساعات التسجيل لكل كاميرا في صفحة «الكاميرات»."),
@@ -346,6 +355,7 @@ void SettingsDialog::accept()
     CameraRecorder::Options options = CameraRecorder::savedOptions();
     options.motionOnly = m_motionOnly->isChecked();
     options.overlay = m_overlay->isChecked();
+    options.fullRate = m_recordRate->currentData().toBool();
     CameraRecorder::setSavedOptions(options);
     CameraRecorder::setRetentionDays(m_retention->currentData().toInt());
 

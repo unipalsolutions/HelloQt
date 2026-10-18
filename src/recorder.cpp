@@ -274,7 +274,7 @@ bool CameraRecorder::start(const QString &folder, const QString &cameraName, dou
     {
         std::lock_guard<std::mutex> lock(rateMutex());
         const double ratio = learnedRates().value(m_cameraName, 1.0);
-        if (ratio < 1.0)
+        if (ratio < 1.0 && !options.fullRate)
             m_fps = std::max(std::min(MinRecordFps, m_cameraFps), m_cameraFps * ratio);
     }
     m_encodeMs = 0.0;
@@ -603,7 +603,7 @@ void CameraRecorder::write(const cv::Mat &frame, Clock::time_point time)
     }
     m_liveMs = qint64(double(m_written - 1) * 1000.0 / m_fps);
 
-    if (m_encodeSamples < EncodeSamples)
+    if (m_encodeSamples < EncodeSamples || m_options.fullRate)
         return;
     // السرعة التي يتسع لها الجهاز الآن، بهامش تحت الحد فلا تتأرجح (ومعها ملف جديد) إن تغير زمن الترميز قليلاً
     const int divisor = std::max(1, int(std::ceil(m_encodeMs * m_cameraFps / (EncodeHeadroom * EncodeBudget * 1000.0))));
@@ -716,6 +716,7 @@ CameraRecorder::Options CameraRecorder::savedOptions()
     Options options;
     options.motionOnly = settings.value(QStringLiteral("recordMotionOnly"), false).toBool();
     options.overlay = settings.value(QStringLiteral("recordOverlay"), false).toBool();
+    options.fullRate = settings.value(QStringLiteral("recordFullRate"), false).toBool();
     return options;
 }
 
@@ -724,6 +725,7 @@ void CameraRecorder::setSavedOptions(const Options &options)
     QSettings settings(settingsPath(), QSettings::IniFormat);
     settings.setValue(QStringLiteral("recordMotionOnly"), options.motionOnly);
     settings.setValue(QStringLiteral("recordOverlay"), options.overlay);
+    settings.setValue(QStringLiteral("recordFullRate"), options.fullRate);
 }
 
 int CameraRecorder::retentionDays()

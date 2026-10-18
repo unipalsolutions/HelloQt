@@ -47,6 +47,7 @@ private:
     QCheckBox *m_motionOnly;
     QCheckBox *m_overlay;
     QComboBox *m_retention;
+    QComboBox *m_recordRate;
     // التنبيهات
     QCheckBox *m_sound;
     QSpinBox *m_strangerCount;

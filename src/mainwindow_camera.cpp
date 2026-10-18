@@ -458,6 +458,17 @@ void MainWindow::showRecordFolderMenu()
         statusBar()->showMessage((on ? QStringLiteral("تُرسم الوجوه وأسماؤها في التسجيل")
                                      : QStringLiteral("التسجيل نظيف دون مربعات (يصلح لإعادة التحليل)")) + later);
     });
+    QAction *fullRate = menu.addAction(QStringLiteral("التسجيل بسرعة الكاميرا كاملة دائماً"));
+    fullRate->setCheckable(true);
+    fullRate->setChecked(options.fullRate);
+    fullRate->setToolTip(QStringLiteral("دون هذا تتبع سرعة التسجيل قدرة الجهاز: كاملة على الأجهزة القوية، وأقل بلا تجمد على الضعيفة"));
+    connect(fullRate, &QAction::toggled, this, [this, later](bool on) {
+        CameraRecorder::Options changed = CameraRecorder::savedOptions();
+        changed.fullRate = on;
+        CameraRecorder::setSavedOptions(changed);
+        statusBar()->showMessage((on ? QStringLiteral("التسجيل بسرعة الكاميرا كاملة دائماً")
+                                     : QStringLiteral("سرعة التسجيل تلقائية حسب قدرة الجهاز")) + later);
+    });
     QMenu *retention = menu.addMenu(QStringLiteral("حذف التسجيلات القديمة تلقائياً"));
     auto *retentionGroup = new QActionGroup(retention);
     const int days = CameraRecorder::retentionDays();
