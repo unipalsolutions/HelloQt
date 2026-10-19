@@ -65,6 +65,8 @@ constexpr int DetectionSide = 640;        // الدقة التي يُصغَّر 
 constexpr int SmallFaceSide = 24;         // وجه أصغر من هذا بعد التصغير لا يُلتقط بثبات في الإطار كاملاً
 constexpr int TileOverlap = 96;           // تداخل أجزاء المسح حتى يقع كل وجه بعيد كاملاً في جزء منها
 constexpr int MaxFaceRegions = 6;         // أقصى عدد وجوه صغيرة متتبَّعة يُبحث حولها في التحليل الواحد
+constexpr int FollowTemplateSide = 32;    // يُصغَّر الوجه إلى هذا قبل البحث عنه في أحدث إطار من البث
+constexpr double FollowMinScore = 0.6;    // أقل تطابق يُصدَّق به موضع الوجه الجديد
 constexpr double MinAnalysisRate = 4.0;   // أقل معدل يصل إليه التكيّف مع الجهاز البطيء (إطارات محللة لكل ثانية)
 // العرض سبق التحليل بأكثر من هذا إلى جزء لم يُحلَّل: يقفز التحليل إلى موضع العرض لتظهر المربعات عليه،
 // ويعود إلى ما تخطاه بعد ذلك
@@ -255,6 +257,41 @@ QRectF unturned(const QRectF &box, int turns, double width, double height)
     default:
         return box;
     }
+}
+
+// كم انتقل الوجه box من الإطار from إلى الإطار to: يُبحث عن صورته المصغرة حول موضعه بمسافة عرضه،
+// و(0,0) إن لم يوجد بوضوح (تبدّل المشهد، أو خرج الوجه أو استدار)
+cv::Point2d faceShift(const cv::Mat &from, const cv::Mat &to, const cv::Rect2d &box)
+{
+    if (from.empty() || from.size() != to.size() || from.type() != to.type() || from.channels() != 3)
+        return {};
+    const cv::Rect frame(0, 0, from.cols, from.rows);
+    const cv::Rect face = cv::Rect(cvRound(box.x), cvRound(box.y), cvRound(box.width), cvRound(box.height)) & frame;
+    if (face.width < 8 || face.height < 8 || face.area() < box.area() * 0.6)
+        return {};
+    const int reach = std::max(face.width, face.height);
+    const cv::Rect area = cv::Rect(face.x - reach, face.y - reach, face.width + 2 * reach, face.height + 2 * reach) & frame;
+    const double factor = std::min(1.0, double(FollowTemplateSide) / reach);
+    const auto gray = [&](const cv::Mat &image, const cv::Rect &part) {
+        cv::Mat plain;
+        cv::Mat result;
+        cv::cvtColor(image(part), plain, cv::COLOR_BGR2GRAY);
+        cv::resize(plain, result, cv::Size(std::max(1, cvRound(part.width * factor)), std::max(1, cvRound(part.height * factor))),
+                   0, 0, cv::INTER_AREA);
+        return result;
+    };
+    const cv::Mat pattern = gray(from, face);
+    const cv::Mat search = gray(to, area);
+    if (pattern.cols < 6 || pattern.rows < 6 || pattern.cols > search.cols || pattern.rows > search.rows)
+        return {};
+    cv::Mat score;
+    cv::matchTemplate(search, pattern, score, cv::TM_CCOEFF_NORMED);
+    double best = 0.0;
+    cv::Point at;
+    cv::minMaxLoc(score, nullptr, &best, nullptr, &at);
+    if (!std::isfinite(best) || best < FollowMinScore)
+        return {};
+    return {area.x + at.x / factor - face.x, area.y + at.y / factor - face.y};
 }
 
 // منطقة نسبية (من 0 إلى 1) من الإطار إلى موضعها بعد إدارته turns ربع دورة مع عقارب الساعة
@@ -830,8 +867,25 @@ void VideoWorker::run(const QString &source)
 
         // معالجات الفيديو (التدوير والإضاءة وغيرها) تسبق كل شيء، فالإطار المعالَج هو الذي يُحلَّل ويُعرض
         const VideoFilters::Settings filters = VideoFilters::current();
+        const cv::Mat captured = frame;
         if (!filters.isIdentity())
             frame = VideoFilters::apply(frame, filters);
+        // الكاميرا: البث المعروض يسبق التحليل بزمنه، فيُنقل كل مربع بقدر ما تحرك وجهه حتى أحدث إطار وصل
+        // ولا يتأخر عن الوجه المتحرك (إلا إن غيّرت المعالجات أبعاد الإطار، فتبقى المربعات كما هي)
+        const auto followLive = [&](QList<FaceItem> &faces) {
+            if (!camera || !liveFrames || filters.changesGeometry() || faces.isEmpty())
+                return;
+            const cv::Mat latest = liveFrames->latest();
+            if (latest.empty() || latest.data == captured.data)
+                return;
+            const double toFrame = 1.0 / std::min(1.0, double(MaxDisplaySide) / std::max(captured.cols, captured.rows));
+            for (FaceItem &face : faces) {
+                const cv::Rect2d box(face.box.x() * toFrame, face.box.y() * toFrame, face.box.width() * toFrame,
+                                     face.box.height() * toFrame);
+                const cv::Point2d shift = faceShift(captured, latest, box);
+                face.box.translate(shift.x / toFrame, shift.y / toFrame);
+            }
+        };
         if (frame.size() != filteredSize) {
             tracks.clear(); // تغيّر اتجاه الإطار أو أبعاده
             stillReference.release();
@@ -996,8 +1050,10 @@ void VideoWorker::run(const QString &source)
                 item.match = identity.match;
                 moved.append(item);
             }
-            if (!moved.isEmpty())
+            if (!moved.isEmpty()) {
+                followLive(moved);
                 emit facesMoved(moved);
+            }
         }
 
         // 2) البصمة تُحسب للوجوه الجديدة، وللمتتبَّعة كل عدة إطارات، أو عند ربط غير مؤكد
@@ -1290,14 +1346,24 @@ void VideoWorker::run(const QString &source)
                                                                           std::max(1, cvRound(frame.rows * thumbnailScale))));
                 emit thumbnailReady(positionMs, ImageIO::toQImage(thumbnail));
             }
-        } else if (m_pendingFrames < MaxPendingFrames) {
+        } else {
+            if (camera && liveFrames) {
+                // مواضع الوجوه على أحدث إطار في البث المعروض (وقد تكون خالية فتُمسح المربعات)، والنتيجة
+                // في frameReady تبقى على إطارها هي لأن قص صور التنبيهات منه
+                QList<FaceItem> following = current;
+                followLive(following);
+                emit facesMoved(following);
+            }
             // لا تُرسل إطارات جديدة إذا كانت الواجهة متأخرة في عرض السابقة
-            ++m_pendingFrames;
-            const double frameScale = std::min(1.0, double(MaxDisplaySide) / std::max(frame.cols, frame.rows));
-            cv::Mat display = frame;
-            if (frameScale < 1.0)
-                display = ImageIO::shrink(frame, cv::Size(std::max(1, cvRound(frame.cols * frameScale)), std::max(1, cvRound(frame.rows * frameScale))));
-            emit frameReady(ImageIO::toQImage(display), current, positionMs, progress);
+            if (m_pendingFrames < MaxPendingFrames) {
+                ++m_pendingFrames;
+                const double frameScale = std::min(1.0, double(MaxDisplaySide) / std::max(frame.cols, frame.rows));
+                cv::Mat display = frame;
+                if (frameScale < 1.0)
+                    display = ImageIO::shrink(frame, cv::Size(std::max(1, cvRound(frame.cols * frameScale)),
+                                                              std::max(1, cvRound(frame.rows * frameScale))));
+                emit frameReady(ImageIO::toQImage(display), current, positionMs, progress);
+            }
         }
         const double cost = double(analysisClock.nsecsElapsed()) / 1e6;
         analysisCostMs = analysisCostMs > 0.0 ? analysisCostMs * 0.8 + cost * 0.2 : cost;

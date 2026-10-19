@@ -2424,6 +2424,30 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
             known.insert(face.id);
         }
     });
+    // دقة المربعات: مع كل إرسال للمواضع يُحفظ أحدث إطار في البث (ما يراه المستخدم لحظتها)، ثم بعد
+    // انتهاء البث تُكشف الوجوه فيه ويُقارن بها كل مربع؛ المربع المتأخر عن الوجه المتحرك يقل تداخله
+    struct BoxSample
+    {
+        cv::Mat frame;
+        QList<QRectF> boxes; // بإحداثيات الإطار الأصلي
+    };
+    constexpr int MaxDisplaySideForTest = 1920; // ما يُصغَّر إليه الإطار للعرض في VideoWorker
+    std::mutex samplesMutex;
+    std::vector<BoxSample> boxSamples;
+    const auto sampleBoxes = [&](const QList<FaceItem> &faces) {
+        const cv::Mat latest = slot->latest();
+        if (faces.isEmpty() || latest.empty())
+            return;
+        const double toFrame = 1.0 / std::min(1.0, double(MaxDisplaySideForTest) / std::max(latest.cols, latest.rows));
+        BoxSample sample{latest, {}};
+        for (const FaceItem &face : faces)
+            sample.boxes.append(QRectF(face.box.topLeft() * toFrame, face.box.size() * toFrame));
+        std::lock_guard<std::mutex> lock(samplesMutex);
+        if (boxSamples.size() < 400)
+            boxSamples.push_back(std::move(sample));
+    };
+    // المعروض مع البث هو facesMoved وحدها؛ مربعات frameReady على إطار التحليل ولا تُرسم ما دام البث يُعرض
+    QObject::connect(&worker, &VideoWorker::facesMoved, [&](const QList<FaceItem> &faces) { sampleBoxes(faces); });
     QString workerError;
     QObject::connect(&worker, &VideoWorker::finished, [&](const QString &message) { workerError = message; });
     QFuture<void> running = QtConcurrent::run([&] { worker.process(stream.source()); });
@@ -2496,6 +2520,40 @@ int liveTest(const QString &videoPath, int seconds, const QString &size, const Q
         std::lock_guard<std::mutex> lock(idsMutex);
         out << "live_faces=" << confirmed.size() << " live_known=" << known.size() << " first_face_ms=" << firstFaceMs
             << " first_known_ms=" << firstKnownMs << "\n";
+    }
+    {
+        // لكل مربع: تداخله مع أقرب وجه مكشوف في الإطار المعروض لحظة إرساله، وبُعد مركزه عنه نسبةً إلى عرضه
+        std::vector<double> overlaps;
+        std::vector<double> offsets;
+        for (const BoxSample &sample : boxSamples) {
+            const std::vector<DetectedFace> found = engine.detect(sample.frame, false, 0.45f);
+            for (const QRectF &box : sample.boxes) {
+                double best = 0.0;
+                double offset = 1.0;
+                for (const DetectedFace &face : found) {
+                    const QRectF real(face.box.x, face.box.y, face.box.width, face.box.height);
+                    const QRectF common = real.intersected(box);
+                    const double inter = common.isEmpty() ? 0.0 : common.width() * common.height();
+                    const double iou = inter / (real.width() * real.height() + box.width() * box.height() - inter);
+                    if (iou > best) {
+                        best = iou;
+                        offset = QLineF(real.center(), box.center()).length() / std::max(1.0, real.width());
+                    }
+                }
+                overlaps.push_back(best);
+                offsets.push_back(offset);
+            }
+        }
+        const auto median = [](std::vector<double> values) {
+            if (values.empty())
+                return -1.0;
+            std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+            return values[values.size() / 2];
+        };
+        const double off = double(std::count_if(overlaps.begin(), overlaps.end(), [](double v) { return v < 0.5; }));
+        out << "box_samples=" << overlaps.size() << " box_iou_median=" << median(overlaps)
+            << " box_offset_median=" << median(offsets) << " boxes_off_face=" << off / std::max<size_t>(1, overlaps.size())
+            << "\n";
     }
 
     // الملف المسجَّل: مدته مقابل مدة البث، ووجوهه عند تحليله

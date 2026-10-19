@@ -204,7 +204,8 @@ MainWindow::MainWindow(QWidget *parent)
         if (!m_timelineCard->isHidden())
             m_timeline->setAnalyzedRanges(ranges);
     });
-    // الكاميرا: المربعات تلحق الوجوه المتحركة فور كشفها، قبل اكتمال تحليل الإطار
+    // الكاميرا: المربعات تلحق الوجوه المتحركة فور كشفها، قبل اكتمال تحليل الإطار، ثم بنتيجته الكاملة،
+    // ومواضعها منقولة إلى أحدث إطار في البث
     connect(m_videoWorker, &VideoWorker::facesMoved, this, [this](const QList<FaceItem> &faces) {
         if (m_videoRunning && m_videoSource.startsWith(QStringLiteral("camera:")) && !cameraBoxesHeld())
             m_view->setFaces(faces);
@@ -1611,13 +1612,14 @@ void MainWindow::onFrameReady(const QImage &frame, const QList<FaceItem> &faces,
         return;
     const bool camera = m_videoSource.startsWith(QStringLiteral("camera:"));
     if (camera) {
-        // البث يعرضه VideoPlayer بسرعة الكاميرا، والمربعات تنتقل بنعومة إلى آخر نتيجة
+        // البث يعرضه VideoPlayer بسرعة الكاميرا، والمربعات تأتي منقولة إلى أحدث إطار فيه مع facesMoved
+        // (مواضعها هنا على الإطار المحلَّل الذي سبقه العرض)
         if (!m_player->isOpen()) {
             m_view->setBusy(false);
             m_view->setImage(frame);
+            if (!cameraBoxesHeld())
+                m_view->setFaces(faces);
         }
-        if (!cameraBoxesHeld())
-            m_view->setFaces(faces);
         noteCameraFaces(frame, faces);
     } else {
         m_analyzedFaces.insert(positionMs, faces);

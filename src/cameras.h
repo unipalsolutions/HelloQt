@@ -169,6 +169,12 @@ public:
         seen = m_sequence;
         return true;
     }
+    // أحدث إطار دون انتظار، ودون أن يُحسب مقروءاً عند من ينتظر بـ wait
+    cv::Mat latest()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_frame;
+    }
     void close()
     {
         std::lock_guard<std::mutex> lock(m_mutex);
